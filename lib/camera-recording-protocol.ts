@@ -42,9 +42,9 @@ export function parseCameraCommand(input:unknown):CameraCommand {
  if(!uuid(item.id)||!uuid(item.recordingId)||!Number.isSafeInteger(item.remainingMs)||Number(item.remainingMs)<0||Number(item.remainingMs)>CAMERA_COMMAND_TTL_MS)throw new Error('Ungültiger Kamerabefehl.');
  if(item.type==='record_start'){
   if(!uuid(item.projectId))throw new Error('Ungültiges Projekt.');
-  return {id:item.id,type:'record_start',recordingId:item.recordingId,projectId:item.projectId,remainingMs:Number(item.remainingMs)};
+  return {id:item.id.toLowerCase(),type:'record_start',recordingId:item.recordingId.toLowerCase(),projectId:item.projectId.toLowerCase(),remainingMs:Number(item.remainingMs)};
  }
- if((item.type==='record_stop'||item.type==='upload_retry')&&(item.projectId===undefined||item.projectId===null))return {id:item.id,type:item.type,recordingId:item.recordingId,remainingMs:Number(item.remainingMs)};
+ if((item.type==='record_stop'||item.type==='upload_retry')&&(item.projectId===undefined||item.projectId===null))return {id:item.id.toLowerCase(),type:item.type,recordingId:item.recordingId.toLowerCase(),remainingMs:Number(item.remainingMs)};
  throw new Error('Unbekannter Kamerabefehl.');
 }
 /** remainingMs is measured on the server when responding. Subtracting the full
@@ -55,12 +55,12 @@ export function cameraCommandIsFresh(command:CameraCommand,requestStartedMs:numb
 export function decideCameraCommand(journal:CameraJournal,command:CameraCommand):CameraDecision {
  const current=journal.current;
  if(command.type==='record_start'){
-  const old=journal.history[command.recordingId];
-  if(old)return old.projectId===command.projectId?{kind:'duplicate'}:{kind:'reject',reason:'project_mismatch'};
+  const old=journal.history[command.recordingId.toLowerCase()];
+  if(old)return old.projectId===command.projectId.toLowerCase()?{kind:'duplicate'}:{kind:'reject',reason:'project_mismatch'};
   if(current&&current.phase!=='saved')return {kind:'reject',reason:'busy'};
   return {kind:'apply',action:'start'};
  }
- if(!current||current.recordingId!==command.recordingId)return {kind:'reject',reason:'recording_mismatch'};
+ if(!current||current.recordingId!==command.recordingId.toLowerCase())return {kind:'reject',reason:'recording_mismatch'};
  if(command.type==='record_stop'){
   if(current.phase==='recording')return {kind:'apply',action:'stop'};
   if(current.phase==='preparing')return {kind:'defer'};
@@ -89,8 +89,10 @@ export function emptyCameraJournal():CameraJournal{return {current:null,history:
 export function advanceCameraJournal(journal:CameraJournal,event:CameraEvent):CameraJournal {
  const current=journal.current;
  if(event.type==='begin'){
-  if(!uuid(event.recordingId)||!uuid(event.projectId)||journal.history[event.recordingId]||(current&&current.phase!=='saved'))throw new Error('Aufnahme kann nicht begonnen werden.');
-  return {current:{recordingId:event.recordingId,projectId:event.projectId,phase:'preparing',media:null,uploadPercent:null,error:null},history:{...journal.history,[event.recordingId]:{projectId:event.projectId,result:'active'}}};
+  if(!uuid(event.recordingId)||!uuid(event.projectId)||(current&&current.phase!=='saved'))throw new Error('Aufnahme kann nicht begonnen werden.');
+  const recordingId=event.recordingId.toLowerCase(),projectId=event.projectId.toLowerCase();
+  if(journal.history[recordingId])throw new Error('Aufnahme kann nicht begonnen werden.');
+  return {current:{recordingId,projectId,phase:'preparing',media:null,uploadPercent:null,error:null},history:{...journal.history,[recordingId]:{projectId,result:'active'}}};
  }
  if(event.type==='network_lost'){
   if(current?.phase==='uploading')return {...journal,current:{...current,phase:'upload_pending',uploadPercent:null}};
@@ -101,7 +103,7 @@ export function advanceCameraJournal(journal:CameraJournal,event:CameraEvent):Ca
   if(current.media)return {...journal,current:{...current,phase:'upload_pending',uploadPercent:null,error:null}};
   return {...journal,current:{...current,phase:'error',uploadPercent:null,error:'interrupted'},history:{...journal.history,[current.recordingId]:{projectId:current.projectId,result:'failed'}}};
  }
- if(!current||current.recordingId!==event.recordingId)throw new Error('Aufnahme stimmt nicht überein.');
+ if(!current||!uuid(event.recordingId)||current.recordingId!==event.recordingId.toLowerCase())throw new Error('Aufnahme stimmt nicht überein.');
  const withCurrent=(next:CameraTake):CameraJournal=>({...journal,current:next});
  switch(event.type){
   case 'capture_started':
@@ -120,7 +122,7 @@ export function advanceCameraJournal(journal:CameraJournal,event:CameraEvent):Ca
    if(current.phase!=='uploading'||!Number.isInteger(event.percent)||event.percent<0||event.percent>99||event.percent<(current.uploadPercent??0))break;
    return withCurrent({...current,uploadPercent:event.percent});
   case 'upload_confirmed':
-   if(current.phase!=='uploading'||!current.media||event.projectId!==current.projectId||event.sizeBytes!==current.media.sizeBytes||event.sha256!==current.media.sha256)break;
+   if(current.phase!=='uploading'||!current.media||!uuid(event.projectId)||event.projectId.toLowerCase()!==current.projectId||event.sizeBytes!==current.media.sizeBytes||event.sha256!==current.media.sha256)break;
    return {...journal,current:{...current,phase:'saved',uploadPercent:100,error:null},history:{...journal.history,[current.recordingId]:{projectId:current.projectId,result:'saved'}}};
   case 'failure':
    if(current.phase==='saved'||!validError(event.code))break;

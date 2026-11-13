@@ -30,6 +30,24 @@ test('start and stop are idempotent; IDs remain bound to their original project'
  j=step(j,{type:'stop_accepted',recordingId});assert.equal(decideCameraCommand(j,stop).kind,'duplicate');
  assert.equal(decideCameraCommand(j,{...stop,recordingId:otherId}).kind,'reject');
 });
+test('UUID letter case cannot bypass idempotency or project binding',()=>{
+ const upper={...start,id:commandId.toUpperCase(),recordingId:recordingId.toUpperCase(),projectId:projectId.toUpperCase()};
+ assert.deepEqual(parseCameraCommand(upper),start);
+ let j=step(emptyCameraJournal(),{type:'begin',recordingId:upper.recordingId,projectId:upper.projectId});
+ assert.equal(j.current.recordingId,recordingId);
+ assert.equal(j.current.projectId,projectId);
+ assert.equal(decideCameraCommand(j,upper).kind,'duplicate');
+ assert.throws(()=>step(j,{type:'begin',recordingId:upper.recordingId,projectId:upper.projectId}));
+ j=step(j,{type:'capture_started',recordingId:upper.recordingId});
+ assert.equal(decideCameraCommand(j,{...stop,recordingId:upper.recordingId}).kind,'apply');
+ j=step(j,{type:'stop_accepted',recordingId:upper.recordingId});
+ j=step(j,{type:'file_finalized',recordingId:upper.recordingId,media});
+ j=step(j,{type:'upload_started',recordingId:upper.recordingId});
+ j=step(j,{type:'upload_confirmed',recordingId:upper.recordingId,projectId:upper.projectId,sizeBytes:media.sizeBytes,sha256:media.sha256});
+ assert.equal(j.current.phase,'saved');
+ assert.throws(()=>step(j,{type:'begin',recordingId:upper.recordingId,projectId:upper.projectId}));
+ assert.equal(decideCameraCommand(j,{...upper,projectId:otherId}).reason,'project_mismatch');
+});
 test('ACK never claims recording merely because a command was queued',()=>{
  const j=emptyCameraJournal(),decision=decideCameraCommand(j,start);
  assert.equal(cameraAck(start,decision,false,true),null);
