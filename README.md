@@ -29,3 +29,9 @@ Die Bilder werden im Hintergrund erzeugt und zusammen mit ihrem Fortschritt in S
 Jedes neue Skript setzt eine separate Webrecherche voraus. Bei vorübergehenden Dienstfehlern werden Recherche und Skripterstellung jeweils bis zu zweimal automatisch wiederholt; die bereits abgeschlossene Recherche bleibt dabei erhalten. Das Modell sucht zu den Ausgangsmeldungen mehrfach im Web, prüft Gegenpositionen und soll nach Möglichkeit Primärquellen abrufen. Der gespeicherte Recherchebericht zeigt Quellen, Befunde, offene Fragen und gegebenenfalls ausdrücklich gekennzeichnete Hypothesen mit Anhaltspunkten und Alternativen. Er ist eine KI-Arbeitshilfe und ersetzt keine redaktionelle Prüfung. Vorwürfe über Absicht oder geheime Absprachen dürfen nicht allein aus einem Widerspruch abgeleitet werden.
 
 Für die Video-Dramaturgie dienen unter anderem YouTubes Hinweise zu [Einstieg, Titelversprechen und Zuschauerbindung](https://support.google.com/youtube/answer/9314415) sowie die [journalistischen Standards von Reuters](https://reutersagency.com/about/standards-values/) als Orientierung.
+
+## Videoaufnahme im Teleprompter
+
+Im Teleprompter lassen sich nach ausdrücklicher Browserfreigabe Kamera und Mikrofon vorbereiten. „Aufnahme starten“ startet zugleich den Textlauf; Play/Pause und Tempo bleiben unabhängig bedienbar. Nach dem Stoppen kann das Video direkt kontrolliert und als MP4 oder WebM heruntergeladen werden, abhängig vom Browser. Die Vorschau ist stumm, die Aufnahme enthält den Mikrofonton. Der Browserzugriff benötigt HTTPS und ein angeschlossenes, freigegebenes Kamera- und Mikrofongerät.
+
+Die Aufnahme wird im Browser zwischengespeichert und nicht auf den Server hochgeladen. Eine noch nicht heruntergeladene Aufnahme sollte vor dem Verlassen der Seite gespeichert werden; lange Aufnahmen benötigen entsprechend Speicher im Browser.
