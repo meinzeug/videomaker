@@ -34,4 +34,10 @@ Für die Video-Dramaturgie dienen unter anderem YouTubes Hinweise zu [Einstieg, 
 
 Im Teleprompter lassen sich nach ausdrücklicher Browserfreigabe Kamera und Mikrofon vorbereiten. „Aufnahme starten“ startet zugleich den Textlauf; Play/Pause und Tempo bleiben unabhängig bedienbar. Nach dem Stoppen kann das Video direkt kontrolliert und als MP4 oder WebM heruntergeladen werden, abhängig vom Browser. Die Vorschau ist stumm, die Aufnahme enthält den Mikrofonton. Der Browserzugriff benötigt HTTPS und ein angeschlossenes, freigegebenes Kamera- und Mikrofongerät.
 
-Die Aufnahme wird im Browser zwischengespeichert und nicht auf den Server hochgeladen. Eine noch nicht heruntergeladene Aufnahme sollte vor dem Verlassen der Seite gespeichert werden; lange Aufnahmen benötigen entsprechend Speicher im Browser.
+Nach dem Stoppen wird die Aufnahme automatisch dem geöffneten Skript zugeordnet und auf den Server hochgeladen. Der Fortschritt wird angezeigt; bei einem Fehler kann der Upload wiederholt oder die Aufnahme lokal heruntergeladen werden. Erst nach Abschluss des Uploads steht sie dauerhaft in der Skriptansicht unter „Deine Aufnahmen“ zur Wiedergabe und zum Download bereit. Pro Skript sind mehrere Aufnahmen möglich; einzelne Aufnahmen können dort gelöscht werden. Beim Löschen eines Skripts werden auch seine Aufnahmen entfernt.
+
+Die Videodateien liegen im persistenten Datenverzeichnis unter `recordings/`, die Zuordnung in SQLite. Backups müssen beide enthalten. Pro Aufnahme sind maximal 1 GiB zulässig, und während der Aufnahme benötigt der Browser ausreichend Arbeitsspeicher. Langfristig begrenzt der verfügbare Server-Speicherplatz die Anzahl der Aufnahmen.
+
+## News-Pakete
+
+Erfolgreiche News-Recherchen werden dauerhaft gespeichert und können über den Menüpunkt „News-Pakete“ später erneut geöffnet und zur Skripterstellung verwendet werden. Auf der Übersicht und im Archiv kann über das Eingabefeld auch ein eigenes Thema recherchiert werden; dabei sind für Hintergrundinformationen ältere Quellen zulässig. Das Archiv enthält die Quellen und das Recherche-Datum; ältere Meldungen sollten vor der Verwendung erneut auf Aktualität geprüft werden. Pakete, die vor Einführung des Archivs nur im Browser angezeigt wurden, konnten nicht rückwirkend übernommen werden.
