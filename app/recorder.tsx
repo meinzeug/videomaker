@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Camera, Download, Square, VideoOff } from 'lucide-react';
 
 type Phase = 'idle' | 'permission' | 'ready' | 'recording' | 'stopping' | 'review';
-type Props = { projectId:string; onRecordingChange: (recording: boolean) => void; onGuardChange: (guarded: boolean) => void };
+type Props = { projectId:string; onRecordingChange: (recording: boolean) => void; onGuardChange: (guarded: boolean) => void; onAudioTrackChange:(track:MediaStreamTrack|null)=>void };
 type Clip={url:string;extension:string;size:number;data:Blob;id:string};
 
 function deviceError(error: unknown) {
@@ -20,7 +20,7 @@ function preferredMime() {
  return ['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/webm;codecs=vp8,opus','video/webm','video/mp4'].find(type=>MediaRecorder.isTypeSupported(type)) || '';
 }
 
-export default function Recorder({projectId,onRecordingChange,onGuardChange}:Props) {
+export default function Recorder({projectId,onRecordingChange,onGuardChange,onAudioTrackChange}:Props) {
  const [phase,setPhase]=useState<Phase>('idle');
  const [error,setError]=useState('');
  const [clip,setClip]=useState<Clip|null>(null);
@@ -46,6 +46,7 @@ export default function Recorder({projectId,onRecordingChange,onGuardChange}:Pro
  useEffect(()=>{onGuardChange(guarded);return()=>onGuardChange(false);},[guarded,onGuardChange]);
  useEffect(()=>{if(!guarded)return;const warn=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue='';};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn);},[guarded]);
  useEffect(()=>{if(preview.current){preview.current.srcObject=previewStream;if(previewStream)void preview.current.play().catch(()=>{});}},[previewStream,phase]);
+ useEffect(()=>{onAudioTrackChange(previewStream?.getAudioTracks()[0]||null);return()=>onAudioTrackChange(null);},[previewStream,onAudioTrackChange]);
  useEffect(()=>{if(phase!=='recording')return;const update=()=>setElapsed(Math.max(0,Math.floor((performance.now()-startedAt.current)/1000)));update();const interval=setInterval(update,250);return()=>clearInterval(interval);},[phase]);
 
  function stopDevices() {stream.current?.getTracks().forEach(track=>track.stop());stream.current=null;setPreviewStream(null);}
