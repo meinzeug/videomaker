@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Camera, Download, Square, VideoOff } from 'lucide-react';
+import { recordingReceiptMatches, sha256Blob } from '@/lib/blob-digest';
 
 type Phase = 'idle' | 'permission' | 'ready' | 'recording' | 'stopping' | 'review';
 type Props = { projectId:string; onRecordingChange: (recording: boolean) => void; onGuardChange: (guarded: boolean) => void; onAudioTrackChange:(track:MediaStreamTrack|null)=>void };
@@ -50,15 +51,22 @@ export default function Recorder({projectId,onRecordingChange,onGuardChange,onAu
  useEffect(()=>{if(phase!=='recording')return;const update=()=>setElapsed(Math.max(0,Math.floor((performance.now()-startedAt.current)/1000)));update();const interval=setInterval(update,250);return()=>clearInterval(interval);},[phase]);
 
  function stopDevices() {stream.current?.getTracks().forEach(track=>track.stop());stream.current=null;setPreviewStream(null);}
- function save(item:Clip,warning='') {
+ async function save(item:Clip,warning='') {
   if(item.size>1024*1024*1024){setSaveState('error');setError('Die Aufnahme überschreitet das Serverlimit von 1 GB. Bitte lade sie auf dein Gerät herunter.');return;}
   setSaveState('uploading');setProgress(0);setError(warning);
+  let digest:string;
+  try {digest=await sha256Blob(item.data,()=>!mounted.current);}
+  catch {if(mounted.current){setSaveState('error');setError('Aufnahme konnte nicht geprüft werden. Bitte erneut versuchen oder herunterladen.');}return;}
+  if(!mounted.current)return;
   const request=new XMLHttpRequest();upload.current=request;
   request.open('POST',`/api/projects/${encodeURIComponent(projectId)}/recordings`);
   request.setRequestHeader('Content-Type',item.extension==='mp4'?'video/mp4':'video/webm');
   request.setRequestHeader('X-Recording-Id',item.id);
+  request.setRequestHeader('X-Content-SHA256',digest);
   request.upload.onprogress=event=>{if(mounted.current&&event.lengthComputable)setProgress(Math.round(event.loaded/event.total*100));};
-  request.onload=()=>{if(!mounted.current)return;upload.current=null;if(request.status>=200&&request.status<300){setSaveState('saved');setProgress(100);}else{let message='Speichern fehlgeschlagen. Bitte erneut versuchen.';try{message=JSON.parse(request.responseText).error||message;}catch{}setError(message);setSaveState('error');}};
+  request.onload=()=>{if(!mounted.current)return;upload.current=null;let result:unknown;try{result=JSON.parse(request.responseText);}catch{}const receipt=result&&typeof result==='object'?result as Record<string,unknown>:null;
+   if(request.status>=200&&request.status<300&&recordingReceiptMatches(receipt,{id:item.id,projectId,sizeBytes:item.size,sha256:digest})){setSaveState('saved');setProgress(100);}
+   else{const message=typeof receipt?.error==='string'?receipt.error:'Speicherung konnte nicht bestätigt werden. Bitte erneut versuchen oder die Aufnahme herunterladen.';setError(message);setSaveState('error');}};
   request.onerror=()=>{if(mounted.current){upload.current=null;setSaveState('error');setError('Verbindung unterbrochen. Bitte Speichern erneut versuchen oder die Aufnahme herunterladen.');}};
   request.send(item.data);
  }

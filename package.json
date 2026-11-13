@@ -9,6 +9,7 @@
     "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "dependencies": {
+    "@noble/hashes": "1.8.0",
     "better-sqlite3": "^12.4.1",
     "lucide-react": "^0.468.0",
     "next": "^16.0.0",
