@@ -1,5 +1,5 @@
 import { authorized, sameOrigin } from '@/lib/auth';
-import { complete, SYSTEM_PROMPT, parseJson } from '@/lib/openrouter';
+import { complete, SYSTEM_PROMPT, parseJson, isTransientOpenRouterError, retryAfterSeconds, OpenRouterError } from '@/lib/openrouter';
 import db from '@/lib/db';
 import { startImages } from '@/lib/images';
 import { randomUUID } from 'node:crypto';
@@ -22,5 +22,5 @@ export async function POST(req:Request) {
   db().transaction(()=>{db().prepare('INSERT INTO projects VALUES (?,?,?,?,?)').run(project.id,project.created_at,project.title,JSON.stringify(project.sources),JSON.stringify(project.content));db().prepare('DELETE FROM research_reports WHERE id=?').run(data.researchId);})();
   try { startImages(project.id); } catch (e) { console.error('Image job could not start:', e instanceof Error ? e.message : 'unknown'); }
   return NextResponse.json(project);
- } catch(e) { console.error('generation failed',e instanceof Error?e.message:'unknown'); return NextResponse.json({error:e instanceof Error?e.message:'Generierung fehlgeschlagen.'},{status:500}); }
+ } catch(e) { console.error('generation failed',e instanceof Error?e.message:'unknown'); const retryable=isTransientOpenRouterError(e),retryAfter=retryAfterSeconds(e);return NextResponse.json({error:e instanceof Error?e.message:'Generierung fehlgeschlagen.'},{status:retryable?503:e instanceof OpenRouterError&&e.status===402?402:500,headers:retryAfter?{'Retry-After':String(retryAfter)}:undefined}); }
 }
