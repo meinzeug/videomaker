@@ -8,7 +8,7 @@ import Database from 'better-sqlite3';
 // Explicitly opt in only against a disposable localhost fixture, never production.
 const base=process.env.VIDEOMAKER_UPLOAD_TEST_SERVER;
 const dir=process.env.VIDEOMAKER_UPLOAD_TEST_DATA_DIR;
-const enabled=base==='http://127.0.0.1:3334' && process.env.VIDEOMAKER_UPLOAD_TEST_ALLOW_WRITES==='1' && !!dir && dir.startsWith('/tmp/videomaker-upload-fixture-');
+const enabled=base==='http://127.0.0.1:3334' && process.env.VIDEOMAKER_UPLOAD_TEST_ALLOW_WRITES==='1' && !!dir && (dir.startsWith('/tmp/videomaker-upload-fixture-')||dir.startsWith('/tmp/videomaker-upload-fault-fixture-'));
 test('verified uploads are idempotent, conflict-safe, project-bound and survive retries',{skip:!enabled&&'Requires the isolated local fixture server.',timeout:90000},async()=>{
  let cookie='';const projects=[];
  async function req(method,url,body,extra={}){
@@ -29,6 +29,11 @@ test('verified uploads are idempotent, conflict-safe, project-bound and survive 
   r=await req('POST',url,bytes,headers);assert.equal(r.status,201);assert.deepEqual(await r.json(),{id:recording,projectId:project,sizeBytes:bytes.length,sha256:digest});
   r=await req('POST',url,bytes,{...headers,'X-Recording-Id':recording.toUpperCase()});assert.equal(r.status,200);assert.deepEqual(await r.json(),{id:recording,projectId:project,sizeBytes:bytes.length,sha256:digest});
   r=await req('POST',url,bytes,{...headers,'X-Content-SHA256':'a'.repeat(64)});assert.equal(r.status,422);
+  // The retried body must be read and hashed even when a previously accepted
+  // digest is supplied: a same-sized different body cannot borrow that receipt.
+  const otherBytes=Buffer.alloc(bytes.length,42),otherDigest=createHash('sha256').update(otherBytes).digest('hex');
+  r=await req('POST',url,otherBytes,headers);assert.equal(r.status,422);
+  r=await req('POST',url,otherBytes,{...headers,'X-Content-SHA256':otherDigest});assert.equal(r.status,409);
   r=await req('POST',url,Buffer.concat([bytes,Buffer.from('x')]),headers);assert.equal(r.status,409);
   r=await req('POST',`/api/projects/${other}/recordings`,bytes,headers);assert.equal(r.status,409);
   r=await req('POST',url,bytes,{...headers,'X-Recording-Id':randomUUID(),'X-Content-SHA256':'b'.repeat(64)});assert.equal(r.status,422);

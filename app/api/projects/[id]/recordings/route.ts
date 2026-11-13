@@ -26,7 +26,10 @@ async function existingReceipt(item:Recording, projectId:string, mime:string, le
  if(item.project_id!==projectId||item.mime!==mime||(length>0&&item.size!==length))return NextResponse.json({error:'Aufnahme-ID bereits für andere Daten vergeben.'},{status:409});
  let receipt;
  try {receipt=await recordingFileReceipt(recordingPath(item.id,item.mime),item.size,heartbeat);}
- catch {return NextResponse.json({error:'Gespeicherte Aufnahme kann nicht überprüft werden.'},{status:500});}
+ catch(error) {
+  if(error instanceof Error&&['UPLOAD_TIMEOUT','UPLOAD_LEASE_LOST'].includes(error.message))throw error;
+  return NextResponse.json({error:'Gespeicherte Aufnahme kann nicht überprüft werden.'},{status:500});
+ }
  heartbeat();
  const current=db().prepare('SELECT * FROM project_recordings WHERE id=?').get(item.id) as Recording|undefined;
  if(!db().prepare('SELECT 1 FROM projects WHERE id=?').get(projectId))return NextResponse.json({error:'Skript wurde gelöscht.'},{status:404});
@@ -68,7 +71,10 @@ export async function POST(req:Request,{params}:Context) {
    const digest=incoming.digest('hex');
    if(expectedHash&&digest!==expectedHash)return NextResponse.json({error:'Prüfsumme stimmt nicht. Die Aufnahme wurde nicht übernommen.'},{status:422});
    return await existingReceipt(existing,id,mime,size,digest,lease.check);
-  } catch {return NextResponse.json({error:'Die Aufnahme wurde nicht vollständig übertragen.'},{status:400});}
+  } catch(error) {
+   if(error instanceof Error&&['UPLOAD_TIMEOUT','UPLOAD_LEASE_LOST'].includes(error.message))return NextResponse.json({error:'Upload unterbrochen. Bitte erneut versuchen.'},{status:408});
+   return NextResponse.json({error:'Die Aufnahme wurde nicht vollständig übertragen.'},{status:400});
+  }
  }
  let temporary='';
  try {
