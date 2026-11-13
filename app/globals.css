@@ -45,3 +45,11 @@ html{scroll-behavior:auto}body{font-family:Plex,Arial,sans-serif;font-size:14px;
 .manual-fields label:not(.manual-file){display:block}.manual-fields label:not(.manual-file)>input:not([type=file]),.manual-fields label:not(.manual-file)>textarea{display:block;margin-top:7px}
 .prompter-modes{display:inline-flex;gap:3px;padding:4px;background:#101113;border:1px solid #3b3c40}.prompter-modes button{display:inline-flex;align-items:center;gap:6px;padding:8px 10px;border:0;background:transparent;color:#aaa;font-size:11px;font-weight:700}.prompter-modes button[aria-pressed=true]{background:#413034;color:#fff}.prompter-modes button:focus-visible{outline:2px solid #ff7378;outline-offset:2px}.control:has(input:disabled){opacity:.45}.speech-status{display:flex;align-items:flex-start;gap:9px;padding:11px 14px;background:#1c2020;border:1px solid #394343;color:#dce8e0;font-size:12px;line-height:1.5;margin:0 0 12px}.speech-status svg{flex:none;margin-top:2px;color:#92c2a4}.speech-status b{font-size:12px}.speech-status p{color:#a8b4ad;font-size:11px;margin-top:2px}.speech-status.is-error{background:#271c1e;border-color:#79444a;color:#ffd1d4}.speech-status.is-error svg,.speech-status.is-error p{color:#ffaaaF}.speech-current-word{color:#ff737a;text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:6px}
 .prompter-shortcuts{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px}
+
+.channel-form {display:grid;gap:14px;margin-bottom:24px;max-width:760px}
+.channel-form label {display:grid;gap:7px;font-weight:600}
+.channel-form input,.channel-form select {width:100%;padding:12px;border:1px solid #404040;border-radius:8px;background:#161616;color:#fff;font:inherit}
+.channel-form button {justify-self:start}
+.channel-list {margin-bottom:24px}.channel-row {display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid #333}.channel-row span {color:#aaa}
+.channel-assignment {margin-bottom:24px}.channel-assignment label {display:flex;align-items:center;gap:10px;margin:12px 0}.channel-assignment input {width:18px;height:18px;accent-color:#e50914}
+@media(max-width:600px){.channel-row {flex-direction:column;gap:4px}}

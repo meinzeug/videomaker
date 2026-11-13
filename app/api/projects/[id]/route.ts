@@ -27,6 +27,7 @@ export async function DELETE(req:Request,{params}:{params:Promise<{id:string}>})
    db().prepare('DELETE FROM project_recordings WHERE project_id=?').run(id);
    db().prepare('DELETE FROM project_images WHERE project_id=?').run(id);
    db().prepare('DELETE FROM image_jobs WHERE project_id=?').run(id);
+   db().prepare('DELETE FROM project_channels WHERE project_id=?').run(id);
    db().prepare('DELETE FROM projects WHERE id=?').run(id);
   })();
   return NextResponse.json({ok:true});

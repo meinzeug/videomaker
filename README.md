@@ -8,6 +8,10 @@ Node.js 22 oder neuer wird empfohlen. `.env.example` nach `.env` kopieren und `O
 
 Standardmodell ist `openai/gpt-6.1-terra` mit `reasoning.effort=xhigh` und verpflichtender Provider-Unterstützung. Recherche und Skriptgenerierung rufen kostenpflichtige OpenRouter- und ggf. Such- bzw. Abrufdienste auf. Die Antwortdauer kann mehrere Minuten betragen. Das App-Passwort und der Session-Schlüssel sind Konfigurationswerte; bei Änderung des Session-Schlüssels werden bestehende Sitzungen ungültig.
 
+## Kanäle und Plattformen
+
+Unter „Kanäle“ können mehrere Kanäle mit Plattform und optionaler Kennung angelegt werden. In einer Skriptansicht lässt sich das Skript einem oder mehreren Kanälen zuordnen; vorhandene Skripte bleiben zunächst ohne Zuordnung. Die Zuordnung verbindet noch keine Plattformkonten und veröffentlicht keine Inhalte. Die Android-App KontraPrompter kann nach Anmeldung Skripte aus dem Studio abrufen und als lokale Kopie für den Teleprompter öffnen.
+
 ## DNS und Deployment
 
 `scripts/setup-dns.sh` liest `~/hetznerkey.txt` bzw. `$HETZNER_KEY_FILE` und legt den A-Record über die Hetzner Cloud API an. Ein vorhandener abweichender A-Record wird nicht überschrieben.
