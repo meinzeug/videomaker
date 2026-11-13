@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    ports:
+      - "127.0.0.1:3270:3000"
+    volumes:
+      - videomaker-data:/data
+volumes:
+  videomaker-data:

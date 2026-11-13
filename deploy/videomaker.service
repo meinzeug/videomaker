@@ -1,0 +1,24 @@
+[Unit]
+Description=Kontrakurs Videomaker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=videomaker
+Group=videomaker
+WorkingDirectory=/opt/videomaker
+EnvironmentFile=/etc/videomaker.env
+Environment=NODE_ENV=production
+Environment=DATA_DIR=/var/lib/videomaker
+ExecStart=/usr/local/bin/node /opt/videomaker/node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3270
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/videomaker /opt/videomaker/.next/cache
+
+[Install]
+WantedBy=multi-user.target
