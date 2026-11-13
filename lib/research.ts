@@ -5,8 +5,8 @@ export type Hypothesis={question:string;indications:string;alternative:string;li
 export type ResearchReport={search_requests:number;summary:string;sources:ResearchSource[];findings:Finding[];hypotheses:Hypothesis[];open_questions:string[]};
 const text=(value:unknown,max:number)=>typeof value==='string'?value.trim().slice(0,max):'';
 function url(value:unknown){try{const u=new URL(String(value));return u.protocol==='https:'&&u.hostname.includes('.')&&u.pathname!=='/'?u.href:'';}catch{return '';}}
-export function normalizeSources(value:unknown):NewsSource[]|null {
- if(!Array.isArray(value)||value.length<2||value.length>3)return null;
+export function normalizeSources(value:unknown,minimum=2):NewsSource[]|null {
+ if(!Array.isArray(value)||value.length<minimum||value.length>3)return null;
  const result:NewsSource[]=[];
  for(const s of value){if(!s || typeof s.title!=='string'||!s.title.trim()||s.title.length>500)return null;const link=url(s.url);if(!link)return null;result.push({title:text(s.title,500),url:link.slice(0,1000),source:text(s.source,100),date:text(s.date,100),description:text(s.description,800)});}
  return result;
