@@ -14,6 +14,9 @@ export default function db() {
     CREATE INDEX IF NOT EXISTS project_images_project_idx ON project_images(project_id, position);
     CREATE TABLE IF NOT EXISTS project_recordings (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, created_at TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS project_recordings_project_idx ON project_recordings(project_id, created_at);
+    CREATE TABLE IF NOT EXISTS live_devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL, last_seen INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS live_commands (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, type TEXT NOT NULL, project_id TEXT, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS live_commands_device_idx ON live_commands(device_id, created_at);
     CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL, handle TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS project_channels (project_id TEXT NOT NULL, channel_id TEXT NOT NULL, PRIMARY KEY(project_id,channel_id));
     CREATE INDEX IF NOT EXISTS project_channels_channel_idx ON project_channels(channel_id);
