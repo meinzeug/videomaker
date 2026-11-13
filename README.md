@@ -10,7 +10,19 @@ Standardmodell ist `openai/gpt-6.1-terra` mit `reasoning.effort=xhigh` und verpf
 
 ## Kanäle und Plattformen
 
-Unter „Kanäle“ können mehrere Kanäle mit Plattform und optionaler Kennung angelegt werden. In einer Skriptansicht lässt sich das Skript einem oder mehreren Kanälen zuordnen; vorhandene Skripte bleiben zunächst ohne Zuordnung. Die Zuordnung verbindet noch keine Plattformkonten und veröffentlicht keine Inhalte. Die Android-App KontraPrompter kann nach Anmeldung Skripte aus dem Studio abrufen und als lokale Kopie für den Teleprompter öffnen.
+Unter „Kanäle“ können mehrere Kanäle mit Plattform und optionaler Kennung angelegt werden. Neben den vorgegebenen Plattformen können weitere namentlich eingegeben werden. In einer Skriptansicht lässt sich das Skript einem oder mehreren Kanälen zuordnen; vorhandene Skripte bleiben zunächst ohne Zuordnung. Die Zuordnung verbindet noch keine Plattformkonten und veröffentlicht keine Inhalte. Die Android-App KontraPrompter kann nach Anmeldung Skripte aus dem Studio abrufen und als lokale Kopie für den Teleprompter öffnen.
+
+## Videoeditor
+
+Der Videoeditor kann aus einer gespeicherten Aufnahme einen Ausschnitt zwischen 0,1 Sekunden und zehn Minuten als neue MP4-Datei beim selben Skript speichern. Das Original bleibt erhalten; eine vorhandene Audiospur wird übernommen. Auf dem Server müssen `ffmpeg`, `ffprobe` und `flock` sowie die Encoder `libx264` und AAC verfügbar sein. Die Bearbeitung wird auf einen Auftrag gleichzeitig begrenzt und kann einige Minuten dauern. Mehrspur- und KI-Schnitt sind noch nicht implementiert.
+
+## Finanzen: vorläufige Erfassung für die UG
+
+Unter „Finanzen“ können Einnahmen und Ausgaben in Euro mit Datum, Beschreibung, optionaler Referenz und Kanal erfasst werden. Einträge sind nicht nachträglich veränderbar oder löschbar; eine Stornierung wird mit Grund als eigener Vorgang festgehalten. Originalbelege einschließlich XML-Dateien können einem Vorgang zugeordnet werden; sie werden unverändert gespeichert und beim Download anhand ihres SHA-256-Prüfwerts kontrolliert. Die Ablage ist auf 10 MiB pro Datei und 512 MiB insgesamt begrenzt. Regelbesteuerung oder Kleinunternehmerregelung und Kalenderjahr oder abweichendes Geschäftsjahr können als historisierte Angaben hinterlegt werden. Bei unklarem Speicherstatus kann derselbe Vorgang erneut gesendet werden, ohne ihn doppelt anzulegen.
+
+Das separate „Buchungsjournal“ bietet einen eigenen Kontenplan und manuelle, centgenau ausgeglichene Soll-/Haben-Buchungen mit nachvollziehbarem Storno. Es übernimmt Einträge der Einnahmen-/Ausgabenübersicht nicht automatisch. Nicht bestätigte Vorgänge werden vor dem Senden lokal im Browserprofil gespeichert und können mit derselben ID wiederholt werden. Diese lokale Wiederherstellung ist kein Backup: Browserdaten, privates Surfen, Geräteverlust oder Speicherbereinigung können die Daten entfernen; Personen mit Zugriff auf das Browserprofil können sie lesen.
+
+Dies ist keine vollständige Buchhaltung: Die inhaltliche Verarbeitung von E-Rechnungen, Steueraufteilung, Belegbindung im Journal, Exporte, Perioden- und Jahresabschluss sowie eine Berechnung der UG-Rücklage fehlen. Die Unveränderlichkeit einzelner Einträge allein weist keine GoBD-Konformität nach. Weitere fachliche Grundlagen und Quellen stehen in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## DNS und Deployment
 

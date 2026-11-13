@@ -4,7 +4,9 @@ import {parseChannel,parseChannelIds} from '../lib/channels.ts';
 test('channel names and platforms are validated and trimmed',()=>{
  assert.deepEqual(parseChannel({name:' News ',platform:'youtube',handle:' @news '}),{name:'News',platform:'youtube',handle:'@news'});
  assert.throws(()=>parseChannel({name:' ',platform:'youtube',handle:''}));
- assert.throws(()=>parseChannel({name:'Name',platform:'bad',handle:''}));
+ assert.deepEqual(parseChannel({name:'Name',platform:' Twitch ',handle:''}),{name:'Name',platform:'Twitch',handle:''});
+ assert.throws(()=>parseChannel({name:'Name',platform:' ',handle:''}));
+ assert.throws(()=>parseChannel({name:'Name',platform:'foo\nbar',handle:''}));
  assert.throws(()=>parseChannel({name:'Name',platform:'youtube',handle:'x'.repeat(101)}));
 });
 test('project assignments accept valid IDs once and reject invalid IDs',()=>{

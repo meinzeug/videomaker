@@ -54,3 +54,23 @@ html{scroll-behavior:auto}body{font-family:Plex,Arial,sans-serif;font-size:14px;
 .channel-assignment {margin-bottom:24px}.channel-assignment label {display:flex;align-items:center;gap:10px;margin:12px 0}.channel-assignment input {width:18px;height:18px;accent-color:#e50914}
 @media(max-width:600px){.channel-row {flex-direction:column;gap:4px}}
 .device-control {margin:20px 0}.device-control p {color:var(--muted);line-height:1.5;margin:10px 0}.device-control label {display:grid;gap:6px;max-width:430px}.device-control select {padding:12px;border:1px solid #404040;border-radius:8px;background:#161616;color:#fff;font:inherit}.device-actions {display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+
+.video-editor .section-heading{margin-bottom:30px}.editor-layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(280px,.8fr);gap:16px;align-items:start}.editor-source,.editor-controls{border-radius:14px;display:grid;gap:14px;min-width:0}.editor-section-title{display:flex;align-items:start;justify-content:space-between;gap:16px}.editor-section-title svg{color:var(--red)}.editor-source label,.editor-controls label{display:grid;gap:8px;font-weight:600}.editor-source select,.editor-controls input[type=number]{width:100%;padding:12px;border:1px solid #404047;border-radius:9px;background:#161719;color:var(--text);font:inherit}.editor-controls input[type=range]{width:100%;accent-color:var(--red)}.editor-controls p{line-height:1.55;color:var(--muted)}.editor-controls label strong{color:var(--text);font-variant-numeric:tabular-nums}.editor-video{display:block;width:100%;max-height:65vh;aspect-ratio:16/9;object-fit:contain;background:#08090a;border-radius:10px}.editor-no-video,.video-editor-empty{min-height:220px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;color:var(--muted);background:#1b1c1f;border-radius:10px;padding:24px}.video-editor-empty h2{color:var(--text)}.editor-duration strong,.editor-success{color:#c6e9d0!important}.editor-controls .editor-hint{font-size:12px}.editor-download{display:inline-flex;align-items:center;gap:8px;color:var(--text);width:max-content}.editor-controls button:focus-visible,.editor-source select:focus-visible,.editor-controls input:focus-visible{outline:2px solid #ff7378;outline-offset:3px}@media(max-width:900px){.editor-layout{grid-template-columns:1fr}}
+
+/* Shared studio surfaces: readable hierarchy, quiet depth and immediate feedback. */
+:root{--bg:#0d0f13;--surface:#17191f;--line:#32343b;--text:#f5f5f7;--muted:#b0b1b8}
+body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.5}
+h1,h2,h3{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:-.035em}
+.sidebar{background:rgba(20,21,26,.94);backdrop-filter:blur(24px) saturate(125%);border-right-color:rgba(255,255,255,.09)}
+.topbar{background:rgba(18,19,24,.82);backdrop-filter:blur(18px) saturate(120%);border-bottom-color:rgba(255,255,255,.08)}
+.sidebar nav button{border-radius:10px;min-height:46px}.sidebar nav button.active{background:rgba(255,255,255,.09)}
+.panel,.visual-section,.recorder,.package,.empty-news,.login-card,.project-list,.page-heading,.stats,.topic-form{border-radius:16px}
+.primary,.secondary-action,.recorder-secondary,.record-button,.package-button{border-radius:10px}
+button,a,input,select,textarea{touch-action:manipulation}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #ff8a91;outline-offset:3px}
+@media (prefers-reduced-transparency:reduce){.sidebar,.topbar{background:#17181d;backdrop-filter:none}}
+@media (prefers-contrast:more){:root{--muted:#d0d0d5;--line:#777}.panel,.visual-section,.recorder,.package,.project-list{border-color:#888}}
+@media (prefers-reduced-motion:no-preference){button:not(:disabled){transition:background-color .16s ease,border-color .16s ease,color .16s ease,transform .16s ease}button:not(:disabled):active{transform:scale(.985)}}
+.sidebar{overflow-y:auto;overscroll-behavior:contain}.sidebar nav .side-nav-group{padding:14px 12px 3px;color:#aaaab1;font-size:10px;letter-spacing:.07em}.side-bottom{flex-shrink:0}
+.logout-progress{position:fixed;z-index:100;inset:0;display:grid;place-items:center;background:#090a0eb8;backdrop-filter:blur(8px);color:#fff;font-weight:600}
+@media(prefers-reduced-transparency:reduce){.logout-progress{background:#15161b}}
