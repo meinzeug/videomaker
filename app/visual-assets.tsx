@@ -34,7 +34,7 @@ export default function VisualAssets({projectId}:{projectId:string}) {
   </article>;
  }
  return <section className="visual-section" aria-label="Thumbnail und Einblendbilder">
-  <div className="visual-heading"><div><p className="eyebrow">BILDER FÜR DEIN VIDEO</p><h2>Deine Bildauswahl<span>.</span></h2><p>Thumbnail und passende Einblendbilder – jeweils für YouTube und TikTok.</p></div>
+  <div className="visual-heading"><div><p className="eyebrow">BILDER FÜR DEIN VIDEO</p><h2>Deine Bildauswahl<span>.</span></h2><p>KI-generierte Thumbnails und passende Einblendbilder – jeweils für YouTube und TikTok.</p></div>
    {state && (state.status==='not_started'||state.status==='error')&&<button className="primary" onClick={start} disabled={busy}><RefreshCw size={16}/>{busy?'Wird gestartet …':state.status==='error'?'Fehlende Bilder erneut erstellen':'Bilder erstellen'}</button>}
   </div>
   {error&&<p className="visual-message visual-error" role="alert">{error} <button className="text-button" onClick={()=>setRevision(v=>v+1)}>Erneut laden</button></p>}
