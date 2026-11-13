@@ -39,3 +39,19 @@ test('pagination visits each event once without deleting records',()=>{
  const d=database();for(let n=0;n<4;n++){const id=`${String(n).padStart(8,'0')}-c343-41d1-8245-2a88107e7213`;createFinanceEntry(d,{...parseFinanceDraft(draft),id},'2026-11-13T20:00:00Z');}
  const first=listFinance(d,null,2);assert.equal(first.entries.length,2);assert.ok(first.nextBefore);const second=listFinance(d,first.nextBefore,2);assert.equal(second.entries.length,2);assert.equal(second.nextBefore,null);assert.equal(new Set([...first.entries,...second.entries].map(e=>e.id)).size,4);d.close();
 });
+test('upgraded finance schema rejects REPLACE by id, rowid or existing reversal target',()=>{
+ const d=database();d.pragma('recursive_triggers = OFF');
+ const item=parseFinanceDraft(draft);createFinanceEntry(d,item,'2026-11-13T20:00:00Z');
+ const reversal=parseFinanceReversal({id:reversalId,entryId,reason:'Falscher Betrag'});reverseFinanceEntry(d,reversal,'2026-11-13T20:01:00Z');
+ d.exec('DROP TRIGGER IF EXISTS finance_entries_insert_guard');ensureFinanceSchema(d);
+ const before=d.prepare('SELECT rowid,* FROM finance_entries ORDER BY rowid').all();
+ const replacement=d.prepare(`INSERT OR REPLACE INTO finance_entries(rowid,id,kind,direction,amount_cents,occurred_on,description,counterparty,reference,channel_id,channel_name,channel_platform,created_at,reversed_entry_id,reversal_reason)
+  SELECT ?,?,kind,direction,amount_cents,occurred_on,description,counterparty,reference,channel_id,channel_name,channel_platform,created_at,reversed_entry_id,reversal_reason FROM finance_entries WHERE id=?`);
+ const newId='52c3267c-c343-41d1-8245-2a88107e7213';
+ assert.throws(()=>replacement.run(null,entryId,entryId),/already exists/);
+ assert.throws(()=>replacement.run(before[0].rowid,newId,entryId),/already exists/);
+ assert.throws(()=>replacement.run(null,newId,reversalId),/already exists/);
+ assert.deepEqual(d.prepare('SELECT rowid,* FROM finance_entries ORDER BY rowid').all(),before);
+ assert.equal(createFinanceEntry(d,item,'2026-11-13T21:00:00Z').created,false);
+ assert.equal(reverseFinanceEntry(d,reversal,'2026-11-13T21:00:00Z').created,false);d.close();
+});

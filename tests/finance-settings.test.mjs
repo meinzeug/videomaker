@@ -25,3 +25,15 @@ test('settings changes are append-only, idempotent and preserve earlier declarat
  assert.throws(()=>d.prepare('UPDATE finance_settings_events SET tax_regime=? WHERE id=?').run('regular',secondId),/cannot be updated/);
  assert.throws(()=>d.prepare('DELETE FROM finance_settings_events WHERE id=?').run(id),/cannot be deleted/);d.close();
 });
+test('upgraded settings schema rejects REPLACE through id and rowid',()=>{
+ const d=new Database(':memory:');d.pragma('recursive_triggers = OFF');ensureFinanceSettingsSchema(d);
+ const first=parseFinanceSettings(calendar);createFinanceSettings(d,first,'2026-01-01T00:00:00Z');
+ d.exec('DROP TRIGGER IF EXISTS finance_settings_insert_guard');ensureFinanceSettingsSchema(d);
+ const original=d.prepare('SELECT rowid,* FROM finance_settings_events WHERE id=?').get(id);
+ const insert=d.prepare('INSERT OR REPLACE INTO finance_settings_events(rowid,id,effective_on,tax_regime,fiscal_mode,fiscal_start_month,fiscal_start_day,reason,created_at) VALUES(?,?,?,?,?,?,?,?,?)');
+ const values=(rowid,eventId)=>[rowid,eventId,'2026-01-01','small_business','calendar',1,1,'Andere Angabe','2026-01-01T01:00:00Z'];
+ assert.throws(()=>insert.run(...values(null,id)),/already exists/);
+ assert.throws(()=>insert.run(...values(original.rowid,secondId)),/already exists/);
+ assert.deepEqual(d.prepare('SELECT rowid,* FROM finance_settings_events WHERE id=?').get(id),original);
+ assert.equal(createFinanceSettings(d,first,'2026-01-01T02:00:00Z').created,false);d.close();
+});

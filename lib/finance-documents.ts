@@ -13,6 +13,11 @@ export const FINANCE_DOCUMENT_SCHEMA=`
   UNIQUE(entry_id,sha256)
  );
  CREATE INDEX IF NOT EXISTS finance_documents_entry_idx ON finance_documents(entry_id,created_at,id);
+ -- SQLite REPLACE can bypass DELETE triggers when recursive_triggers is off.
+ -- Guard every conflict key, including the implicit rowid, before replacement.
+ CREATE TRIGGER IF NOT EXISTS finance_documents_insert_guard BEFORE INSERT ON finance_documents BEGIN
+  SELECT CASE WHEN EXISTS(SELECT 1 FROM finance_documents d WHERE d.id=NEW.id OR d.rowid=NEW.rowid OR (d.entry_id=NEW.entry_id AND d.sha256=NEW.sha256)) THEN RAISE(ABORT,'finance document already exists') END;
+ END;
  CREATE TRIGGER IF NOT EXISTS finance_documents_no_update BEFORE UPDATE ON finance_documents BEGIN SELECT RAISE(ABORT,'finance documents cannot be updated'); END;
  CREATE TRIGGER IF NOT EXISTS finance_documents_no_delete BEFORE DELETE ON finance_documents BEGIN SELECT RAISE(ABORT,'finance documents cannot be deleted'); END;
 `;

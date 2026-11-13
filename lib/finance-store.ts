@@ -14,6 +14,10 @@ export const FINANCE_SCHEMA = `
         (kind='reversal' AND reversed_entry_id IS NOT NULL AND reversal_reason IS NOT NULL))
  );
  CREATE INDEX IF NOT EXISTS finance_entries_date_idx ON finance_entries(occurred_on,id);
+ -- Block implicit deletion by INSERT OR REPLACE even with recursive triggers disabled.
+ CREATE TRIGGER IF NOT EXISTS finance_entries_insert_guard BEFORE INSERT ON finance_entries BEGIN
+  SELECT CASE WHEN EXISTS(SELECT 1 FROM finance_entries e WHERE e.id=NEW.id OR e.rowid=NEW.rowid OR (NEW.reversed_entry_id IS NOT NULL AND e.reversed_entry_id=NEW.reversed_entry_id)) THEN RAISE(ABORT,'finance entry already exists') END;
+ END;
  CREATE TRIGGER IF NOT EXISTS finance_entries_no_update BEFORE UPDATE ON finance_entries BEGIN SELECT RAISE(ABORT,'finance entries cannot be updated'); END;
  CREATE TRIGGER IF NOT EXISTS finance_entries_no_delete BEFORE DELETE ON finance_entries BEGIN SELECT RAISE(ABORT,'finance entries cannot be deleted'); END;
 `;

@@ -44,6 +44,23 @@ test('application schema forbids modification or deletion and detects corruption
  assert.throws(()=>storeFinanceDocument(d,{id:documentId,entryId,originalName:'a.xml',data:Buffer.from('original')},'2026-11-13T20:01:00Z'),FinanceDocumentCorrupt);
  assert.deepEqual(d.prepare('SELECT data FROM finance_documents WHERE id=?').get(documentId).data,Buffer.from('modified'));d.close();
 });
+test('existing originals survive schema upgrade and REPLACE collisions on id, content key and rowid',()=>{
+ const d=database();d.pragma('recursive_triggers = OFF');
+ const original={id:documentId,entryId,originalName:'unveraendert.xml',data:Buffer.from('original bytes')};
+ storeFinanceDocument(d,original,'2026-11-13T20:00:00Z');
+ // Simulate a database created by the previous app version, then apply the schema again.
+ d.exec('DROP TRIGGER IF EXISTS finance_documents_insert_guard');ensureFinanceDocumentsSchema(d);
+ const stored=d.prepare('SELECT rowid,* FROM finance_documents WHERE id=?').get(documentId);
+ const replace=d.prepare('INSERT OR REPLACE INTO finance_documents(rowid,id,entry_id,original_name,size,sha256,created_at,data) VALUES(?,?,?,?,?,?,?,?)');
+ const args=(rowid,id,hash)=>[rowid,id,entryId,'manipuliert.xml',stored.size,hash,stored.created_at,stored.data];
+ assert.throws(()=>replace.run(...args(null,documentId,'a'.repeat(64))),/already exists/);
+ assert.throws(()=>replace.run(...args(null,otherId,stored.sha256)),/already exists/);
+ assert.throws(()=>replace.run(...args(stored.rowid,otherId,'a'.repeat(64))),/already exists/);
+ assert.deepEqual(d.prepare('SELECT rowid,* FROM finance_documents WHERE id=?').get(documentId),stored);
+ assert.deepEqual(readFinanceDocument(d,entryId,documentId).data,original.data);
+ assert.equal(storeFinanceDocument(d,original,'2026-11-13T21:00:00Z').created,false);
+ d.close();
+});
 test('bounded size and entry count protect resources',()=>{
  const d=database();assert.throws(()=>storeFinanceDocument(d,{id:documentId,entryId,originalName:'a',data:Buffer.alloc(0)},''));
  assert.throws(()=>storeFinanceDocument(d,{id:documentId,entryId,originalName:'a',data:Buffer.alloc(MAX_FINANCE_DOCUMENT_BYTES+1)},''));

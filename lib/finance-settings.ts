@@ -14,6 +14,10 @@ export const FINANCE_SETTINGS_SCHEMA=`
   CHECK((fiscal_mode='calendar' AND fiscal_start_month=1 AND fiscal_start_day=1) OR
         (fiscal_mode='different' AND NOT(fiscal_start_month=1 AND fiscal_start_day=1)))
  );
+ -- Block replacement by either the primary key or SQLite's implicit rowid.
+ CREATE TRIGGER IF NOT EXISTS finance_settings_insert_guard BEFORE INSERT ON finance_settings_events BEGIN
+  SELECT CASE WHEN EXISTS(SELECT 1 FROM finance_settings_events e WHERE e.id=NEW.id OR e.rowid=NEW.rowid) THEN RAISE(ABORT,'finance settings event already exists') END;
+ END;
  CREATE TRIGGER IF NOT EXISTS finance_settings_no_update BEFORE UPDATE ON finance_settings_events BEGIN SELECT RAISE(ABORT,'finance settings cannot be updated'); END;
  CREATE TRIGGER IF NOT EXISTS finance_settings_no_delete BEFORE DELETE ON finance_settings_events BEGIN SELECT RAISE(ABORT,'finance settings cannot be deleted'); END;
 `;
