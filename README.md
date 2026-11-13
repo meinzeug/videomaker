@@ -17,3 +17,9 @@ Standardmodell ist `openai/gpt-6.1-terra` mit `reasoning.effort=xhigh` und verpf
 Alternativ kann `docker compose up -d --build` die App auf `127.0.0.1:3270` starten; dafür wird ein vorhandener Reverse Proxy benötigt. `deploy/nginx.conf` ist ein Beispiel für einen separaten Nginx-Host mit bereits eingerichtetem Let's-Encrypt-Zertifikat. Auf dem bestehenden Zielserver werden systemd und Caddy verwendet, damit keine anderen Websites ihre Ports verlieren.
 
 Teleprompter: Skript öffnen, anschließend „Teleprompter öffnen“. Die Leertaste startet und pausiert den Lauf, sofern kein Eingabefeld oder Button fokussiert ist. Tempo, Schriftgröße und Spiegelung sind während der Aufnahme einstellbar.
+
+## Bilder und Thumbnail
+
+Nach der Skripterstellung plant GPT-6.1 Sol anhand des vollständigen Skripts eine variable Anzahl von zwei bis sechs passenden Einblendbildern. Jedes Motiv wird separat als Querformat für YouTube (16:9) und Hochformat für TikTok (9:16) generiert. Die Thumbnails erhalten in beiden Formaten dasselbe feste Layout in Schwarz, Rot und Weiß. Die Bilddateien rendert standardmäßig `microsoft/mai-image-2.6-flash` über OpenRouter; Terra und Sol geben selbst Text aus. Der Renderer ist über `IMAGE_MODEL`, die Bildplanung über `IMAGE_PLANNER_MODEL` konfigurierbar. Die bestehenden OpenRouter-Datenschutzeinstellungen gelten unverändert. Bildgenerierung verursacht zusätzliche Kosten.
+
+Die Bilder werden im Hintergrund erzeugt und zusammen mit ihrem Fortschritt in SQLite gespeichert. In der Skriptansicht können sie einzeln heruntergeladen werden. Bei Fehlern oder nach einem Serverneustart kann die Erstellung fehlender Bilder erneut gestartet werden; fertige Bilder bleiben erhalten. Für ältere Skripte startet der Button „Bilder erstellen“ die Nachgenerierung. Wird ein Skript gelöscht, werden auch seine Bilder entfernt.

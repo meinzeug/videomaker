@@ -1,6 +1,7 @@
 import { authorized, sameOrigin } from '@/lib/auth';
 import { complete, SYSTEM_PROMPT, parseJson } from '@/lib/openrouter';
 import db from '@/lib/db';
+import { startImages } from '@/lib/images';
 import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 export const maxDuration=300;
@@ -15,6 +16,7 @@ export async function POST(req:Request) {
   if(!Array.isArray(content.titles)||content.titles.length!==3||content.titles.some((x:unknown)=>typeof x!=='string')||typeof content.thumbnail!=='string'||!Array.isArray(content.broll)||content.broll.length!==2||content.broll.some((x:unknown)=>typeof x!=='string')||typeof content.script!=='string'||!content.script.trim()) throw new Error('Die KI hat kein vollständiges Ergebnis geliefert.');
   const project={id:randomUUID(),created_at:new Date().toISOString(),title:content.titles[0],sources:safeSources,content};
   db().prepare('INSERT INTO projects VALUES (?,?,?,?,?)').run(project.id,project.created_at,project.title,JSON.stringify(project.sources),JSON.stringify(project.content));
+  try { startImages(project.id); } catch (e) { console.error('Image job could not start:', e instanceof Error ? e.message : 'unknown'); }
   return NextResponse.json(project);
  } catch(e) { console.error('generation failed',e instanceof Error?e.message:'unknown'); return NextResponse.json({error:e instanceof Error?e.message:'Generierung fehlgeschlagen.'},{status:500}); }
 }
