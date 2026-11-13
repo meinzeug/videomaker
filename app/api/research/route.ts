@@ -1,5 +1,5 @@
 import { authorized, sameOrigin } from '@/lib/auth';
-import { deepComplete, parseJson } from '@/lib/openrouter';
+import { deepComplete, parseJson, OpenRouterError } from '@/lib/openrouter';
 import { normalizeSources, validateResearch } from '@/lib/research';
 import db from '@/lib/db';
 import { randomUUID } from 'node:crypto';
@@ -17,5 +17,5 @@ export async function POST(req:Request) {
   const id=randomUUID();const now=new Date().toISOString();
   db().transaction(()=>{db().prepare("DELETE FROM research_reports WHERE created_at < datetime('now','-1 day')").run();db().prepare('INSERT INTO research_reports(id,created_at,sources,report) VALUES(?,?,?,?)').run(id,now,JSON.stringify(sources),JSON.stringify(report));})();
   return NextResponse.json({id,report},{headers:{'Cache-Control':'no-store'}});
- }catch(e){const message=e instanceof Error?e.message:'Vertiefte Recherche fehlgeschlagen.';console.error('Deep research failed:',message);return NextResponse.json({error:message},{status:500});}
+ }catch(e){const message=e instanceof Error?e.message:'Vertiefte Recherche fehlgeschlagen.';console.error('Deep research failed:',message);const retryable=(e instanceof OpenRouterError && [429,500,502,503,504].includes(e.status)) || (e instanceof Error && e.name==='TimeoutError');return NextResponse.json({error:message},{status:retryable?503:500});}
 }
