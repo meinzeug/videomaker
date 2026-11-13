@@ -34,3 +34,20 @@ test('journal and reversal receipts match the original details, not just an ID',
  const rev={version:1,action:'reversal',body:{id,entryId:'55c3267c-c343-41d1-8245-2a88107e7213',occurredOn:'2026-11-14',reason:'Korrektur'},uncertain:true};
  assert.equal(journalResponseDecision(rev,201,{created:true,journal:{id,kind:'reversal',reversalOf:rev.body.entryId,occurredOn:rev.body.occurredOn,reversalReason:rev.body.reason}}),'confirmed');
 });
+
+test('document link and correction receipts must identify the exact durable operation',()=>{
+ const journalId='11111111-1111-4111-8111-111111111111',id='22222222-2222-4222-8222-222222222222',documentId='AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA',financeEntryId='33333333-3333-4333-8333-333333333333',sha256='a'.repeat(64);
+ const item={version:1,action:'document-link',uncertain:true,body:{id,journalId,documentId,financeEntryId,sha256}};
+ assert.deepEqual(parsePendingJournal(JSON.stringify(item)),item);
+ const receipt={created:true,link:{id,journalId,documentId,financeEntryId,sha256}};
+ assert.equal(journalResponseDecision(item,201,receipt),'confirmed');
+ assert.equal(journalResponseDecision(item,200,{...receipt,link:{...receipt.link,sha256:'b'.repeat(64)}}),'retain');
+ assert.equal(journalResponseDecision(item,200,{...receipt,created:undefined}),'retain');
+ assert.equal(journalResponseDecision(item,409,{error:'no'}),'retain');
+ const revoke={version:1,action:'document-unlink',uncertain:true,body:{id:'44444444-4444-4444-8444-444444444444',journalId,linkId:id,reason:'Falscher Beleg'}};
+ const canceled={created:false,link:{id,journalId,unlinkId:revoke.body.id,unlinkReason:revoke.body.reason}};
+ assert.deepEqual(parsePendingJournal(JSON.stringify(revoke)),revoke);
+ assert.equal(journalResponseDecision(revoke,200,canceled),'confirmed');
+ assert.equal(journalResponseDecision(revoke,200,{...canceled,link:{...canceled.link,unlinkId:id}}),'retain');
+ assert.equal(journalResponseDecision(revoke,403,{error:'no'}),'reauth');
+});

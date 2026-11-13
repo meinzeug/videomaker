@@ -100,6 +100,13 @@ export const UG_LEDGER_SCHEMA=`
   CHECK((kind='entry' AND reversal_of IS NULL AND reversal_reason IS NULL) OR (kind='reversal' AND reversal_of IS NOT NULL AND reversal_of<>id AND reversal_reason IS NOT NULL AND length(trim(reversal_reason)) BETWEEN 1 AND 250))
  );
  CREATE INDEX IF NOT EXISTS ug_ledger_journals_date_idx ON ug_ledger_journals(occurred_on,id);
+ -- Separate trigger names ensure existing databases acquire the rowid protection.
+ CREATE TRIGGER IF NOT EXISTS ug_ledger_accounts_rowid_guard BEFORE INSERT ON ug_ledger_accounts BEGIN
+  SELECT CASE WHEN EXISTS(SELECT 1 FROM ug_ledger_accounts WHERE rowid=NEW.rowid) THEN RAISE(ABORT,'account rowid already exists') END;
+ END;
+ CREATE TRIGGER IF NOT EXISTS ug_ledger_journals_rowid_guard BEFORE INSERT ON ug_ledger_journals BEGIN
+  SELECT CASE WHEN EXISTS(SELECT 1 FROM ug_ledger_journals WHERE rowid=NEW.rowid) THEN RAISE(ABORT,'journal rowid already exists') END;
+ END;
  CREATE TRIGGER IF NOT EXISTS ug_ledger_accounts_insert_guard BEFORE INSERT ON ug_ledger_accounts BEGIN
   SELECT CASE WHEN EXISTS(SELECT 1 FROM ug_ledger_accounts WHERE id=NEW.id OR code=NEW.code COLLATE NOCASE) THEN RAISE(ABORT,'account already exists') END;
  END;

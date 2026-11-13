@@ -1,0 +1,38 @@
+// Explicit opt-in only; the server must use a disposable DATA_DIR.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID,createHash} from 'node:crypto';
+const origin=process.env.UG_LEDGER_TEST_ORIGIN,password=process.env.UG_LEDGER_TEST_PASSWORD;
+const enabled=!!origin&&!!password&&process.env.UG_LEDGER_TEST_ALLOW_WRITE==='1';
+test('authenticated links, byte-exact downloads, idempotency and correction over HTTP', {skip:!enabled}, async()=>{
+ const url=new URL(origin);assert.equal(url.protocol,'http:');assert.ok(['127.0.0.1','[::1]'].includes(url.hostname));assert.equal(origin,url.origin);
+ const fetchPath=(path,options={})=>fetch(new URL(path,origin),{redirect:'manual',...options});
+ assert.equal((await fetchPath('/api/ledger/documents')).status,401);
+ const login=await fetchPath('/api/login',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({password})});assert.equal(login.status,200);
+ const cookie=login.headers.getSetCookie().map(s=>s.split(';',1)[0]).join('; ');assert.match(cookie,/kontrakurs_session=/);
+ const get=path=>fetchPath(path,{headers:{cookie}});
+ const post=(path,body,requestOrigin=origin)=>fetchPath(path,{method:'POST',headers:{cookie,origin:requestOrigin,'content-type':'application/json'},body:JSON.stringify(body)});
+ const financeId=randomUUID(),documentId=randomUUID(),journalId=randomUUID(),cash=randomUUID(),revenue=randomUUID(),linkId=randomUUID();
+ const entry={action:'entry',id:financeId,direction:'expense',amountCents:1250,occurredOn:'2026-11-13',description:'Belegtest',counterparty:'',reference:'',channelId:null};
+ assert.equal((await post('/api/finance',entry)).status,201);
+ const bytes=Buffer.from('%PDF-1.4\r\nTest-Beleg\0Ende');const sha256=createHash('sha256').update(bytes).digest('hex');
+ const upload=await fetchPath(`/api/finance/${financeId}/documents`,{method:'POST',headers:{cookie,origin,'content-type':'application/octet-stream','x-finance-document-id':documentId,'x-finance-filename':encodeURIComponent('Test ä.pdf')},body:bytes});assert.equal(upload.status,201);
+ const tag=randomUUID().replaceAll('-','').slice(0,18).toUpperCase();
+ for(const account of [{id:cash,code:`T${tag}A`,name:'Bank',kind:'asset'},{id:revenue,code:`T${tag}B`,name:'Aufwand',kind:'expense'}])assert.equal((await post('/api/ledger/accounts',account)).status,201);
+ const journal={id:journalId,occurredOn:'2026-11-13',description:'Buchung',lines:[{accountId:cash,side:'credit',amountCents:1250},{accountId:revenue,side:'debit',amountCents:1250}]};
+ assert.equal((await post('/api/ledger/journals',journal)).status,201);
+ const base=`/api/ledger/journals/${journalId}/documents`,item={id:linkId,documentId,financeEntryId:financeId,sha256};
+ assert.equal((await post(base,item,'http://example.invalid')).status,403);
+ assert.equal((await post(base,{...item,sha256:'0'.repeat(64)})).status,409);
+ let response=await post(base,item);assert.equal(response.status,201);assert.equal((await response.json()).link.sha256,sha256);
+ response=await post(base,item);assert.equal(response.status,200);assert.equal((await response.json()).created,false);
+ assert.equal((await post(base,{...item,id:randomUUID()})).status,409);
+ const listed=await (await get(base)).json();assert.equal(listed.links.length,1);assert.equal(listed.links[0].documentId,documentId);
+ response=await get(`/api/ledger/documents/${linkId}/download`);assert.equal(response.status,200);assert.equal(response.headers.get('x-finance-sha256'),sha256);assert.deepEqual(Buffer.from(await response.arrayBuffer()),bytes);
+ const unlinkPath=`${base}/${linkId}/unlink`,correction={id:randomUUID(),reason:'Falscher Beleg'};
+ assert.equal((await post(unlinkPath,correction)).status,201);
+ response=await post(unlinkPath,correction);assert.equal(response.status,200);assert.equal((await response.json()).created,false);
+ assert.equal((await post(unlinkPath,{...correction,id:randomUUID()})).status,409);
+ assert.equal((await (await get(base)).json()).links[0].unlinkReason,correction.reason);
+ assert.equal((await post(base,{...item,id:randomUUID()})).status,201);
+});
