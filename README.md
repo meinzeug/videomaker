@@ -20,7 +20,7 @@ Teleprompter: Skript öffnen, anschließend „Teleprompter öffnen“. Die Leer
 
 ## Bilder und Thumbnail
 
-Nach der Skripterstellung plant GPT-6.1 Sol anhand des vollständigen Skripts eine variable Anzahl von zwei bis sechs passenden Einblendbildern. Jedes Motiv wird separat als Querformat für YouTube (16:9) und Hochformat für TikTok (9:16) generiert. Die Thumbnails erhalten in beiden Formaten dasselbe feste Layout in Schwarz, Rot und Weiß. Die Bilddateien rendert standardmäßig `microsoft/mai-image-2.6-flash` über OpenRouter; Terra und Sol geben selbst Text aus. Der Renderer ist über `IMAGE_MODEL`, die Bildplanung über `IMAGE_PLANNER_MODEL` konfigurierbar. Die bestehenden OpenRouter-Datenschutzeinstellungen gelten unverändert. Bildgenerierung verursacht zusätzliche Kosten.
+Beim Start der Skripterstellung wird ausgewählt, ob Bilder erzeugt oder nur Bildbeschreibungen erstellt werden sollen. GPT-6.1 Sol plant anhand des vollständigen Skripts in beiden Fällen eine variable Anzahl von zwei bis sechs passenden Einblendbildern und ein Thumbnail. Im Textmodus werden deutsche Beschreibungen, Einsatzstellen und englische Bildprompts gespeichert, ohne den Bildrenderer aufzurufen; die Bilder können später manuell erstellt werden. Jedes Motiv wird separat als Querformat für YouTube (16:9) und Hochformat für TikTok (9:16) generiert. Die Thumbnails erhalten in beiden Formaten dasselbe feste Layout in Schwarz, Rot und Weiß. Die Bilddateien rendert standardmäßig `microsoft/mai-image-2.6-flash` über OpenRouter; Terra und Sol geben selbst Text aus. Der Renderer ist über `IMAGE_MODEL`, die Bildplanung über `IMAGE_PLANNER_MODEL` konfigurierbar. Die bestehenden OpenRouter-Datenschutzeinstellungen gelten unverändert. Bildgenerierung verursacht zusätzliche Kosten.
 
 Die Bilder werden im Hintergrund erzeugt und zusammen mit ihrem Fortschritt in SQLite gespeichert. In der Skriptansicht können sie einzeln heruntergeladen werden. Bei Fehlern oder nach einem Serverneustart kann die Erstellung fehlender Bilder erneut gestartet werden; fertige Bilder bleiben erhalten. Für ältere Skripte startet der Button „Bilder erstellen“ die Nachgenerierung. Wird ein Skript gelöscht, werden auch seine Bilder entfernt.
 
@@ -29,6 +29,8 @@ Die Bilder werden im Hintergrund erzeugt und zusammen mit ihrem Fortschritt in S
 Jedes neue Skript setzt eine separate Webrecherche voraus. Bei vorübergehenden Dienstfehlern werden Recherche und Skripterstellung jeweils bis zu zweimal automatisch wiederholt; die bereits abgeschlossene Recherche bleibt dabei erhalten. Das Modell sucht zu den Ausgangsmeldungen mehrfach im Web, prüft Gegenpositionen und soll nach Möglichkeit Primärquellen abrufen. Der gespeicherte Recherchebericht zeigt Quellen, Befunde, offene Fragen und gegebenenfalls ausdrücklich gekennzeichnete Hypothesen mit Anhaltspunkten und Alternativen. Er ist eine KI-Arbeitshilfe und ersetzt keine redaktionelle Prüfung. Vorwürfe über Absicht oder geheime Absprachen dürfen nicht allein aus einem Widerspruch abgeleitet werden.
 
 Für die Video-Dramaturgie dienen unter anderem YouTubes Hinweise zu [Einstieg, Titelversprechen und Zuschauerbindung](https://support.google.com/youtube/answer/9314415) sowie die [journalistischen Standards von Reuters](https://reutersagency.com/about/standards-values/) als Orientierung.
+
+Neue Skripte beginnen mit einem kurzen Einstieg und begrüßen danach die Zuschauer. Am Ende folgen eine kurze Verabschiedung und ein Aufruf zum Liken, Abonnieren und Kommentieren.
 
 ## Videoaufnahme im Teleprompter
 

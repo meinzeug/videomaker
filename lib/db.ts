@@ -19,6 +19,9 @@ export default function db() {
   `);
   const columns=instance.prepare('PRAGMA table_info(project_images)').all() as Array<{name:string}>;
   if(!columns.some(column=>column.name==='orientation')) instance.exec("ALTER TABLE project_images ADD COLUMN orientation TEXT NOT NULL DEFAULT 'landscape'");
+  if(!columns.some(column=>column.name==='description')) instance.exec("ALTER TABLE project_images ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+  const jobColumns=instance.prepare('PRAGMA table_info(image_jobs)').all() as Array<{name:string}>;
+  if(!jobColumns.some(column=>column.name==='mode')) instance.exec("ALTER TABLE image_jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'render'");
  }
  return instance;
 }
