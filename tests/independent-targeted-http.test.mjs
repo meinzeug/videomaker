@@ -27,10 +27,10 @@ test('completed corrected project retains the original without changing teleprom
   assert.equal((await call('/api/login','POST',{password:'fixture-only-password'})).status,200);
   db=new Database(join(dir,'data','videomaker.sqlite'),{fileMustExist:true});
   const researchId=randomUUID(),source='https://example.org/source';
-  db.prepare('INSERT INTO research_reports(id,created_at,sources,report) VALUES(?,?,?,?)').run(researchId,new Date().toISOString(),JSON.stringify([{title:'Test',url:source,source:'Test',date:'',description:'Test'}]),JSON.stringify({sources:[{url:source}],source_excerpts:[{url:source,status:'retrieved',text:'Synthetischer Fakt.'}]}));
+  db.prepare('INSERT INTO research_reports(id,created_at,sources,report) VALUES(?,?,?,?)').run(researchId,new Date().toISOString(),JSON.stringify([{title:'Test',url:source,source:'Test',date:'',description:'Test'}]),JSON.stringify({sources:[{url:source}],source_excerpts:[{url:source,status:'retrieved',text:'Luisa Neubauer sagt: „Synthetischer Fakt.“'}]}));
   const generated=await call('/api/generate','POST',{researchId,imageMode:'descriptions'});
   assert.equal(generated.status,200,JSON.stringify(generated.data));
-  const original='Originaler erster Teil.\n\nZitat: „Erfundener Wortlaut.“',corrected='Originaler erster Teil.\n\nZitat: „Synthetischer Fakt.“';
+  const original='Originaler erster Teil.\n\nZitat: „Erfundener Wortlaut.“',corrected='Originaler erster Teil.\n\nLuisa Neubauer sagt: „Synthetischer Fakt.“';
   assert.equal(generated.data.content.script,corrected);assert.equal(generated.data.content.generation_original_script,original);
   assert.ok(generated.data.content.hinweise_fuer_dennis.some(x=>x.includes('Interner Testhinweis')));
   const loaded=(await call('/api/projects')).data.find(item=>item.id===generated.data.id);

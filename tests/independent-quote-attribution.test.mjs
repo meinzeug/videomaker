@@ -52,3 +52,12 @@ test('unretrieved or altered speaker context cannot establish an attributed quot
   assert.deepEqual(validateFactSheet(input,sources,report,true).zitate,[]);
  }
 });
+
+test('matching surnames alone never invent first names or resolve two people with the same surname',()=>{
+ const invented={...raw,zitate:[{...raw.zitate[0],sprecher:'Greta Neubauer'}]};
+ assert.deepEqual(validateFactSheet(invented,sources,report,true).zitate,[],'a first name absent from the source cannot be inferred from the surname');
+ const ambiguous=`Luisa Neubauer und Max Neubauer sprachen über das Video. „${quote}“, sagte Neubauer der Zeitung.`;
+ const input={...raw,fakten:[{text:'Die Quelle berichtet über Neubauer.',quellen:[url],belege:[{text:ambiguous,quelle:url}]}],zitate:[{text:`„${quote}“`,quelle:url,sprecher:speaker,sprecherkontext:ambiguous}]};
+ const sourceReport={...report,source_excerpts:[{url,status:'retrieved',text:ambiguous}]};
+ assert.deepEqual(validateFactSheet(input,sources,sourceReport,true).zitate,[],'a bare surname must not choose between two people');
+});

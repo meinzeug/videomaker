@@ -16,7 +16,7 @@ const {runGrokFlow}=await load('grok-flow.ts');
 const prompts=await load('grok-prompt.ts');
 const id='11111111-1111-4111-8111-111111111111',url='https://example.org/a',now='2026-01-01T00:00:00.000Z';
 const sources=[{title:'Quelle',url,source:'Quelle',date:'',description:'Beschreibung'}];
-const report={sources:[{url}],source_excerpts:[{url,status:'retrieved',text:'Eine belegte Aussage.'}]};
+const report={sources:[{url}],source_excerpts:[{url,status:'retrieved',text:'Ein Hintergrund. Luisa Neubauer sagt: „Eine belegte Aussage.“'}]};
 const options=mode=>({mode,scope:'selected',tones:['frech'],dramaturgy:'Spannung',instructions:'Direkt zum Thema',allowIncompleteSources:true});
 const finalFields={titel:['Titel eins','Titel zwei','Titel drei'],thumbnail_text:'Ein Thema',pin_kommentar:'Was meint ihr?',quellen:[`Quelle – ${url}`],hinweise_fuer_dennis:[]};
 function fixture(channel=null,selected=null,file=':memory:'){
@@ -234,6 +234,8 @@ test('only source-confirmed named film titles can appear as titles, never as inv
  assert.equal(invented.project,null);assert.ok(invented.issues.some(x=>x.code==='unverified_quote'));
  const inventedSpeech=parseGrokScript(answer(`Wörtlich: „${title}“`),false,verified);
  assert.equal(inventedSpeech.project,null);assert.ok(inventedSpeech.issues.some(x=>x.code==='unverified_quote'),'a film title is not proof of a spoken quote');
+ const inventedFilmSpeech=parseGrokScript(answer(`Der Film „${title}“, sagte Greta Thunberg.`),false,verified);
+ assert.equal(inventedFilmSpeech.project,null,'a work-title context cannot override an explicit unverified spoken attribution');
  const unverified=validateFactSheet(raw,sources,{sources:[{url}],source_excerpts:[{url,status:'unavailable',text:`Der Film „${title}“`} ]});
  assert.equal(parseGrokScript(answer(`Der Film „${title}“ stammt von Hubertus Koch.`),false,unverified).project,null,'unretrieved text cannot validate a title');
  const wrongContext=validateFactSheet(raw,sources,{sources:[{url}],source_excerpts:[{url,status:'retrieved',text:`Die Person sagte wörtlich: „${title}“. Ein Film wird hier nicht genannt.`}]});
@@ -243,18 +245,18 @@ test('only source-confirmed named film titles can appear as titles, never as inv
 for(const variant of ['valid','extra','missing','foreign','extraForeign','duplicate','duplicateExtra','unverified']) test(`targeted correction preserves original parts and makes only one repair call: ${variant}`,async()=>{
  await isolated(['Einleitung','Zitat eins','Zitat zwei'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
   const original=['Unveränderter erster Teil.','Zitat: „Erfundener erster Wortlaut.“','Zitat: „Erfundener zweiter Wortlaut.“'];
-  const item2={teil:2,skript:'Zitat: „Eine belegte Aussage.“'},item3={teil:3,skript:'Zitat: „Eine belegte Aussage.“'},extra={teil:1,skript:'Ungeforderte Änderung darf nicht übernommen werden.'};
+  const item2={teil:2,skript:'Luisa Neubauer sagt: „Eine belegte Aussage.“'},item3={teil:3,skript:'Luisa Neubauer sagt: „Eine belegte Aussage.“'},extra={teil:1,skript:'Ungeforderte Änderung darf nicht übernommen werden.'};
   const corrections={valid:[item2,item3],extra:[item2,item3,extra],missing:[item2],foreign:[item2,{teil:4,skript:'Zitat: „Eine belegte Aussage.“'}],extraForeign:[item2,item3,{teil:99,skript:'Unerwarteter unbekannter Teil.'}],duplicate:[item2,item2],duplicateExtra:[item2,item3,extra,extra],unverified:[{teil:2,skript:'Zitat: „Eine unbelegte Aussage.“'},item3]};
   globalThis.fetch=async(urlArg,init)=>{
    if(calls.length===4){const request=JSON.parse(init.body);calls.push(request);return new Response(JSON.stringify({id:'repair-mock',model:request.model,usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify({teile:corrections[variant]})}}]}),{status:200});}
    const response=await baseFetch(urlArg,init),body=await response.json(),payload=JSON.parse(body.choices[0].message.content);
-   if(calls.length===1)payload.zitate=[{text:'Eine belegte Aussage.',quelle:url}];
+   if(calls.length===1)payload.zitate=[{text:'„Eine belegte Aussage.“',quelle:url,sprecher:'Luisa Neubauer',sprecherkontext:'Luisa Neubauer sagt: „Eine belegte Aussage.“'}];
    else payload.skript=original[calls.length-2];
    body.choices[0].message.content=JSON.stringify(payload);return new Response(JSON.stringify(body),{status:200});
   };
   if(variant==='valid'||variant==='extra'){
    const result=await runGrokFlow(db,claim,true,()=>{}),text=JSON.parse(result.responseText).script;
-   assert.equal(text,'Unveränderter erster Teil.\n\nZitat: „Eine belegte Aussage.“\n\nZitat: „Eine belegte Aussage.“');
+   assert.equal(text,'Unveränderter erster Teil.\n\nLuisa Neubauer sagt: „Eine belegte Aussage.“\n\nLuisa Neubauer sagt: „Eine belegte Aussage.“');
   }else await assert.rejects(runGrokFlow(db,claim,true,()=>{}),/Korrektur|Teil|vollständig|ungültig/i);
   const stored=state.readGrokParts(db,id).map(p=>JSON.parse(JSON.parse(p.response).text).skript);
   assert.deepEqual(stored,original,'persisted original parts must not be overwritten');
