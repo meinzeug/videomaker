@@ -1,11 +1,14 @@
 import {authorized,sameOrigin,sessionAuthorized,sessionValue} from '@/lib/auth';
-import {completeForGeneration,SYSTEM_PROMPT,parseJson,isTransientOpenRouterError,retryAfterSeconds,OpenRouterError} from '@/lib/openrouter';
+import {parseJson,isTransientOpenRouterError,retryAfterSeconds,OpenRouterError} from '@/lib/openrouter';
 import db from '@/lib/db';
 import {startImages} from '@/lib/images';
 import {channelGreetingMayMismatch,ensureChannelFraming} from '@/lib/script-format';
-import {CHANNEL_SCRIPT_SYSTEM,CUSTOM_SCRIPT_SYSTEM,customScriptPrompt,scriptGenerationPrompt,GenerationChannelNotFound,InvalidGenerationChannel,ResearchChannelMismatch,saveGeneratedProject} from '@/lib/channel-generation';
+import {GenerationChannelNotFound,InvalidGenerationChannel,ResearchChannelMismatch,saveGeneratedProject} from '@/lib/channel-generation';
 import {acquireGenerationClaim,claimSnapshot,completeGenerationClaim,ensureGenerationClaimsSchema,GenerationClaimConflict,GenerationResearchMissing,invalidateGenerationResponse,readGenerationClaim,saveGenerationResponse,type GenerationClaim} from '@/lib/generation-claims';
 import {InvalidScriptOptions,normalizeScriptOptions,usesCustomScript} from '@/lib/script-options';
+import {ensureGrokStateSchema,readGrokRun,startGrokRun} from '@/lib/grok-state';
+import {GrokProviderError,grokModels} from '@/lib/grok-provider';
+import {GrokInvalid,GrokPending,runGrokFlow} from '@/lib/grok-flow';
 import {NextResponse} from 'next/server';
 
 export const maxDuration=300;
@@ -30,7 +33,7 @@ export async function GET(req:Request) {
  if(!await authorized())return NextResponse.json({error:'Nicht angemeldet.'},{status:401,headers});
  const query=new URL(req.url).searchParams,researchId=query.get('researchId');
  try{
-  const database=db();ensureGenerationClaimsSchema(database);
+  const database=db();ensureGenerationClaimsSchema(database);ensureGrokStateSchema(database);
   if(researchId===null){
    const before=query.get('before');
    if(before!==null&&!validId(before))return NextResponse.json({error:'Ungültiger Status-Cursor.'},{status:400,headers});
@@ -42,7 +45,8 @@ export async function GET(req:Request) {
     const nextBefore=page.length>20?page[19].researchId:null;
     const claims=page.slice(0,20).map(({reportJson,...row})=>{
      let summary='',scriptOptions=null;try{const report=JSON.parse(reportJson),value=report?.summary;if(typeof value==='string')summary=value.replace(/[\u0000-\u001f\u007f]+/g,' ').replace(/\s+/g,' ').trim().slice(0,180);scriptOptions=normalizeScriptOptions(report?.generation_options);}catch{}
-     return {...row,summary,scriptOptions};
+     const pipeline=readGrokRun(database,row.researchId);
+     return {...row,summary,scriptOptions,...(pipeline?{pipelinePhase:pipeline.phase}: {})};
     });
     return {total,claims,nextBefore};
    })();
@@ -60,7 +64,9 @@ export async function GET(req:Request) {
   }
   // The provider text may be the only surviving copy of an invalid or not yet
   // processed answer. Keep it accessible to the authenticated user as data.
-  return NextResponse.json({state:claim.state,...(claim.responseText!==null?{responseText:claim.responseText}:{})},{headers});
+  const run=readGrokRun(database,researchId);
+  const attempts=run?database.prepare('SELECT phase,ordinal,requested_model AS requestedModel,state,status_code AS statusCode,actual_model AS actualModel,generation_id AS generationId,prompt_tokens AS promptTokens,completion_tokens AS completionTokens,reasoning_tokens AS reasoningTokens,total_tokens AS totalTokens,cost_usd AS costUsd FROM grok_generation_attempts WHERE research_id=? ORDER BY started_at,phase,ordinal').all(researchId):undefined;
+  return NextResponse.json({state:claim.state,...(claim.responseText!==null?{responseText:claim.responseText}:{}),...(run?{pipelinePhase:run.phase,factsResponse:run.factsRaw,scriptResponse:run.scriptRaw,repairResponse:run.repairRaw,attempts}: {})},{headers});
  }catch(error){if(error instanceof GenerationClaimConflict)return NextResponse.json({error:error.message},{status:400,headers});console.error('Generation status unavailable.');return NextResponse.json({error:'Erstellungsstatus nicht verfügbar.'},{status:503,headers});}
 }
 
@@ -73,43 +79,43 @@ export async function POST(req:Request) {
   const scriptOptions=normalizeScriptOptions(data.scriptOptions);
   if(!validId(data.researchId))return NextResponse.json({error:'Vor der Skripterstellung muss eine vertiefte Recherche durchgeführt werden.'},{status:400,headers});
   researchId=data.researchId;
-  const database=db();ensureGenerationClaimsSchema(database);
+  const database=db();ensureGenerationClaimsSchema(database);ensureGrokStateSchema(database);
   const credential=await sessionValue();
   const acquired=database.transaction(()=>{
    if(!sessionAuthorized(database,credential))throw new SessionRevoked();
    // Do not leave a permanent reservation when a request could not possibly
    // be sent. Existing received/completed claims remain recoverable without a key.
    if(!readGenerationClaim(database,data.researchId)&&!process.env.OPENROUTER_API_KEY)throw new Error('OpenRouter-API-Schlüssel fehlt.');
-   return acquireGenerationClaim(database,data.researchId,data.imageMode,data.channelId,new Date().toISOString(),scriptOptions);
+   const now=new Date().toISOString();
+   const acquired=acquireGenerationClaim(database,data.researchId,data.imageMode,data.channelId,now,scriptOptions);
+   if(acquired.created){
+    const models=grokModels();startGrokRun(database,data.researchId,now,models.primary,models.fallback);
+   }
+   return acquired;
   }).immediate();
   let claim:GenerationClaim=acquired.claim;claimAcquired=true;
-  if(!acquired.created&&claim.state==='pending')return NextResponse.json({code:'generation_pending',error:'Für diese Recherche läuft eine Erstellung oder ihr Ergebnis ist ungeklärt. Es wird kein zweiter Skriptaufruf gestartet.'},{status:409,headers});
   if(claim.state==='invalid')return NextResponse.json({code:'generation_invalid',error:'Die gespeicherte KI-Antwort konnte nicht verarbeitet werden. Sie kann im Erstellungsstatus gesichert werden.'},{status:409,headers});
   if(claim.state==='complete'){
    const project=loadProject(database,claim.projectId);
    return project?projectResponse(project):NextResponse.json({code:'generation_project_missing',error:'Das bereits erstellte Skript ist nicht mehr vorhanden. Es wird nicht erneut erzeugt.'},{status:410,headers});
   }
-  if(acquired.created){
-   const snapshot=claimSnapshot(claim);
-   const customized=usesCustomScript(snapshot.options);
-   const response=await completeForGeneration(customized?CUSTOM_SCRIPT_SYSTEM:snapshot.channel?CHANNEL_SCRIPT_SYSTEM:SYSTEM_PROMPT,customized?customScriptPrompt(snapshot.channel,snapshot.sources,snapshot.report,snapshot.options!):scriptGenerationPrompt(snapshot.channel,snapshot.sources,snapshot.report),32000);
-   // Persist the provider response *before* processing it or attempting the
-   // project transaction. A crash before this commit remains unresolved.
-   saveGenerationResponse(database,claim.researchId,response.text,new Date().toISOString(),response.truncated);
-   claim=readGenerationClaim(database,claim.researchId)!;
-  }
+  if(claim.state==='pending')claim=await runGrokFlow(database,claim,acquired.created,()=>{if(!sessionAuthorized(database,credential))throw new SessionRevoked();});
+  if(claim.state==='complete'){const project=loadProject(database,claim.projectId);return project?projectResponse(project):NextResponse.json({code:'generation_project_missing',error:'Das bereits erstellte Skript ist nicht mehr vorhanden.'},{status:410,headers});}
   if(claim.state!=='received'||claim.responseText===null)throw new Error('Die gespeicherte KI-Antwort ist nicht verfügbar.');
   let result:Record<string,unknown>;
   try{
    if(claim.responseTruncated)throw new Error('abgeschnitten');
    result=parseJson(claim.responseText);
-   if(!result||typeof result!=='object'||!Array.isArray(result.titles)||result.titles.length!==3||result.titles.some((x:unknown)=>typeof x!=='string')||typeof result.thumbnail!=='string'||!Array.isArray(result.broll)||result.broll.length!==2||result.broll.some((x:unknown)=>typeof x!=='string')||typeof result.script!=='string'||!result.script.trim())throw new Error();
+   const grok=!!readGrokRun(database,claim.researchId)&&result._grok===true;
+   if(!result||typeof result!=='object'||!Array.isArray(result.titles)||result.titles.length!==3||result.titles.some((x:unknown)=>typeof x!=='string')||typeof result.thumbnail!=='string'||!Array.isArray(result.broll)||(!grok&&result.broll.length!==2)||result.broll.some((x:unknown)=>typeof x!=='string')||typeof result.script!=='string'||!result.script.trim())throw new Error();
   }catch{invalidateGenerationResponse(database,claim.researchId,new Date().toISOString());throw new InvalidProviderAnswer('Die gespeicherte KI-Antwort ist unvollständig. Sie kann im Erstellungsstatus gesichert werden.');}
   const snapshot=claimSnapshot(claim),channel=snapshot.channel;
   const content:Record<string,unknown>={titles:result.titles,thumbnail:result.thumbnail,broll:result.broll,script:result.script};
+  const grok=!!readGrokRun(database,claim.researchId)&&result._grok===true;
+  if(grok){content.pin_kommentar=result.pin_kommentar;content.hinweise_fuer_dennis=result.hinweise_fuer_dennis;content.quellen=result.quellen;content.generation_usage=database.prepare('SELECT phase,ordinal,requested_model AS requestedModel,state,status_code AS statusCode,actual_model AS actualModel,generation_id AS generationId,prompt_tokens AS promptTokens,completion_tokens AS completionTokens,reasoning_tokens AS reasoningTokens,total_tokens AS totalTokens,cost_usd AS costUsd FROM grok_generation_attempts WHERE research_id=? ORDER BY started_at,phase,ordinal').all(claim.researchId);}
   const customized=usesCustomScript(snapshot.options);
-  const greetingWarning=!customized&&!!channel&&channelGreetingMayMismatch(result.script as string,channel.name);
-  content.script=customized?(result.script as string).trim():ensureChannelFraming(result.script as string,channel?.name,channel?.platform);
+  const greetingWarning=!!channel&&channelGreetingMayMismatch(result.script as string,channel.name);
+  content.script=grok?(result.script as string):customized?(result.script as string).trim():ensureChannelFraming(result.script as string,channel?.name,channel?.platform);
   content.research=snapshot.report;content.image_mode=claim.imageMode;
   if(snapshot.options)content.script_options=snapshot.options;
   if(channel)content.generation_target=channel;
@@ -137,6 +143,9 @@ export async function POST(req:Request) {
   return projectResponse(saved.project);
  }catch(error){
   if(error instanceof SessionRevoked)return NextResponse.json({error:'Nicht erlaubt.'},{status:403,headers});
+  if(error instanceof GrokPending)return NextResponse.json({code:'generation_pending',error:error.message},{status:409,headers});
+  if(error instanceof GrokInvalid){if(researchId){const previous=readGenerationClaim(db(),researchId);if(previous?.state==='received')invalidateGenerationResponse(db(),researchId,new Date().toISOString());}return NextResponse.json({code:'generation_invalid',error:error.message},{status:409,headers});}
+  if(error instanceof GrokProviderError)return NextResponse.json({code:'generation_status_required',error:error.message},{status:error.status===402?402:503,headers});
   if(error instanceof GenerationResearchMissing||error instanceof GenerationChannelNotFound)return NextResponse.json({error:error.message},{status:404,headers});
   if(error instanceof InvalidGenerationChannel||error instanceof ResearchChannelMismatch||error instanceof InvalidScriptOptions)return NextResponse.json({error:error.message},{status:400,headers});
   if(error instanceof GenerationClaimConflict)return NextResponse.json({error:error.message},{status:409,headers});

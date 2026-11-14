@@ -1,0 +1,52 @@
+import type {FactSheet} from './fact-sheet.ts';
+import {channelGreetingMayMismatch} from './script-format.ts';
+import {countScriptWords,validateKontrakursScript,type ScriptQualityIssue} from './script-quality.ts';
+
+export type GrokScript={titles:string[];script:string;thumbnail:string;broll:string[];pin_kommentar:string;hinweise_fuer_dennis:string[];quellen:string[]};
+export type ParsedGrokScript={project:GrokScript|null;issues:ScriptQualityIssue[]|Array<{code:string;message:string}>};
+const one=(x:unknown,max:number)=>typeof x==='string'?x.trim().slice(0,max):'';
+const list=(x:unknown,max=100)=>Array.isArray(x)?x.map(y=>one(y,2000)).filter(Boolean).slice(0,max):null;
+
+/** Validate the exact text that is later saved to content.script; never append framing afterwards. */
+export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,channelName?:string,kontrakurs=true):ParsedGrokScript {
+ if(truncated)return {project:null,issues:[{code:'truncated',message:'Die KI-Antwort wurde am Tokenlimit abgeschnitten.'}]};
+ let data:Record<string,unknown>;
+ try{const value=JSON.parse(text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));if(!value||typeof value!=='object'||Array.isArray(value))throw new Error();data=value;}
+ catch{return {project:null,issues:[{code:'json',message:'Die KI-Antwort ist kein gültiges JSON.'}]};}
+ const titles=list(data.titel,3),script=one(data.skript,100000),thumbnail=one(data.thumbnail_text,1000),pin=one(data.pin_kommentar,3000),sources=list(data.quellen),notes=list(data.hinweise_fuer_dennis);
+ const issues:Array<{code:string;message:string;pattern?:string}>=[];
+ if(!Array.isArray(data.titel)||data.titel.length!==3||!titles||titles.length!==3||titles.some(title=>title.length>90||!/[!?]/.test(title)))issues.push({code:'titel',message:'Das Feld titel muss ein Array mit genau drei nichtleeren Titeln sein; jeder Titel enthält ? oder ! und hat höchstens 90 Zeichen.'});
+ if(!script)issues.push({code:'skript',message:'Das Feld skript muss ein nichtleerer String mit dem vollständigen Telepromptertext sein.'});
+ if(!thumbnail||countScriptWords(thumbnail)>4)issues.push({code:'thumbnail_text',message:`Das Feld thumbnail_text muss ein nichtleerer String mit höchstens vier Wörtern sein; erhalten: ${countScriptWords(thumbnail)}.`});
+ if(!pin)issues.push({code:'pin_kommentar',message:'Das Feld pin_kommentar muss ein nichtleerer String mit ein bis zwei Sätzen sein.'});
+ if(!Array.isArray(data.quellen)||data.quellen.some(x=>typeof x!=='string'))issues.push({code:'quellen',message:'Das Feld quellen muss ein Array aus Strings im Format Quelle – URL sein.'});
+ if(!Array.isArray(data.hinweise_fuer_dennis)||data.hinweise_fuer_dennis.some(x=>typeof x!=='string'))issues.push({code:'hinweise_fuer_dennis',message:'Das Feld hinweise_fuer_dennis muss ein Array aus Strings sein, auch bei nur einem Hinweis; wenn keine Hinweise vorliegen, verwende [].'});
+ if(script){
+  const quality=validateKontrakursScript(script);
+  issues.push(...(kontrakurs?quality.issues:quality.issues.filter(issue=>!['missing_outro','missing_subscribe','word_count'].includes(issue.code))));
+  if(channelName&&channelGreetingMayMismatch(script,channelName))issues.push({code:'channel_mismatch',message:'Die Begrüßung nennt einen anderen Kanal; verwende den gewählten Kanal.'});
+ }
+ // Literal quotation marks and announced quotations are accepted only when the exact words were checked against a retrieved original.
+ const verified=facts.zitate.map(q=>q.text);
+ const quoted:string[]=[],pairs:Record<string,string>={'„':'“','“':'”','"':'"','»':'«','«':'»','‚':'‘'},closers=new Set(['”','‘']);
+ for(let index=0;index<script.length;index++){
+  const char=script[index],close=pairs[char];
+  if(close){const end=script.indexOf(close,index+1);if(end<0||end-index>2001){issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht vollständig begrenzt.'});break;}quoted.push(script.slice(index+1,end));index=end;}
+  else if(closers.has(char)){issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht vollständig begrenzt.'});break;}
+ }
+ const announced=[...script.matchAll(/(?:^|\s)(?:Zitat|wörtlich):[^\S\r\n]*([^\r\n]*)/giu)].map(match=>match[1]);
+ const exactLine=(line:string,q:string)=>[q,`„${q}“`,`“${q}”`,`"${q}"`,`»${q}«`,`«${q}»`,`‚${q}‘`].includes(line.trim());
+ if(quoted.some(q=>!verified.includes(q))||announced.some(line=>!verified.some(q=>exactLine(line,q))))issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht durch einen abgerufenen Originaltext belegt.'});
+ if(issues.length||!titles||!sources||!notes)return {project:null,issues};
+ const allowed=new Set([...facts.fakten.flatMap(f=>f.quellen),...facts.meinungen_dritter.flatMap(f=>f.quellen),...facts.zitate.map(q=>q.quelle)]);
+ const accepted:string[]=[];let rejected=0;
+ for(const source of sources){
+  const urls=source.match(/https?:\/\/[^\s<>"']+/g)||[];
+  const url=urls.length===1?urls[0].replace(/[),.;]+$/,''):'';
+  if(allowed.has(url)){try{const entry=`${new URL(url).hostname} – ${url}`;if(!accepted.includes(entry))accepted.push(entry);}catch{rejected++;}}else rejected++;
+ }
+ const notices=[...facts.hinweise_fuer_dennis,...notes];
+ if(rejected)notices.push(`${rejected} Quellenangabe(n) ohne passenden Faktenblattbeleg wurden entfernt.`);
+ if(!accepted.length&&allowed.size){for(const url of allowed){try{accepted.push(`${new URL(url).hostname} – ${url}`);}catch{}}notices.push('Die Quellenliste wurde aus den belegten Faktenblatt-URLs ergänzt.');}
+ return {project:{titles,script,thumbnail,broll:[],pin_kommentar:pin,hinweise_fuer_dennis:notices,quellen:accepted},issues:[]};
+}

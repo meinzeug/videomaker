@@ -5,6 +5,7 @@ import {readFileSync,realpathSync,existsSync,writeFileSync,unlinkSync} from 'nod
 import {basename,dirname,join} from 'node:path';
 import {tmpdir} from 'node:os';
 import Database from 'better-sqlite3';
+import {CHANNEL_SCRIPT_SYSTEM,KONTRAKURS_SCRIPT_SYSTEM} from '../lib/grok-prompt.ts';
 
 const server=process.env.CHANNEL_GENERATION_TEST_SERVER;
 const enabled=!!server&&process.env.CHANNEL_GENERATION_TEST_ALLOW_WRITES==='1';
@@ -28,8 +29,9 @@ test('isolated mocked AI generation assigns channel, preserves legacy and handle
   db.prepare('INSERT INTO channels(id,name,platform,handle,created_at) VALUES(?,?,?,?,?)').run(markerId,markerName,'youtube','','2026-01-01');
   assert.ok((await call('/api/channels')).data.channels.some(x=>x.id===markerId&&x.name===markerName),'Server muss die markierte Fixture-Datenbank verwenden');
   const channel=(await call('/api/channels','POST',{name:'Testkanal',platform:'tiktok',handle:'@test'})).data;
-  function seed(value){const id=randomUUID();db.prepare('INSERT INTO research_reports VALUES(?,?,?,?)').run(id,'2026-01-01T00:00:00Z','[]',JSON.stringify({marker:value}));return id;}
+  function seed(value){const id=randomUUID();db.prepare('INSERT INTO research_reports VALUES(?,?,?,?)').run(id,'2026-01-01T00:00:00Z',JSON.stringify([{url:'https://example.org/a'}]),JSON.stringify({marker:value}));return id;}
   function callsFor(value){return readFileSync(join(fixture,'ai-requests.log'),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(messages=>messages?.[1]?.content?.includes(value)).length;}
+  function factCallsFor(value){return readFileSync(join(fixture,'ai-requests.log'),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(messages=>messages?.[0]?.content?.includes('strukturiertes Faktenblatt')&&messages?.[1]?.content?.includes(value)).length;}
   let response=await call('/api/research','POST',{topic:'Testthema',sources:[],channelId:channel.id});
   assert.equal(response.status,200);assert.ok(response.data.id);assert.equal(response.data.report.search_requests,2);
   const boundResearch=response.data.id;
@@ -57,8 +59,9 @@ test('isolated mocked AI generation assigns channel, preserves legacy and handle
   id=seed('legacy');response=await call('/api/generate','POST',{imageMode:'descriptions',researchId:id});
   assert.equal(response.status,200);assert.match(response.data.content.script,/Willkommen bei Kontrakurs/);assert.equal(response.data.content.generation_target,undefined);assert.deepEqual(response.data.content.generation_warnings,[]);
   id=seed('TEST_WRONG_CHANNEL');response=await call('/api/generate','POST',{imageMode:'descriptions',researchId:id,channelId:channel.id});
-  assert.equal(response.status,200);assert.match(response.data.content.script,/Willkommen bei Kontrakurs/);assert.match(response.data.channelWarning,/anderen Kanal/);
-  assert.match(JSON.parse(db.prepare('SELECT content FROM projects WHERE id=?').get(response.data.id).content).generation_warnings[0],/anderen Kanal/);
+  assert.equal(response.status,409);assert.equal(response.data.code,'generation_invalid');
+  const wrongChannel=(await call(`/api/generate?researchId=${id}`)).data;assert.equal(wrongChannel.state,'invalid');assert.match(wrongChannel.responseText,/Willkommen bei Kontrakurs/);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM projects WHERE id=(SELECT project_id FROM generation_claims WHERE research_id=?)').get(id).n,0,'falscher Kanal darf auch nach Korrektur nicht gespeichert werden');
   id=seed('TEST_MOCK_FAILURE');response=await call('/api/generate','POST',{imageMode:'descriptions',researchId:id,channelId:channel.id});
   assert.equal(response.status,503);assert.equal(response.data.researchRetained,undefined);assert.equal(response.data.code,'generation_status_required');assert.ok(db.prepare('SELECT 1 FROM research_reports WHERE id=?').get(id));
   assert.equal((await call(`/api/generate?researchId=${id}`)).data.state,'pending');
@@ -70,7 +73,7 @@ test('isolated mocked AI generation assigns channel, preserves legacy and handle
   const invalid=(await call(`/api/generate?researchId=${id}`)).data;assert.equal(invalid.state,'invalid');assert.match(invalid.responseText,/Antwort erhalten/);
   id=seed('TEST_TRUNCATED_PROVIDER_RESPONSE');response=await call('/api/generate','POST',{imageMode:'descriptions',researchId:id,channelId:channel.id});
   assert.equal(response.status,409);assert.equal(response.data.code,'generation_invalid');
-  const truncated=(await call(`/api/generate?researchId=${id}`)).data;assert.equal(truncated.state,'invalid');assert.match(truncated.responseText,/Erster Satz/);
+  const truncated=(await call(`/api/generate?researchId=${id}`)).data;assert.equal(truncated.pipelinePhase,'facts_invalid');assert.match(truncated.factsResponse,/Synthetischer Testbefund/);
   id=seed('TEST_SAVE_FAILURE');db.exec("CREATE TRIGGER fixture_fail_save BEFORE INSERT ON projects BEGIN SELECT RAISE(ABORT,'fixture save failure'); END");
   response=await call('/api/generate','POST',{imageMode:'descriptions',researchId:id,channelId:channel.id});
   assert.equal(response.status,500);assert.equal(response.data.researchRetained,undefined);assert.ok(db.prepare('SELECT 1 FROM research_reports WHERE id=?').get(id));
@@ -117,26 +120,26 @@ test('isolated mocked AI generation assigns channel, preserves legacy and handle
   assert.ok(existsSync(join(fixture,'waiting')),'Mock muss den laufenden Auftrag abfangen');
   assert.equal((await call('/api/logout','POST')).status,200);cookie=firstCookie;
   writeFileSync(join(fixture,'release'),'1');response=await afterLogout;assert.equal(response.status,403);
-  let saved=(await call(`/api/generate?researchId=${id}`)).data;assert.equal(saved.state,'received');assert.ok(saved.responseText);
-  const requestCountAfterLogout=callsFor('TEST_LOGOUT_DURING_GENERATION');
+  let saved=(await call(`/api/generate?researchId=${id}`)).data;assert.equal(saved.state,'pending');assert.equal(saved.pipelinePhase,'facts_ready');assert.ok(saved.factsResponse);
+  const requestCountAfterLogout=factCallsFor('TEST_LOGOUT_DURING_GENERATION');
   response=await call('/api/generate','POST',{imageMode:'descriptions',researchId:id});assert.equal(response.status,200);
-  assert.equal(callsFor('TEST_LOGOUT_DURING_GENERATION'),requestCountAfterLogout);
+  assert.equal(factCallsFor('TEST_LOGOUT_DURING_GENERATION'),requestCountAfterLogout,'Wiederaufnahme darf das gespeicherte Faktenblatt nicht erneut abrufen');
   unlinkSync(join(fixture,'waiting'));unlinkSync(join(fixture,'release'));
   // Losing the browser response must not lead to a second provider request.
   id=seed('TEST_DELETE_DURING_GENERATION');const controller=new AbortController();
   const interrupted=fetch(base+'/api/generate',{method:'POST',headers:{Origin:base,Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({imageMode:'descriptions',researchId:id}),signal:controller.signal}).then(()=>false,()=>true);
   for(let i=0;i<400&&!existsSync(join(fixture,'waiting'));i++)await new Promise(resolve=>setTimeout(resolve,25));
   assert.ok(existsSync(join(fixture,'waiting')));controller.abort();assert.equal(await interrupted,true);
-  const beforeRelease=callsFor('TEST_DELETE_DURING_GENERATION');writeFileSync(join(fixture,'release'),'1');
+  const beforeRelease=factCallsFor('TEST_DELETE_DURING_GENERATION');writeFileSync(join(fixture,'release'),'1');
   let lostStatus;
   for(let i=0;i<200;i++){lostStatus=(await call(`/api/generate?researchId=${id}`)).data;if(lostStatus.state==='complete')break;await new Promise(resolve=>setTimeout(resolve,25));}
   assert.equal(lostStatus.state,'complete');assert.ok(lostStatus.project?.id);
   response=await call('/api/generate','POST',{imageMode:'descriptions',researchId:id});assert.equal(response.status,200);assert.equal(response.data.id,lostStatus.project.id);
-  assert.equal(callsFor('TEST_DELETE_DURING_GENERATION'),beforeRelease);
+  assert.equal(factCallsFor('TEST_DELETE_DURING_GENERATION'),beforeRelease,'verlorene Browserantwort darf das Faktenblatt nicht erneut anfordern');
   unlinkSync(join(fixture,'waiting'));unlinkSync(join(fixture,'release'));
   const requests=readFileSync(join(fixture,'ai-requests.log'),'utf8').trim().split('\n').map(JSON.parse);
-  assert.ok(requests.some(m=>m[1].content.includes('Testkanal')&&m[1].content.includes('45 bis 90 Sekunden')&&!m[0].content.includes('Testkanal')));
-  assert.ok(requests.some(m=>m[1].content.includes('Schreibe frech, zugespitzt und kompromisslos kritisch')&&m[1].content.includes('Kanal zu abonnieren')));
+  assert.ok(requests.some(m=>m[0].content===CHANNEL_SCRIPT_SYSTEM&&m[1].content.includes('Testkanal')&&m[1].content.includes('45 bis 90 Sekunden')),'ein anderer Kanal erhält seine kanal- und plattformgebundene Vorlage');
+  assert.ok(requests.some(m=>m[0].content===KONTRAKURS_SCRIPT_SYSTEM),'Kontrakurs behält den exakt vorgegebenen Systemprompt');
   const synthetic=Array.from({length:22},()=>randomUUID());
   const insert=db.prepare("INSERT INTO generation_claims(research_id,project_id,image_mode,requested_channel,sources_json,report_json,channel_json,state,response_text,created_at,updated_at) VALUES(?,?,'descriptions','','[]','{\"summary\":\"Test\"}','null','pending',NULL,?,?)");
   db.transaction(()=>{for(const testId of synthetic)insert.run(testId,randomUUID(),'2000-01-01T00:00:00Z','2000-01-01T00:00:00Z');})();

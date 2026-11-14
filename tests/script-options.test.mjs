@@ -2,8 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import {normalizeScriptOptions,InvalidScriptOptions,usesCustomScript} from '../lib/script-options.ts';
-import {CUSTOM_SCRIPT_SYSTEM,customScriptPrompt,scriptGenerationPrompt} from '../lib/channel-generation.ts';
-import {SYSTEM_PROMPT} from '../lib/openrouter.ts';
+import {KONTRAKURS_SCRIPT_SYSTEM,SOURCE_ONLY_SCRIPT_SYSTEM} from '../lib/grok-prompt.ts';
 import {acquireGenerationClaim,ensureGenerationClaimsSchema,GenerationClaimConflict,claimSnapshot,saveGenerationResponse} from '../lib/generation-claims.ts';
 const options=(values={})=>({mode:'source',scope:'selected',tones:['frech','alltag'],dramaturgy:'Bogen',instructions:'Keine Begrüßung',allowIncompleteSources:false,...values});
 const now='2026-11-14T00:00:00.000Z',id='11111111-1111-4111-8111-111111111111';
@@ -14,21 +13,18 @@ test('strict options reject wrong types, unknown values, duplicates and oversize
  assert.deepEqual(normalizeScriptOptions(options()).tones,['alltag','frech']);
 });
 
-test('source mode and tone options produce nonconflicting instructions and channel default duration',()=>{
- const o=normalizeScriptOptions(options());const channel={id,name:'Kanal',platform:'youtube',handle:'@k'};
- const prompt=customScriptPrompt(channel,[{title:'Quelle'}],{summary:'Daten'},o);
- assert.match(prompt,/Keine eigene Bewertung/);assert.match(prompt,/ausschließlich die ausgewählten/);assert.match(prompt,/alltagssprachlich/);assert.match(prompt,/frech/);assert.match(prompt,/10 bis 12 Minuten/);assert.match(prompt,/keine andere Länge/i);assert.match(prompt,/Keine Begrüßung/);
- assert.doesNotMatch(CUSTOM_SCRIPT_SYSTEM,/Empörungs-Hook|politische.*Commentary/i);
+test('explicit source mode preserves neutral rewriting and user options',()=>{
+ const o=normalizeScriptOptions(options());
+ assert.equal(o.mode,'source');assert.deepEqual(o.tones,['alltag','frech']);assert.equal(o.dramaturgy,'Bogen');assert.equal(o.instructions,'Keine Begrüßung');
+ assert.match(SOURCE_ONLY_SCRIPT_SYSTEM,/keine eigene Bewertung/);assert.match(SOURCE_ONLY_SCRIPT_SYSTEM,/Stil- und Dramaturgievorgaben/);
+ assert.doesNotMatch(SOURCE_ONLY_SCRIPT_SYSTEM,/Du hast eine klare Meinung/);
 });
 
-test('unchanged defaults use established prompts and channel length, independent of source scope',()=>{
+test('unchanged default uses Kontrakurs prompt independent of source scope',()=>{
  assert.equal(usesCustomScript(null),false);
  for(const scope of ['selected','web'])assert.equal(usesCustomScript(normalizeScriptOptions(options({mode:'standard',scope,tones:[],dramaturgy:'',instructions:''}))),false);
  assert.equal(usesCustomScript(normalizeScriptOptions(options({mode:'standard',tones:['frech'],dramaturgy:'',instructions:''}))),true);
- assert.match(SYSTEM_PROMPT,/politischen Commentary-Kanal/);
- const channel={id,name:'Testkanal',platform:'youtube',handle:'@test'};
- const oldPrompt=scriptGenerationPrompt(channel,[{title:'Ausgewählt'}],{summary:'Beleg'});
- assert.match(oldPrompt,/10 bis 12 Minuten/);assert.match(oldPrompt,/Testkanal/);
+ assert.match(KONTRAKURS_SCRIPT_SYSTEM,/Du hast eine klare Meinung/);
 });
 
 test('claims bind normalized options and recover the same snapshot after research deletion',()=>{

@@ -43,10 +43,11 @@ test('isolated selected-source flow retains validated options through failure an
  try{
   db.exec("CREATE TRIGGER script_fixture_fail_save BEFORE INSERT ON projects BEGIN SELECT RAISE(ABORT,'fixture save failure'); END");
   r=await call('/api/generate','POST',{...bad,scriptOptions:options});assert.equal(r.status,500);
-  const after=count(),matchingAfter=matching();assert.equal(after,before+1);assert.equal(matchingAfter,1);
-  const request=JSON.parse(readFileSync(log,'utf8').trim().split('\n').at(-1));
-  assert.match(request[0].content,/sorgfältiger deutschsprachiger Video-Scriptwriter/);assert.doesNotMatch(request[0].content,/politischen Commentary-Kanal/);
-  assert.match(request[1].content,/Keine eigene Bewertung/);assert.match(request[1].content,/Kein eigener Kommentar/);assert.match(request[1].content,/Ausgewählte und ausdrücklich bereitgestellte Kurzbeschreibung/);assert.doesNotMatch(request[1].content,/UNSELECTED_ANGLE/);
+  const after=count(),matchingAfter=matching();assert.equal(after,before+2);assert.equal(matchingAfter,2);
+  const requests=readFileSync(log,'utf8').trim().split('\n').slice(-2).map(JSON.parse),[factsRequest,scriptRequest]=requests;
+  assert.match(factsRequest[0].content,/strukturiertes Faktenblatt/);assert.match(factsRequest[1].content,/Ausgewählte und ausdrücklich bereitgestellte Kurzbeschreibung/);assert.doesNotMatch(factsRequest[1].content,/UNSELECTED_ANGLE/);
+  assert.match(scriptRequest[0].content,/keine eigene Bewertung/);assert.doesNotMatch(scriptRequest[0].content,/Du hast eine klare Meinung/);
+  assert.match(scriptRequest[1].content,/Kein eigener Kommentar/);assert.match(scriptRequest[1].content,/alltag/);assert.match(scriptRequest[1].content,/frech/);
   const list=await call('/api/generate');const claim=list.data.claims.find(item=>item.researchId===id);assert.equal(claim.state,'received');assert.equal(claim.scriptOptions.mode,'source');assert.deepEqual(claim.scriptOptions.tones,['alltag','frech']);
   db.exec('DROP TRIGGER script_fixture_fail_save');
   r=await call('/api/generate','POST',{researchId:id,imageMode:'descriptions',channelId:null,scriptOptions:claim.scriptOptions});assert.equal(r.status,200);assert.equal(matching(),matchingAfter,'finishing saved response must not call provider again');
@@ -91,7 +92,7 @@ test('logout while a request body arrives prevents the subsequent paid research 
  }finally{db.close();}
 });
 
-test('unchanged settings keep legacy and channel prompts with selected-source scope',{skip:!enabled,timeout:120_000},async()=>{
+test('standard selects Kontrakurs or a channel-specific neutral prompt',{skip:!enabled,timeout:120_000},async()=>{
  const fixture=realpathSync(process.env.CHANNEL_GENERATION_FIXTURE_DIR||'');assert.equal(dirname(fixture),realpathSync(tmpdir()));assert.equal(readFileSync(join(fixture,'.channel-fixture'),'utf8'),'isolated-channel-generation\n');
  const base=new URL(server).origin;let cookie='';
  async function call(path,method='GET',body){const headers={Origin:base};if(cookie)headers.Cookie=cookie;if(body!==undefined)headers['Content-Type']='application/json';const r=await fetch(base+path,{method,headers,body:body===undefined?undefined:JSON.stringify(body)});const set=r.headers.get('set-cookie');if(set)cookie=set.split(';',1)[0];return {status:r.status,data:await r.json()};}
@@ -101,10 +102,10 @@ test('unchanged settings keep legacy and channel prompts with selected-source sc
  const src={...source,title:'DEFAULT_SOURCE_SELECTED'};
  for(const channelId of [null,channel.id]){
   const research=await call('/api/research','POST',{topic:'Test',sources:[src],channelId,scriptOptions:standard});assert.equal(research.status,200);
-  const result=await call('/api/generate','POST',{researchId:research.data.id,imageMode:'descriptions',channelId,scriptOptions:standard});assert.equal(result.status,200);
-  assert.match(result.data.content.script,/Willkommen bei/);
+  const result=await call('/api/generate','POST',{researchId:research.data.id,imageMode:'descriptions',channelId,scriptOptions:standard});
+  assert.equal(result.status,200);assert.match(result.data.content.script,/Ich bin gespannt, wie ihr das seht/);
  }
- const messages=readFileSync(join(fixture,'ai-requests.log'),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(row=>row?.[1]?.content?.includes('DEFAULT_SOURCE_SELECTED'));
- assert.equal(messages.length,2);assert.match(messages[0][0].content,/politischen Commentary-Kanal/);
- assert.match(messages[1][0].content,/sorgfältiger Producer/);assert.match(messages[1][1].content,/45 bis 90 Sekunden/);assert.match(messages[1][1].content,/Testkurzkanal/);
+ const messages=readFileSync(join(fixture,'ai-requests.log'),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+ const factRequests=messages.filter(row=>row?.[1]?.content?.includes('DEFAULT_SOURCE_SELECTED'));
+ assert.equal(factRequests.length,2);const script=messages[messages.indexOf(factRequests[0])+1],otherScript=messages[messages.indexOf(factRequests[1])+1];assert.match(script[0].content,/Du hast eine klare Meinung/);assert.doesNotMatch(otherScript[0].content,/Du hast eine klare Meinung|Kontrakurs/);assert.match(otherScript[1].content,/Testkurzkanal/);assert.match(otherScript[1].content,/tiktok/);assert.match(otherScript[1].content,/45 bis 90 Sekunden/);assert.doesNotMatch(otherScript[0].content,/900|1.400|Wenn ihr weiter Klartext|Ich bin gespannt/);
 });

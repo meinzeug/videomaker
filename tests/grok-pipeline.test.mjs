@@ -1,0 +1,140 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import Database from 'better-sqlite3';
+import {KONTRAKURS_SCRIPT_SYSTEM,FACT_SHEET_SYSTEM,CHANNEL_SCRIPT_SYSTEM,SOURCE_ONLY_SCRIPT_SYSTEM,CHANNEL_SOURCE_ONLY_SCRIPT_SYSTEM} from '../lib/grok-prompt.ts';
+import {validateFactSheet} from '../lib/fact-sheet.ts';
+import {parseGrokScript} from '../lib/grok-result.ts';
+import {ensureGenerationClaimsSchema,acquireGenerationClaim,readGenerationClaim} from '../lib/generation-claims.ts';
+import {ensureGrokStateSchema,readGrokRun,startGrokRun,markGrokFacts} from '../lib/grok-state.ts';
+import {grokCompletion} from '../lib/grok-provider.ts';
+import {GrokPending,runGrokFlow} from '../lib/grok-flow.ts';
+
+const id='11111111-1111-4111-8111-111111111111',url='https://example.org/a',now='2026-01-01T00:00:00.000Z';
+const source=[{title:'Quelle',url,source:'Quelle',date:'',description:'Beschreibung'}];
+const report={sources:[{url}],source_excerpts:[{url,status:'retrieved',text:'Hier steht das bestätigte Originalzitat. Weitere Informationen.'}]};
+const rawFacts={fakten:[{text:'Eine belegte Aussage.',quellen:[url]}],meinungen_dritter:[],zitate:[{text:'bestätigte Originalzitat',quelle:url}],unklar:[],hinweise_fuer_dennis:['NUR-INTERN PDF HINWEIS']};
+const script=`${Array(905).fill('Wort').join(' ')}\nWenn ihr weiter Klartext wollt, lasst ein Abo da und gebt dem Video einen Daumen nach oben.\nIch bin gespannt, wie ihr das seht, denn dieses Video ist jetzt mit Absicht zu Ende. Ciao, bis bald!`;
+function answer(s=script){return JSON.stringify({titel:['Titel 1!','Titel 2!','Titel 3?'],skript:s,thumbnail_text:'Klartext jetzt',pin_kommentar:'Was meint ihr?',quellen:[`Quelle – ${url}`],hinweise_fuer_dennis:[]});}
+function response(text,more={}){return new Response(JSON.stringify({id:'gen-test',model:'x-ai/grok-4.3',usage:{prompt_tokens:12,completion_tokens:34,total_tokens:46,cost:0.001},choices:[{finish_reason:'stop',message:{content:text}}],...more}),{status:200});}
+function fixture(channel=null,options=null){const db=new Database(':memory:');db.exec(`CREATE TABLE research_reports(id TEXT PRIMARY KEY,created_at TEXT NOT NULL,sources TEXT NOT NULL,report TEXT NOT NULL); CREATE TABLE channels(id TEXT PRIMARY KEY,name TEXT,platform TEXT,handle TEXT);`);ensureGenerationClaimsSchema(db);ensureGrokStateSchema(db);db.prepare('INSERT INTO research_reports VALUES(?,?,?,?)').run(id,now,JSON.stringify(source),JSON.stringify(report));if(channel)db.prepare('INSERT INTO channels VALUES(?,?,?,?)').run(channel.id,channel.name,channel.platform,channel.handle);if(options)db.prepare('UPDATE research_reports SET report=? WHERE id=?').run(JSON.stringify({...report,generation_options:options}),id);const {claim}=db.transaction(()=>{const result=acquireGenerationClaim(db,id,'descriptions',channel?.id||null,now,options);startGrokRun(db,id,now,'x-ai/grok-4.3','x-ai/grok-4.20');return result;}).immediate();return {db,claim};}
+
+test('Kontrakurs system prompt remains verbatim against the saved user fixture',()=>assert.equal(KONTRAKURS_SCRIPT_SYSTEM,readFileSync(new URL('./fixtures/kontrakurs-system-prompt.txt',import.meta.url),'utf8').replace(/\n$/,'')));
+test('literal quotes require the exact text in a retrieved original, never a fallback description',()=>{
+ const facts=validateFactSheet({...rawFacts,zitate:[...rawFacts.zitate,{text:'erfunden',quelle:url},{text:'wiederholt',quelle:'https://evil.example/x'}]},source,report);
+ assert.deepEqual(facts.zitate,[rawFacts.zitate[0]]);assert.match(facts.hinweise_fuer_dennis.join(' '),/2 Zitat/);
+ const fallback=validateFactSheet(rawFacts,source,{...report,source_excerpts:[{url,status:'unavailable',text:'bestätigte Originalzitat'}]});assert.deepEqual(fallback.zitate,[]);
+});
+test('output enforces exact quality, typed fields, verified sources and complete literal quotations',()=>{
+ const facts=validateFactSheet(rawFacts,source,report);
+ assert.ok(parseGrokScript(answer(),false,facts).project);
+ const wrongChannel=parseGrokScript(answer('Willkommen bei Kontrakurs. Das ist ein Test.'),false,facts,'Eigenkanal',false);assert.equal(wrongChannel.project,null);assert.equal(wrongChannel.issues[0].code,'channel_mismatch');
+ assert.ok(parseGrokScript(answer('Willkommen bei Eigenkanal.\n'+script),false,facts,'Eigenkanal').project);
+ assert.equal(parseGrokScript(answer(),true,facts).project,null);
+ for(const example of ['Zitat: bestätigte Originalzitat und frei erfundener Zusatz.\n','Hier: „nicht\nbelegtes Zitat“\n','Hier: „unbegrenzt\n']){
+  const failure=parseGrokScript(answer(example+script),false,facts);assert.equal(failure.project,null);assert.ok(failure.issues.some(issue=>issue.code==='unverified_quote'));
+ }
+ const data=JSON.parse(answer());data.quellen.push('Erfunden – https://evil.example/x');const parsed=parseGrokScript(JSON.stringify(data),false,facts);assert.deepEqual(parsed.project.quellen,[`example.org – ${url}`]);assert.match(parsed.project.hinweise_fuer_dennis.join(' '),/entfernt/);
+ data.quellen=[];const supplemented=parseGrokScript(JSON.stringify(data),false,facts);assert.deepEqual(supplemented.project.quellen,[`example.org – ${url}`]);assert.match(supplemented.project.hinweise_fuer_dennis.join(' '),/ergänzt/);
+ data.hinweise_fuer_dennis=[3];assert.equal(parseGrokScript(JSON.stringify(data),false,facts).project,null);
+});
+test('independent shape, thumbnail and word count errors are reported together',()=>{
+ const facts=validateFactSheet(rawFacts,source,report),data=JSON.parse(answer('Ein kurzer Testtext.'));
+ data.hinweise_fuer_dennis='Ein Hinweis als falscher Datentyp';data.thumbnail_text='Eins Zwei Drei Vier Fünf Sechs Sieben Acht Neun Zehn';
+ const result=parseGrokScript(JSON.stringify(data),false,facts);assert.equal(result.project,null);
+ for(const code of ['hinweise_fuer_dennis','thumbnail_text','word_count'])assert.ok(result.issues.some(issue=>issue.code===code),code);
+ assert.match(result.issues.find(issue=>issue.code==='word_count').message,/900 bis 1.400/);
+ assert.match(result.issues.find(issue=>issue.code==='thumbnail_text').message,/10/);
+});
+test('429 retries are bounded, recorded and use the requested Grok parameters',async()=>{
+ const {db}=fixture(),old=process.env.OPENROUTER_API_KEY;process.env.OPENROUTER_API_KEY='test-only';const calls=[],delays=[];
+ try{const reply=await grokCompletion(db,id,'facts',FACT_SHEET_SYSTEM,'test',{primary:'x-ai/grok-4.3',fallback:'x-ai/grok-4.20'},{sleep:async ms=>delays.push(ms),fetch:async(_url,init)=>{calls.push(JSON.parse(init.body));return calls.length<3?new Response('',{status:429}):response(JSON.stringify(rawFacts));}});
+  assert.equal(calls.length,3);assert.deepEqual(calls.map(c=>c.model),['x-ai/grok-4.3','x-ai/grok-4.3','x-ai/grok-4.20']);assert.deepEqual(delays,[1000,2000]);assert.equal(calls[0].temperature,0.3);assert.equal(calls[0].top_p,0.95);assert.equal(calls[0].max_tokens,4000);assert.equal(calls[0].response_format.type,'json_object');assert.equal(reply.usage.costUsd,0.001);
+  assert.deepEqual(db.prepare('SELECT state FROM grok_generation_attempts ORDER BY ordinal').all().map(x=>x.state),['failed','failed','received']);
+ }finally{if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
+test('timeout after response headers selects fallback and retains unknown cost of the first call',async()=>{
+ const {db}=fixture(),old=process.env.OPENROUTER_API_KEY;process.env.OPENROUTER_API_KEY='test-only';const models=[];const keepAlive=setTimeout(()=>{},1000);
+ try{const reply=await grokCompletion(db,id,'facts',FACT_SHEET_SYSTEM,'test',{primary:'x-ai/grok-4.3',fallback:'x-ai/grok-4.20'},{timeoutMs:30,fetch:async(_url,init)=>{const model=JSON.parse(init.body).model;models.push(model);return model.endsWith('4.3')?new Response(new ReadableStream({start(){}}),{status:200}):response(JSON.stringify(rawFacts),{model});}});
+  assert.deepEqual(models,['x-ai/grok-4.3','x-ai/grok-4.20']);assert.equal(reply.usage.model,'x-ai/grok-4.20');const rows=db.prepare('SELECT state,cost_usd FROM grok_generation_attempts ORDER BY ordinal').all();assert.equal(rows[0].state,'unknown');assert.equal(rows[0].cost_usd,null);assert.equal(rows[1].state,'received');
+ }finally{clearTimeout(keepAlive);if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
+test('known facts resume after logout; one repair is reserved, hints never enter script prompts',async()=>{
+ const {db,claim}=fixture(),old=process.env.OPENROUTER_API_KEY,oldFetch=globalThis.fetch;process.env.OPENROUTER_API_KEY='test-only';let allowed=false;const messages=[],requests=[];
+ globalThis.fetch=async(_url,init)=>{const req=JSON.parse(init.body);messages.push(req.messages);requests.push(req);const broken=JSON.parse(answer('Zu kurz. UNTRUSTED-ERFUNDEN'));broken.thumbnail_text='Eins Zwei Drei Vier Fünf Sechs Sieben Acht Neun Zehn';broken.hinweise_fuer_dennis='Falscher Typ';return response(req.messages[0].content===FACT_SHEET_SYSTEM?JSON.stringify(rawFacts):messages.filter(m=>m[0].content!==FACT_SHEET_SYSTEM).length===1?JSON.stringify(broken):answer());};
+ try{
+  await assert.rejects(runGrokFlow(db,claim,true,()=>{if(!allowed&&messages.length)throw new Error('logged out');}),/logged out/);
+  assert.equal(readGrokRun(db,id).phase,'facts_ready');assert.equal(messages.length,1);
+  allowed=true;const final=await runGrokFlow(db,claim,false,()=>{});assert.equal(final.state,'received');assert.equal(messages.length,3);assert.equal(readGrokRun(db,id).phase,'repair_ready');
+  for(const m of messages.slice(1)){assert.equal(m[0].content,KONTRAKURS_SCRIPT_SYSTEM);assert.doesNotMatch(m[1].content,/NUR-INTERN PDF HINWEIS/);}assert.doesNotMatch(messages[2][1].content,/UNTRUSTED-ERFUNDEN/);assert.match(messages[2][1].content,/900 bis 1.400/);assert.match(messages[2][1].content,/erhalten: 10/);assert.match(messages[2][1].content,/auch bei nur einem Hinweis/);assert.match(messages[1][1].content,/1.100 bis 1.200 Wörter/);assert.match(messages[1][1].content,/nur eine interne Längenhilfe/);assert.match(messages[1][1].content,/ohne Abschnittsnamen oder Zwischenüberschriften/);assert.match(messages[1][1].content,/erfinde auch bei dünnem Material keine Fakten/);const budgets=[...messages[1][1].content.matchAll(/(\d+)–(\d+)/g)].map(m=>[Number(m[1]),Number(m[2])]);assert.equal(budgets.length,7);assert.equal(budgets.reduce((sum,b)=>sum+b[0],0),1110);assert.equal(budgets.reduce((sum,b)=>sum+b[1],0),1200);
+  for(const request of requests.slice(1)){const format=request.response_format;assert.equal(format.type,'json_schema');assert.equal(format.json_schema.strict,true);assert.deepEqual(format.json_schema.schema.required,['titel','skript','thumbnail_text','pin_kommentar','quellen','hinweise_fuer_dennis']);assert.equal(format.json_schema.schema.properties.hinweise_fuer_dennis.type,'array');assert.equal(format.json_schema.schema.properties.titel.minItems,3);assert.equal(format.json_schema.schema.properties.titel.items.pattern,'.*[!?].*');assert.equal(request.max_tokens,4000);}
+  const content=JSON.parse(final.responseText);assert.equal(content.script,script);assert.deepEqual(content.broll,[]);assert.equal(content.pin_kommentar,'Was meint ihr?');
+ }finally{globalThis.fetch=oldFetch;if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
+test('unknown in-flight or old pending claims cannot start duplicate paid calls',async()=>{
+ const {db,claim}=fixture();await assert.rejects(runGrokFlow(db,claim,false,()=>{}),GrokPending);assert.equal(readGenerationClaim(db,id).state,'pending');assert.equal(db.prepare('SELECT count(*) AS n FROM grok_generation_attempts').get().n,0);db.close();
+});
+
+test('all 5xx attempts are globally bounded and include fallback',async()=>{
+ const {db}=fixture(),old=process.env.OPENROUTER_API_KEY;process.env.OPENROUTER_API_KEY='test-only';const models=[];
+ try{
+  await assert.rejects(grokCompletion(db,id,'facts',FACT_SHEET_SYSTEM,'test',{primary:'x-ai/grok-4.3',fallback:'x-ai/grok-4.20'},{sleep:async()=>{},fetch:async(_url,init)=>{models.push(JSON.parse(init.body).model);return new Response('',{status:503});}}),/Ersatzmodell/);
+  assert.deepEqual(models,['x-ai/grok-4.3','x-ai/grok-4.3','x-ai/grok-4.20']);assert.equal(db.prepare('SELECT count(*) AS n FROM grok_generation_attempts').get().n,3);
+ }finally{if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
+
+test('pre-header timeout falls back; later failures preserve unknown first cost',async()=>{
+ const {db}=fixture(),old=process.env.OPENROUTER_API_KEY;process.env.OPENROUTER_API_KEY='test-only';const models=[];const keepAlive=setTimeout(()=>{},1000);
+ try{
+  await assert.rejects(grokCompletion(db,id,'facts',FACT_SHEET_SYSTEM,'test',{primary:'x-ai/grok-4.3',fallback:'x-ai/grok-4.20'},{timeoutMs:30,sleep:async()=>{},fetch:async(_url,init)=>{models.push(JSON.parse(init.body).model);return models.length===1?new Promise(()=>{}):new Response('',{status:429});}}),/unklar/);
+  assert.deepEqual(models,['x-ai/grok-4.3','x-ai/grok-4.20','x-ai/grok-4.20']);const rows=db.prepare('SELECT state,cost_usd FROM grok_generation_attempts ORDER BY ordinal').all();assert.deepEqual(rows.map(x=>x.state),['unknown','failed','failed']);assert.equal(rows[0].cost_usd,null);
+ }finally{clearTimeout(keepAlive);if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
+
+test('logout during backoff prevents another paid attempt',async()=>{
+ const {db}=fixture(),old=process.env.OPENROUTER_API_KEY;process.env.OPENROUTER_API_KEY='test-only';let allowed=true,calls=0;
+ try{
+  await assert.rejects(grokCompletion(db,id,'facts',FACT_SHEET_SYSTEM,'test',{primary:'x-ai/grok-4.3',fallback:'x-ai/grok-4.20'},{authorize:()=>{if(!allowed)throw new Error('logged out');},sleep:async()=>{allowed=false;},fetch:async()=>{calls++;return new Response('',{status:503});}}),/logged out/);
+  assert.equal(calls,1);assert.equal(db.prepare('SELECT count(*) AS n FROM grok_generation_attempts').get().n,1);
+ }finally{if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
+
+test('fallback authentication failure preserves prior timeout uncertainty',async()=>{
+ const {db}=fixture(),old=process.env.OPENROUTER_API_KEY;process.env.OPENROUTER_API_KEY='test-only';let calls=0;
+ try{
+  await assert.rejects(grokCompletion(db,id,'facts',FACT_SHEET_SYSTEM,'test',{primary:'x-ai/grok-4.3',fallback:'x-ai/grok-4.20'},{fetch:async()=>{if(++calls===1)throw new Error('network');return new Response('',{status:401});}}),e=>e.uncertain===true&&/berechnet/.test(e.message));
+  assert.equal(calls,2);assert.equal(db.prepare('SELECT state FROM grok_generation_attempts ORDER BY ordinal').all()[0].state,'unknown');
+ }finally{if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
+
+test('a hanging error-body cancel cannot block fallback after 503',async()=>{
+ const {db}=fixture(),old=process.env.OPENROUTER_API_KEY;process.env.OPENROUTER_API_KEY='test-only';const models=[];
+ try{
+  const reply=await grokCompletion(db,id,'facts',FACT_SHEET_SYSTEM,'test',{primary:'x-ai/grok-4.3',fallback:'x-ai/grok-4.20'},{timeoutMs:30,sleep:async()=>{},fetch:async(_url,init)=>{models.push(JSON.parse(init.body).model);return models.length<3?new Response(new ReadableStream({cancel(){return new Promise(()=>{});}}),{status:503}):response(JSON.stringify(rawFacts),{model:'x-ai/grok-4.20'});}});
+  assert.equal(reply.usage.model,'x-ai/grok-4.20');assert.equal(models.length,3);
+ }finally{if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
+
+
+test('other channel receives its own metadata without Kontrakurs opinion or name',async()=>{
+ const channel={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',name:'Eigenkanal',platform:'tiktok',handle:'@eigen'}, {db,claim}=fixture(channel),old=process.env.OPENROUTER_API_KEY,oldFetch=globalThis.fetch;process.env.OPENROUTER_API_KEY='test-only';const messages=[];
+ globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);messages.push(request.messages);return response(request.messages[0].content===FACT_SHEET_SYSTEM?JSON.stringify(rawFacts):answer('Willkommen bei Eigenkanal. Hier ein kurzer Testbeitrag.'));};
+ try{const result=await runGrokFlow(db,claim,true,()=>{});assert.equal(result.state,'received');assert.equal(messages[1][0].content,CHANNEL_SCRIPT_SYSTEM);assert.doesNotMatch(messages[1][0].content,/Kontrakurs|Du hast eine klare Meinung/);assert.match(messages[1][1].content,/Eigenkanal/);assert.match(messages[1][1].content,/tiktok/);assert.match(messages[1][1].content,/45 bis 90 Sekunden/);assert.doesNotMatch(messages[1][0].content,/900|1.400|Wenn ihr weiter Klartext|Ich bin gespannt/);}
+ finally{globalThis.fetch=oldFetch;if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
+
+test('explicit source-only mode avoids imposed opinion for other channels',async()=>{
+ const channel={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',name:'Eigenkanal',platform:'youtube',handle:'@eigen'},options={mode:'source',scope:'selected',tones:['frech'],dramaturgy:'Spannung',instructions:'Kurz und direkt',allowIncompleteSources:true};
+ const {db,claim}=fixture(channel,options),old=process.env.OPENROUTER_API_KEY,oldFetch=globalThis.fetch;process.env.OPENROUTER_API_KEY='test-only';const messages=[];
+ globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);messages.push(request.messages);return response(request.messages[0].content===FACT_SHEET_SYSTEM?JSON.stringify(rawFacts):answer('Willkommen bei Eigenkanal. Hier ein kurzer Testbeitrag.'));};
+ try{await runGrokFlow(db,claim,true,()=>{});assert.equal(messages[1][0].content,CHANNEL_SOURCE_ONLY_SCRIPT_SYSTEM);assert.match(messages[1][1].content,/Eigenkanal/);assert.match(messages[1][1].content,/frech/);assert.match(messages[1][1].content,/Spannung/);assert.match(messages[1][1].content,/Kurz und direkt/);assert.doesNotMatch(messages[1][0].content,/900|1.400|Wenn ihr weiter Klartext|Ich bin gespannt/);}
+ finally{globalThis.fetch=oldFetch;if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
+
+
+test('without verified quotations both script attempts prohibit literal quotation, but only one repair runs',async()=>{
+ const {db,claim}=fixture(),old=process.env.OPENROUTER_API_KEY,oldFetch=globalThis.fetch;process.env.OPENROUTER_API_KEY='test-only';const messages=[];
+ globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);messages.push(request.messages);return response(request.messages[0].content===FACT_SHEET_SYSTEM?JSON.stringify({...rawFacts,zitate:[]}):messages.length===2?answer('Zitat: Frei erfunden.\n'+script):answer());};
+ try{const final=await runGrokFlow(db,claim,true,()=>{});assert.equal(final.state,'received');assert.equal(messages.length,3);for(const message of messages.slice(1)){assert.match(message[1].content,/keine bestätigten wörtlichen Zitate/);assert.match(message[1].content,/keine Anführungszeichen/);}assert.match(messages[2][1].content,/nicht durch einen abgerufenen Originaltext belegt/);assert.doesNotMatch(messages[2][1].content,/Frei erfunden/);}
+ finally{globalThis.fetch=oldFetch;if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
