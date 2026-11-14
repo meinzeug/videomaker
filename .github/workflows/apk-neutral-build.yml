@@ -81,3 +81,53 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 3
+  server-node-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 32f61b5cbe0332249789ee7fc038eac9add1904f
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.2'
+      - run: npm ci --no-audit --no-fund
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk-neutral-next-32f61b5
+          path: artifact
+      - name: Verify complete artifact and run against server Node version
+        env:
+          SESSION_SECRET: isolated-test-only-secret-012345678901234
+          ADMIN_PASSWORD: isolated-test-only-password
+          VIDEOMAKER_PUBLIC_ORIGIN: http://127.0.0.1:39171
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: |
+          set -eu
+          test "$(node --version)" = v22.23.2
+          test "$(cat artifact/BUILD-SOURCE-COMMIT.txt)" = 32f61b5cbe0332249789ee7fc038eac9add1904f
+          (cd artifact && sha256sum -c BUILD-FILES-SHA256.txt > /dev/null)
+          test "$(find artifact/.next -type f | wc -l)" -eq "$(wc -l < artifact/BUILD-FILES-SHA256.txt)"
+          test -z "$(find artifact/.next -type l -print -quit)"
+          cp -a artifact/.next .next
+          fixture=$(mktemp -d)
+          export DATA_DIR="$fixture"
+          printf 'PK\003\004synthetic-apk' > "$fixture/kontraprompter.apk"
+          node node_modules/next/dist/bin/next start -H 127.0.0.1 -p 39171 > "$fixture/server.log" 2>&1 &
+          pid=$!
+          cleanup() { kill "$pid" 2>/dev/null || :; wait "$pid" 2>/dev/null || :; rm -rf "$fixture"; }
+          trap cleanup EXIT
+          for i in $(seq 1 100); do
+            if curl -s -o /dev/null "$VIDEOMAKER_PUBLIC_ORIGIN/api/apk"; then break; fi
+            kill -0 "$pid" || { cat "$fixture/server.log"; exit 1; }
+            sleep .2
+          done
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$VIDEOMAKER_PUBLIC_ORIGIN/api/apk")" = 401
+          curl -fsS -c "$fixture/cookies" -H "Origin: $VIDEOMAKER_PUBLIC_ORIGIN" -H 'Content-Type: application/json' --data '{"password":"isolated-test-only-password"}' "$VIDEOMAKER_PUBLIC_ORIGIN/api/login" > /dev/null
+          curl -fsSI -b "$fixture/cookies" "$VIDEOMAKER_PUBLIC_ORIGIN/api/apk" > "$fixture/headers"
+          grep -Fi 'content-disposition: attachment; filename="KontraPrompter.apk"' "$fixture/headers"
+          curl -fsS -b "$fixture/cookies" "$VIDEOMAKER_PUBLIC_ORIGIN/api/apk" > "$fixture/download.apk"
+          cmp "$fixture/kontraprompter.apk" "$fixture/download.apk"
+          curl -fsS -b "$fixture/cookies" "$VIDEOMAKER_PUBLIC_ORIGIN/" > "$fixture/page.html"
+          grep -Fq 'KontraPrompter für Android herunterladen' "$fixture/page.html"
