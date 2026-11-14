@@ -156,6 +156,24 @@ selbst benötigt vor einem produktiven Einsatz einen unabhängigen Review.
 
 ## Aufbewahrung der Widerrufsmarkierungen
 
+Der vorbereitete Baustein `lib/oidc-capacity.ts` kann auf bereits geöffneten
+SQLite-Verbindungen Tabellenbestände und die logische Datenbankgröße messen.
+Er benötigt für jede Kennzahl ausdrücklich konfigurierte Warn- und kritische
+Grenzen, meldet deren Erreichen und gibt weder Referenzen noch Sitzungsdaten aus.
+Providerdatenbank und Video-Maker-Sitzungsdatenbank werden einzeln gemessen;
+es gibt keinen gemeinsamen atomaren Zustand. Fehlendes Schema oder ungültige
+Grenzen führen zu einem Fehler, nicht zu einer gesunden Statusmeldung. Die
+Messung ändert weder Schema noch Einträge und startet keinen Provider. Sie ist
+noch nicht an einen Dienst oder ein Überwachungssystem angeschlossen.
+
+`databaseBytes` ist `page_count * page_size`, also die logische Größe der
+SQLite-Hauptdatenbank inklusive freier Seiten. WAL-, Shared-Memory-, Backup- und
+Dateisystembelegung sind darin nicht enthalten; freier Platz, tatsächlicher
+Dateiverbrauch und Quoten müssen zusätzlich betrieblich überwacht werden. Eine
+Momentaufnahme reserviert keinen Speicher und verhindert keine nachfolgenden
+Schreibzugriffe. Tabellenstände wachsen bewusst weiter; die Messung bereinigt
+keine Widerrufsmarkierungen und setzt keine produktiven Grenzwerte voraus.
+
 Es gibt bewusst **keine automatische Löschung** der Tabellen
 `oidc_consumed_objects` und `oidc_revoked_grants`. Auch die Tabelle
 `oidc_provider_session_map` wächst dauerhaft, enthält vertrauliche Referenzen und
