@@ -69,6 +69,24 @@ export class CameraProjectClaimError extends Error {
  readonly code:'project'|'conflict';
  constructor(code:'project'|'conflict',message:string){super(message);this.code=code;}
 }
+
+/** Read-only overview, including claims whose camera is offline or no longer registered. */
+export function listOpenCameraClaims(db:Database.Database,projectId:string){
+ const rows=db.prepare(`SELECT c.recording_id AS recordingId,c.device_id AS deviceId,
+  d.name AS deviceName,c.opened_at AS openedAt,
+  CASE WHEN s.phase='ready' AND f.phase IS NOT NULL THEN 'unknown'
+       WHEN s.phase='ready' THEN 'ready' WHEN f.phase IS NOT NULL THEN f.phase
+       WHEN s.phase='partial' THEN 'partial' ELSE 'unknown' END AS lastConfirmedPhase
+  FROM camera_project_claims c
+  LEFT JOIN camera_remote_devices d ON d.id=c.device_id
+  LEFT JOIN camera_project_final_status s ON s.recording_id=c.recording_id AND s.project_id=c.project_id AND s.device_id=c.device_id
+  LEFT JOIN camera_project_failures f ON f.recording_id=c.recording_id AND f.project_id=c.project_id AND f.device_id=c.device_id
+  WHERE c.project_id=? AND c.closed_at IS NULL
+  ORDER BY c.opened_at DESC,c.recording_id DESC LIMIT 101`).all(projectId) as {
+   recordingId:string;deviceId:string;deviceName:string|null;openedAt:number;lastConfirmedPhase:'ready'|'partial'|'error'|'unknown'
+  }[];
+ return {claims:rows.slice(0,100),hasMore:rows.length>100};
+}
 function requireTransaction(db:Database.Database){
  if(!db.inTransaction)throw new Error('Kameraprojektsperre benötigt eine unmittelbare Datenbanktransaktion.');
 }
