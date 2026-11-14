@@ -45,6 +45,18 @@ test('real HTTP framing drives phone setting queue and acknowledged device state
   const reply=await (await post('/api/devices/poll',payload())).json();assert.equal(reply.commands.length,1);assert.equal(reply.commands[0].type,'set_speed');assert.equal(reply.commands[0].value,76);
   assert.equal((await post('/api/devices/poll',payload({ack:[reply.commands[0].id],controls:{speed:76,fontSize:44}}))).status,200);
   const devices=await (await fetch(base+'/api/devices')).json();assert.equal(devices.devices[0].speed,76);assert.equal(db.prepare('SELECT count(*) AS n FROM live_commands').get().n,0);
+  assert.equal((await post(`/api/devices/${id}/commands`,{type:'set_font_size',value:64})).status,200);
+  const font=await (await post('/api/devices/poll',payload({controls:{speed:76,fontSize:44}}))).json();assert.equal(font.commands[0].type,'set_font_size');assert.equal(font.commands[0].value,64);
+  assert.equal((await post('/api/devices/poll',payload({ack:[font.commands[0].id],controls:{speed:76,fontSize:64}}))).status,200);
+  const project='ec310715-9c72-42fd-9945-f3cdd34e615c';db.prepare('INSERT INTO projects(id) VALUES(?)').run(project);
+  assert.equal((await post(`/api/devices/${id}/commands`,{type:'load',projectId:project})).status,200);
+  const load=await (await post('/api/devices/poll',payload({controls:{speed:76,fontSize:44}}))).json();assert.equal(load.commands[0].type,'load');assert.equal(load.commands[0].projectId,project);
+  assert.equal((await post('/api/devices/poll',payload({ack:[load.commands[0].id],controls:{speed:76,fontSize:44}}))).status,200);
+  for(const type of ['play','pause','reset']){
+   assert.equal((await post(`/api/devices/${id}/commands`,{type})).status,200);
+   const queued=await (await post('/api/devices/poll',payload({controls:{speed:76,fontSize:44}}))).json();assert.equal(queued.commands[0].type,type);
+   assert.equal((await post('/api/devices/poll',payload({ack:[queued.commands[0].id],controls:{speed:76,fontSize:44}}))).status,200);
+  }
   assert.equal((await post(`/api/devices/${id}/commands`,{type:'set_font_size',value:200})).status,400);
   assert.equal((await post(`/api/devices/${id}/commands`,{type:'pause'},'http://evil.invalid')).status,403);
  }finally{await new Promise(resolve=>server.close(resolve));db.close();}
