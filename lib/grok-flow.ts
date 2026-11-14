@@ -46,7 +46,7 @@ export async function runGrokFlow(db:Database.Database,claim:GenerationClaim,cre
  if(run.phase==='facts_ready'){
   const ok=db.transaction(()=>{authorize();return reserveGrokPhase(db,id,'facts_ready','script_pending',new Date().toISOString());}).immediate();
   if(!ok)throw new GrokPending('Die Skripterstellung wurde bereits gestartet.');
-  const reply=await grokCompletion(db,id,'script',system,instruction,models,{authorize});
+  const reply=await grokCompletion(db,id,'script',system,instruction,models,{authorize,kontrakurs:isKontrakurs});
   saveGrokAnswer(db,id,'script',encoded(reply),new Date().toISOString());run=readGrokRun(db,id)!;
  }
  if(run.phase==='script_ready'){
@@ -57,7 +57,7 @@ export async function runGrokFlow(db:Database.Database,claim:GenerationClaim,cre
    const retry=`${instruction}\nDer erste Entwurf erfüllte diese maschinellen Prüfungen nicht: ${JSON.stringify(parsed.issues.map(issue=>issue.message))}. Erzeuge genau einmal einen korrigierten vollständigen Entwurf.`;
    // A quality failure uses the configured fallback first, within the same single repair phase.
    const repairModels={primary:models.fallback,fallback:models.primary};
-   const reply=await grokCompletion(db,id,'repair',system,retry,repairModels,{authorize});
+   const reply=await grokCompletion(db,id,'repair',system,retry,repairModels,{authorize,kontrakurs:isKontrakurs});
    saveGrokAnswer(db,id,'repair',encoded(reply),new Date().toISOString());run=readGrokRun(db,id)!;
   }
  }

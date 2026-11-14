@@ -1,10 +1,11 @@
 import type Database from 'better-sqlite3';
 import {beginGrokAttempt,finishGrokAttempt,type Usage} from './grok-state.ts';
+import {KONTRAKURS_SUBSCRIBE_SENTENCE,KONTRAKURS_OUTRO} from './script-quality.ts';
 
 export class GrokProviderError extends Error {status:number;uncertain:boolean;constructor(status:number,uncertain:boolean,message:string){super(message);this.status=status;this.uncertain=uncertain;}}
 export type GrokReply={text:string;truncated:boolean;usage:Usage};
 type Phase='facts'|'script'|'repair';
-type Dependencies={fetch?:typeof fetch;sleep?:(ms:number)=>Promise<void>;timeoutMs?:number;authorize?:()=>void};
+type Dependencies={fetch?:typeof fetch;sleep?:(ms:number)=>Promise<void>;timeoutMs?:number;authorize?:()=>void;kontrakurs?:boolean};
 const empty:Usage={model:null,id:null,promptTokens:null,completionTokens:null,reasoningTokens:null,totalTokens:null,costUsd:null};
 const nonnegative=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)&&v>=0?v:null;
 const safeString=(v:unknown)=>typeof v==='string'&&/^[\w./:-]{1,160}$/.test(v)?v:null;
@@ -19,6 +20,16 @@ const SCRIPT_RESPONSE_FORMAT={type:'json_schema',json_schema:{name:'videomaker_s
  quellen:{type:'array',items:{type:'string'}},
  hinweise_fuer_dennis:{type:'array',items:{type:'string'},description:'Interne Hinweise; leeres Array wenn keine vorliegen.'}
 }}}} as const;
+
+/** xAI documents literal characters, character classes and quantifiers in schema patterns.
+ * Local validation remains authoritative because provider conformance can vary. */
+function scriptResponseFormat(kontrakurs:boolean) {
+ if(!kontrakurs)return SCRIPT_RESPONSE_FORMAT;
+ const literal=(value:string)=>value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+ const pattern=`[\\s\\S]*${literal(KONTRAKURS_SUBSCRIBE_SENTENCE)}[\\s\\S]*${literal(KONTRAKURS_OUTRO)}\\s*`;
+ const base=SCRIPT_RESPONSE_FORMAT.json_schema.schema;
+ return {...SCRIPT_RESPONSE_FORMAT,json_schema:{...SCRIPT_RESPONSE_FORMAT.json_schema,schema:{...base,properties:{...base.properties,skript:{...base.properties.skript,pattern}}}}};
+}
 
 export function grokModels(){
  const primary=process.env.SCRIPT_MODEL||'x-ai/grok-4.3',fallback=process.env.SCRIPT_FALLBACK_MODEL||'x-ai/grok-4.20';
@@ -61,7 +72,7 @@ export async function grokCompletion(db:Database.Database,id:string,phase:Phase,
    const ordinal=beginGrokAttempt(db,id,phase,model,new Date().toISOString(),deps.authorize);
    let response:Response;const signal=AbortSignal.timeout(deps.timeoutMs??120000);
    try{
-    response=await withAbort(fetcher('https://openrouter.ai/api/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json','HTTP-Referer':'https://videomaker.dorfspy.de','X-Title':'Kontrakurs Studio'},body:JSON.stringify({model,temperature:phase==='facts'?0.3:0.85,top_p:0.95,max_tokens:4000,response_format:phase==='facts'?{type:'json_object'}:SCRIPT_RESPONSE_FORMAT,reasoning:{enabled:false},provider:{require_parameters:true},messages:[{role:'system',content:system},{role:'user',content:prompt}]}),signal}),signal);
+    response=await withAbort(fetcher('https://openrouter.ai/api/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json','HTTP-Referer':'https://videomaker.dorfspy.de','X-Title':'Kontrakurs Studio'},body:JSON.stringify({model,temperature:phase==='facts'?0.3:0.85,top_p:0.95,max_tokens:4000,response_format:phase==='facts'?{type:'json_object'}:scriptResponseFormat(!!deps.kontrakurs),reasoning:{enabled:false},provider:{require_parameters:true},messages:[{role:'system',content:system},{role:'user',content:prompt}]}),signal}),signal);
    }catch{
     finishGrokAttempt(db,id,phase,ordinal,'unknown',null,null,new Date().toISOString());
     console.info(JSON.stringify({event:'script_provider_attempt',phase,model,status:'unknown',costUsd:null}));

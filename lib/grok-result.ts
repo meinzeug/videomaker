@@ -27,8 +27,15 @@ export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,ch
   if(channelName&&channelGreetingMayMismatch(script,channelName))issues.push({code:'channel_mismatch',message:'Die Begrüßung nennt einen anderen Kanal; verwende den gewählten Kanal.'});
  }
  // Literal quotation marks and announced quotations are accepted only when the exact words were checked against a retrieved original.
- const verified=facts.zitate.map(q=>q.text);
- const quoted:string[]=[],pairs:Record<string,string>={'„':'“','“':'”','"':'"','»':'«','«':'»','‚':'‘'},closers=new Set(['”','‘']);
+ const pairs:Record<string,string>={'„':'“','“':'”','"':'"','»':'«','«':'»','‚':'‘'},closers=new Set(['”','‘']);
+ // A literal source quotation may itself contain the surrounding quote marks.
+ // Remove only one exact matching outer pair after source verification; no
+ // whitespace, punctuation or content inside the verified words is changed.
+ const verified=facts.zitate.flatMap(({text})=>{
+  const close=pairs[text[0]];
+  return close&&text.length>2&&text.endsWith(close)?[text,text.slice(1,-1)]:[text];
+ });
+ const quoted:string[]=[];
  for(let index=0;index<script.length;index++){
   const char=script[index],close=pairs[char];
   if(close){const end=script.indexOf(close,index+1);if(end<0||end-index>2001){issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht vollständig begrenzt.'});break;}quoted.push(script.slice(index+1,end));index=end;}
