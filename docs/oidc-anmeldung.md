@@ -69,6 +69,17 @@ Neuanmeldung nach Anbieter-Neustart. Ausstehende Login-Interaktionen sind nur
 im Speicher und müssen nach einem Neustart neu begonnen werden. Die Tests sind
 kein Ersatz für den produktiven Haben-Browserlauf oder eine unabhängige Prüfung.
 
+Ein zusätzlicher isolierter Lauf verbindet jetzt **den tatsächlichen**
+Videomaker-OIDC-Dienst mit dem tatsächlichen Haben-Callback und PostgreSQL 18:
+`tests/fixtures/haben-oidc-service-e2e.test.mjs`. Er prüft Anmeldung unter
+`/buchhaltung/`, PKCE, angelegte Inhaberrolle und Sitzungsbindung, Ablehnung
+eines wiederverwendeten Codes sowie die Sperre des Haben-Wächters nach
+Videomaker-Logout. Die Videomaker-Referenzprüfung läuft dabei im selben
+Testprozess; der Haben-Callback wird direkt als Request aufgerufen. Ein echter
+Browser, die interne TLS-Strecke und der öffentliche Reverse-Proxy sind durch
+diesen Lauf noch nicht abgedeckt. Das Testcluster verwendet ausschließlich
+synthetische Datensätze; das produktive System wird nicht angesprochen.
+
 ## Was bereits getestet ist
 
 `tests/oidc-storage.test.mjs` prüft isoliert Modelltrennung, Ablauf, atomaren
@@ -184,6 +195,13 @@ TMPDIR=/absoluter/testcluster \
 node apps/buchhaltung/node_modules/vitest/vitest.mjs run \
   --config tests/fixtures/haben-oidc-vitest.config.mjs
 ```
+
+Für den zusätzlichen Lauf mit dem tatsächlichen Videomaker-OIDC-Dienst dieselbe
+isolierte Umgebung verwenden und stattdessen
+`--config tests/fixtures/haben-oidc-service-e2e.config.mjs` angeben. Die ererbte
+Safety-Prüfung kontrolliert vor dem Datenbank-Setup ebenso Markierung und
+`data_directory`; auch dieser Test darf nur auf einem exklusiven Testcluster
+laufen, da er Testdatenbanken neu erstellt.
 
 Ein reproduzierbarer lokaler Test, ohne das Projekt oder einen Server zu
 installieren oder zu verändern:
