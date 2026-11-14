@@ -84,6 +84,11 @@ export const CAMERA_REMOTE_SCHEMA=`
 export function ensureCameraRemoteSchema(db:Database.Database){
  db.exec(CAMERA_REMOTE_SCHEMA);
  db.transaction(()=>{
+  const controlsSchema=db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='camera_remote_controls'").get() as {sql:string}|undefined;
+  if(!controlsSchema?.sql.includes("'camera_switch'"))throw new CameraRemoteError('conflict','Die ältere Testdatenbank benötigt eine sichere Migration der Kamerabefehle.');
+  const v2Columns=db.prepare('PRAGMA table_info(camera_remote_v2_state)').all() as {name:string}[];
+  if(!v2Columns.some(c=>c.name==='camera_front'))db.exec('ALTER TABLE camera_remote_v2_state ADD COLUMN camera_front INTEGER CHECK(camera_front IN (0,1) OR camera_front IS NULL)');
+  if(!v2Columns.some(c=>c.name==='can_switch'))db.exec('ALTER TABLE camera_remote_v2_state ADD COLUMN can_switch INTEGER NOT NULL DEFAULT 0 CHECK(can_switch IN (0,1))');
   const columns=db.prepare('PRAGMA table_info(camera_remote_commands)').all() as {name:string}[];
   if(!columns.some(c=>c.name==='delivery_known'))db.exec('ALTER TABLE camera_remote_commands ADD COLUMN delivery_known INTEGER NOT NULL DEFAULT 0');
   if(!columns.some(c=>c.name==='delivered_at'))db.exec('ALTER TABLE camera_remote_commands ADD COLUMN delivered_at INTEGER');

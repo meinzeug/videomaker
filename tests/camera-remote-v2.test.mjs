@@ -91,3 +91,21 @@ test('a queued camera switch prevents a competing recording start',()=>{
   assert.throws(()=>queueCameraRequest(db,device,cmd('record_start'),clock(1020)),/verarbeitet bereits/);
  }finally{db.close();}
 });
+
+test('older v2 telemetry rows migrate additively without losing their existing state',()=>{
+ const db=new Database(':memory:');try{
+  db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY); CREATE TABLE camera_remote_v2_state(device_id TEXT PRIMARY KEY,sequence INTEGER NOT NULL,paused INTEGER);');
+  db.prepare('INSERT INTO camera_remote_v2_state VALUES(?,?,?)').run(device,4,1);
+  ensureCameraRemoteSchema(db);ensureCameraRemoteSchema(db);
+  assert.deepEqual(db.prepare('SELECT sequence,paused,camera_front,can_switch FROM camera_remote_v2_state WHERE device_id=?').get(device),{sequence:4,paused:1,camera_front:null,can_switch:0});
+ }finally{db.close();}
+});
+
+test('an incompatible older control schema is refused without rewriting its data',()=>{
+ const db=new Database(':memory:');try{
+  db.exec("CREATE TABLE projects(id TEXT PRIMARY KEY); CREATE TABLE camera_remote_controls(id TEXT PRIMARY KEY,device_id TEXT NOT NULL,recording_id TEXT NOT NULL,type TEXT NOT NULL CHECK(type IN ('record_pause','record_resume')),result TEXT NOT NULL DEFAULT 'queued' CHECK(result IN ('queued','server_expired','accepted','duplicate','rejected','expired')),created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,runtime_id TEXT NOT NULL,created_tick INTEGER NOT NULL,expires_tick INTEGER NOT NULL,delivered_at INTEGER,result_at INTEGER);");
+  db.prepare("INSERT INTO camera_remote_controls(id,device_id,recording_id,type,created_at,expires_at,runtime_id,created_tick,expires_tick) VALUES(?,?,?,'record_pause',?,?,?,?,?)").run(randomUUID(),device,recording,1,9991,runtime,1,9991);
+  assert.throws(()=>ensureCameraRemoteSchema(db),/sichere Migration/);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM camera_remote_controls').get().n,1);
+ }finally{db.close();}
+});
