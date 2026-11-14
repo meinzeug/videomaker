@@ -99,6 +99,10 @@ function requireTransaction(db:Database.Database){
 /** Acquire before queuing START in the same write transaction as the command. */
 export function claimCameraProject(db:Database.Database,recordingId:string,deviceId:string,projectId:string,now:number){
  requireTransaction(db);
+ // A LAN recording identity cannot later be silently reused by the web-camera path.
+ // The caller holds the same SQLite writer transaction as LAN project creation.
+ if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lan_capture_projects'").get()&&db.prepare('SELECT 1 FROM lan_capture_projects WHERE recording_id=? COLLATE NOCASE').get(recordingId))
+  throw new CameraProjectClaimError('conflict','Aufnahme-ID ist bereits einer LAN-Aufnahme zugeordnet.');
  const prior=db.prepare('SELECT device_id AS deviceId,project_id AS projectId,closed_at AS closedAt FROM camera_project_claims WHERE recording_id=?').get(recordingId) as {deviceId:string;projectId:string;closedAt:number|null}|undefined;
  if(prior){
   if(prior.deviceId!==deviceId||prior.projectId!==projectId||prior.closedAt!==null)
