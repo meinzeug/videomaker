@@ -12,10 +12,12 @@ import {spawn,spawnSync} from 'node:child_process';
 import {once} from 'node:events';
 import {setTimeout as delay} from 'node:timers/promises';
 import {issueTurnRestCredential} from '../../lib/turn-rest-credentials.ts';
+import {bridgeTestOnly,createBoundedFixtureServer,FRAME_BYTES} from '../../experiments/turn-wss/bridge.mjs';
+process.env.NODE_ENV='test';process.env.VIDEOMAKER_TURN_WSS_FIXTURE='1';
 
 const require=createRequire(process.env.VIDEOMAKER_TEST_REQUIRE_FROM||import.meta.url);
-const {WebSocket,WebSocketServer}=require('next/dist/compiled/ws');
-const MAX_FRAME=64*1024,MAX_TOTAL=8*1024*1024;
+const {WebSocket,WebSocketServer,createWebSocketStream}=require('next/dist/compiled/ws');
+const MAX_FRAME=FRAME_BYTES,MAX_TOTAL=8*1024*1024;
 const token=randomBytes(32).toString('base64url');
 const tokenMatches=value=>{
  const supplied=Buffer.from(typeof value==='string'?value:'');const expected=Buffer.from(`Bearer ${token}`);
@@ -25,50 +27,35 @@ const waitFor=async(fn,ms=3000)=>{const until=Date.now()+ms;while(Date.now()<unt
 const listen=async server=>{server.listen(0,'127.0.0.1');await once(server,'listening');return server.address().port;};
 const closeServer=async server=>{if(server.listening)await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));};
 
-/** Both directions forward binary frames as byte streams, pausing their source on backpressure. */
-function bridge(ws,tcp,stats,idleMs=5000){
- let closed=false,inBytes=0,outBytes=0,timer,deadline;
- const finish=()=>{if(closed)return;closed=true;clearTimeout(timer);clearTimeout(deadline);tcp.destroy();if(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING)ws.terminate();};
- const touch=()=>{clearTimeout(timer);timer=setTimeout(finish,idleMs);};
- deadline=setTimeout(finish,15000);touch();
- ws.on('message',(data,binary)=>{
-  if(closed)return;
-  if(!binary){finish();return;}
-  const chunk=Buffer.from(data);inBytes+=chunk.length;if(inBytes>MAX_TOTAL){stats.byteLimit++;finish();return;}touch();
-  // Fixture only: this bundled ws exposes no public pause API; _socket is private.
-  if(!tcp.write(chunk)){stats.inboundPauses++;ws._socket.pause();}
- });
- tcp.on('drain',()=>{if(!closed){stats.inboundResumes++;ws._socket.resume();}});
- tcp.on('data',chunk=>{
-  if(closed)return;
-  outBytes+=chunk.length;if(outBytes>MAX_TOTAL){stats.byteLimit++;finish();return;}touch();
-  // At most one WebSocket send is outstanding per TCP direction.
-  tcp.pause();stats.outboundPauses++;
-  if(ws.readyState!==WebSocket.OPEN){finish();return;}
-  ws.send(chunk,{binary:true,compress:false},error=>{if(error)finish();else if(!closed)tcp.resume();});
- });
- ws.on('close',finish);ws.on('error',finish);tcp.on('close',finish);tcp.on('error',finish);tcp.on('end',finish);
- return finish;
+/** The production app never calls this test-only bridge. */
+function bridge(ws,tcp,stats,idleMs=5000,signal,lifetimeMs=15000){
+ const handle=bridgeTestOnly({websocket:ws,upstream:tcp,createWebSocketStream,idleMs,lifetimeMs,maxBytes:MAX_TOTAL,signal,
+  onEvent(type){if(type==='websocket-backpressure')stats.inboundPauses++;if(type==='websocket-resumed')stats.inboundResumes++;if(type==='tcp-backpressure')stats.outboundPauses++;if(type==='tcp-resumed')stats.outboundResumes++;}});
+ void handle.closed.then(reason=>{if(reason.endsWith('-limit'))stats.byteLimit++;});return handle;
 }
-function startTunnel(key,cert,upstream,maxConnections=8,idleMs=5000){
- const server=createHttpsServer({key,cert});const wss=new WebSocketServer({noServer:true,maxPayload:MAX_FRAME,perMessageDeflate:false});
- const clients=new Set(),connections=new Set(),stats={inboundPauses:0,inboundResumes:0,outboundPauses:0,byteLimit:0};
+function startTunnel(key,cert,upstream,maxConnections=8,idleMs=5000,signal,lifetimeMs=15000){
+ const server=createHttpsServer({key,cert});const wss=createBoundedFixtureServer(WebSocketServer);
+ const clients=new Set(),pending=new Set(),upstreams=new Set(),connections=new Set(),handles=new Set(),stats={inboundPauses:0,inboundResumes:0,outboundPauses:0,outboundResumes:0,byteLimit:0};
  server.on('connection',socket=>{connections.add(socket);socket.on('close',()=>connections.delete(socket));});
  server.on('upgrade',(req,socket,head)=>{
-  if(req.url!=='/fixture'||!tokenMatches(req.headers.authorization)||clients.size>=maxConnections){socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');return;}
-  wss.handleUpgrade(req,socket,head,ws=>{
-   clients.add(ws);ws.once('close',()=>clients.delete(ws));
-   const tcp=createConnection({host:'127.0.0.1',port:upstream,highWaterMark:1024});bridge(ws,tcp,stats,idleMs);
+  if(req.url!=='/fixture'||!tokenMatches(req.headers.authorization)||clients.size+pending.size>=maxConnections){socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');return;}
+  pending.add(socket);socket.pause();
+  const tcp=createConnection({host:'127.0.0.1',port:upstream,highWaterMark:1024});upstreams.add(tcp);
+  tcp.once('close',()=>upstreams.delete(tcp));tcp.once('error',()=>{pending.delete(socket);socket.destroy();});
+  socket.once('close',()=>{pending.delete(socket);if(!tcp.destroyed&&tcp.connecting)tcp.destroy();});
+  tcp.once('connect',()=>{
+   if(socket.destroyed){tcp.destroy();return;}pending.delete(socket);
+   wss.handleUpgrade(req,socket,head,ws=>{clients.add(ws);ws.once('close',()=>clients.delete(ws));const handle=bridge(ws,tcp,stats,idleMs,signal,lifetimeMs);handles.add(handle);void handle.closed.then(()=>handles.delete(handle));socket.resume();});
   });
  });
- return {server,stats,clients,async close(){for(const ws of clients)ws.terminate();for(const socket of connections)socket.destroy();await closeServer(server);wss.close();}};
+ return {server,stats,clients,handles,async close(){for(const ws of clients)ws.terminate();for(const tcp of upstreams)tcp.destroy();for(const socket of connections)socket.destroy();await closeServer(server);wss.close();}};
 }
 function wsClient(port,cert,auth=token){return new WebSocket(`wss://127.0.0.1:${port}/fixture`,{ca:cert,servername:'localhost',headers:{Authorization:`Bearer ${auth}`},perMessageDeflate:false,maxPayload:MAX_FRAME});}
 async function rejected(ws){
  return new Promise(resolve=>{ws.once('open',()=>resolve(false));ws.once('error',()=>resolve(true));ws.once('unexpected-response',(_req,res)=>{res.resume();resolve(true);});});
 }
 function localProxy(tunnelPort,cert){
- const clients=new Set();const stats={inboundPauses:0,outboundPauses:0};
+ const clients=new Set();const stats={inboundPauses:0,inboundResumes:0,outboundPauses:0,outboundResumes:0,byteLimit:0};
  const server=createTcpServer(socket=>{
   socket.pause();const ws=wsClient(tunnelPort,cert);clients.add(ws);ws.once('close',()=>clients.delete(ws));
   ws.once('open',()=>{bridge(ws,socket,stats);socket.resume();});
@@ -97,16 +84,31 @@ test('WSS fixture authenticates, limits frames, propagates backpressure and clos
   assert.equal(await rejected(wsClient(port,cert)),true); // bounded concurrent connections
   const body=randomBytes(60*1024);const received=once(ws,'message');ws.send(body,{binary:true});
   const [echoed,binary]=await received;assert.equal(binary,true);assert.equal(createHash('sha256').update(echoed).digest('hex'),createHash('sha256').update(body).digest('hex'));
-  await waitFor(()=>tunnel.stats.outboundPauses>0);
   ws.close();await once(ws,'close');await waitFor(()=>tunnel.clients.size===0);
+  const previousPauses=tunnel.stats.inboundPauses;
   pauseIncoming=true;const stalled=await openSocket(wsClient(port,cert));stalled.on('message',()=>{});
   for(let i=0;i<110;i++)stalled.send(body,{binary:true});
-  await waitFor(()=>!!stalledPeer&&tunnel.stats.inboundPauses>0,5000);
-  stalledPeer.resume();await waitFor(()=>tunnel.stats.inboundResumes>0,5000);stalled.terminate();await once(stalled,'close');await waitFor(()=>tunnel.clients.size===0);
+  await waitFor(()=>!!stalledPeer&&tunnel.stats.inboundPauses>previousPauses,5000);
+  const previousResumes=tunnel.stats.inboundResumes;
+  stalledPeer.resume();await waitFor(()=>tunnel.stats.inboundResumes>previousResumes,5000);stalled.terminate();await once(stalled,'close');await waitFor(()=>tunnel.clients.size===0);
   const text=await openSocket(wsClient(port,cert));text.send('not binary');await once(text,'close');await waitFor(()=>tunnel.clients.size===0);
   const oversize=await openSocket(wsClient(port,cert));oversize.send(Buffer.alloc(MAX_FRAME+1));await once(oversize,'close');await waitFor(()=>tunnel.clients.size===0);
  }finally{await tunnel.close();await closeServer(echo);}
  assert.equal(tunnel.clients.size,0);
+});
+
+test('slow WSS receiver applies TCP backpressure and later resumes', {timeout:15000},async()=>{
+ const upstream=createTcpServer(socket=>{
+  socket.on('error',()=>{});let remaining=100;const chunk=Buffer.alloc(60*1024);
+  function feed(){while(remaining>0){remaining--;if(!socket.write(chunk)){socket.once('drain',feed);return;}}}
+  feed();
+ });const upstreamPort=await listen(upstream);
+ const tunnel=startTunnel(key,cert,upstreamPort,1);const port=await listen(tunnel.server);
+ try{
+  const ws=await openSocket(wsClient(port,cert));const reader=createWebSocketStream(ws,{highWaterMark:1024});reader.on('error',()=>{});reader.pause();
+  await waitFor(()=>tunnel.stats.outboundPauses>0,5000);const previous=tunnel.stats.outboundResumes;
+  reader.resume();await waitFor(()=>tunnel.stats.outboundResumes>previous,5000);reader.destroy();await waitFor(()=>tunnel.clients.size===0);
+ }finally{await tunnel.close();await closeServer(upstream);}
 });
 
 test('idle timeout closes both endpoints', {timeout:5000},async()=>{
@@ -117,13 +119,50 @@ test('idle timeout closes both endpoints', {timeout:5000},async()=>{
  finally{await tunnel.close();await closeServer(upstream);}
 });
 
+test('prototype is disabled in production or without the explicit fixture flag',()=>{
+ const before=process.env.NODE_ENV,flag=process.env.VIDEOMAKER_TURN_WSS_FIXTURE;
+ try{
+  process.env.NODE_ENV='production';assert.throws(()=>createBoundedFixtureServer(WebSocketServer),/FIXTURE_DISABLED/);
+  process.env.NODE_ENV='test';delete process.env.VIDEOMAKER_TURN_WSS_FIXTURE;assert.throws(()=>bridgeTestOnly({}),/FIXTURE_DISABLED/);
+ }finally{process.env.NODE_ENV=before;process.env.VIDEOMAKER_TURN_WSS_FIXTURE=flag;}
+});
+
+test('abort closes the WebSocket and TCP endpoints and resolves the shutdown', {timeout:5000},async()=>{
+ let upstreamClosed=false;
+ const upstream=createTcpServer(socket=>{socket.on('close',()=>{upstreamClosed=true;});socket.on('error',()=>{});socket.resume();});const upstreamPort=await listen(upstream);
+ const controller=new AbortController();const tunnel=startTunnel(key,cert,upstreamPort,1,5000,controller.signal);const port=await listen(tunnel.server);
+ try{
+  const ws=await openSocket(wsClient(port,cert));await waitFor(()=>tunnel.handles.size===1);const handle=[...tunnel.handles][0];const closed=once(ws,'close');controller.abort();
+  await closed;assert.equal(await handle.closed,'aborted');await waitFor(()=>upstreamClosed&&tunnel.clients.size===0&&tunnel.handles.size===0);
+ }finally{await tunnel.close();await closeServer(upstream);}
+});
+
+test('text frames never reach the TCP peer', {timeout:5000},async()=>{
+ let received=0;
+ const upstream=createTcpServer(socket=>{socket.on('data',chunk=>{received+=chunk.length;});socket.on('error',()=>{});});const upstreamPort=await listen(upstream);
+ const tunnel=startTunnel(key,cert,upstreamPort,1);const port=await listen(tunnel.server);
+ try{const ws=await openSocket(wsClient(port,cert));const closed=once(ws,'close');ws.send('must not reach TCP');await closed;await waitFor(()=>tunnel.clients.size===0);assert.equal(received,0);}
+ finally{await tunnel.close();await closeServer(upstream);}
+});
+
+test('absolute lifetime terminates a tunnel even with ongoing traffic', {timeout:5000},async()=>{
+ const upstream=createTcpServer(socket=>{socket.on('error',()=>{});socket.on('data',chunk=>socket.write(chunk));});const upstreamPort=await listen(upstream);
+ const tunnel=startTunnel(key,cert,upstreamPort,1,150,undefined,500);const port=await listen(tunnel.server);
+ let timer;
+ try{
+  const ws=await openSocket(wsClient(port,cert));ws.on('message',()=>{});await waitFor(()=>tunnel.handles.size===1);const handle=[...tunnel.handles][0];const closed=once(ws,'close');
+  timer=setInterval(()=>{if(ws.readyState===WebSocket.OPEN)ws.send(Buffer.from([1]),{binary:true});},40);
+  await closed;assert.equal(await handle.closed,'lifetime');await waitFor(()=>tunnel.clients.size===0);
+ }finally{clearInterval(timer);await tunnel.close();await closeServer(upstream);}
+});
+
 test('total byte budget terminates the tunnel', {timeout:15000},async()=>{
  const upstream=createTcpServer(socket=>{socket.on('error',()=>{});socket.resume();});const upstreamPort=await listen(upstream);
  const tunnel=startTunnel(key,cert,upstreamPort,1);const port=await listen(tunnel.server);
  try{
   const ws=await openSocket(wsClient(port,cert));const closed=once(ws,'close');const chunk=Buffer.alloc(MAX_FRAME);
   for(let i=0;i<130;i++)ws.send(chunk,{binary:true});
-  await closed;assert.equal(tunnel.stats.byteLimit,1);await waitFor(()=>tunnel.clients.size===0);
+  await closed;await waitFor(()=>tunnel.stats.byteLimit===1);assert.equal(tunnel.stats.byteLimit,1);await waitFor(()=>tunnel.clients.size===0);
  }finally{await tunnel.close();await closeServer(upstream);}
 });
 
