@@ -8,6 +8,7 @@ Dieser Entwurf ist **nicht implementiert oder freigeschaltet**. Videomaker ist d
 - Die Android-App bewahrt weder Passwort noch Cookie dauerhaft auf. Nach Prozessende oder Sitzungsablauf ist eine erneute Anmeldung nötig. Manche Uploadfreigaben sind bewusst an die aktuelle Sitzung gebunden und dürfen bei einer Neuanmeldung nicht unbemerkt ausgeweitet werden.
 - Die aktuelle LAN-Verbindung authentifiziert Nachrichten mit einem Sitzungscode, verschlüsselt ihren TCP-Inhalt aber nicht. Eine gepinnte TLS-Verbindung und ein verschlüsselter Server-Signalisierungsrelay sind separate Arbeiten; vorbereitete WIP-Bausteine sind keine Produktivfreigabe.
 - Die beiden Testtelefone erreichen denselben WLAN-Zugangspunkt und Videomaker, konnten sich dort jedoch nicht direkt erreichen. Ein gemeinsames WLAN garantiert daher keinen Direktpfad.
+- Der aktuelle WebRTC-Hauptpfad erstellt eine Videospur, aber keine Live-Audiospur. Die Videoaufnahme verwendet einen separaten lokalen Mikrofonpfad. Live-Ton zwischen den Apps sowie Mikrofonkonkurrenz und Echovermeidung sind noch offen.
 
 ## Geräte registrieren
 
@@ -27,7 +28,11 @@ Erste Zuordnung und Freigabe sind von automatischem Wiederverbinden bereits regi
 
 ## Direkt und über den Server
 
-Ein registriertes Paar versucht zuerst einen zeitlich begrenzten Direktaufbau im vorhandenen Netz. Identitäten, Rollen, Pair-ID und aktuelle Zustimmungen werden vor jeder neuen Verbindung geprüft. Authentisierte und gepinnte Ende-zu-Ende-Verschlüsselung schützt Signalisierung und Steuerung; ein HMAC auf Klartext allein erfüllt das nicht. Bei Isolation oder Timeout erfolgt ein nachvollziehbarer Wechsel zu einem vom Studio autorisierten Serverpfad. Rückkehr zum Direktpfad darf laufende Aufnahmen nicht abbrechen oder einen bereits erteilten Befehl wiederholen.
+Anmeldung, Gerätesitzungen, Paarverwaltung und die anfängliche Signalisierung erfolgen über Videomaker. Ein registriertes Paar versucht danach zuerst einen zeitlich begrenzten Direktaufbau im vorhandenen Netz. Identitäten, Rollen, Pair-ID und aktuelle Zustimmungen werden vor jeder neuen Verbindung geprüft. Authentisierte und gepinnte Ende-zu-Ende-Verschlüsselung schützt Signalisierung und Steuerung; ein HMAC auf Klartext allein erfüllt das nicht. Die WebRTC-Fingerprints sind an diese authentisierte Signalisierung zu binden. Der direkte Audio-/Videostrom läuft unmittelbar zwischen den Smartphones und nicht über den Server.
+
+Ist der direkte Medienpfad einmal aufgebaut, soll er einen anschließenden Studioausfall überstehen: Lokale Aufnahme und direkte Medien laufen weiter; Dashboard-Befehle, neue Paarungen und Cloud-Uploads warten auf die Serververbindung. Ein zentraler Widerruf während dieser Trennung kann erst nach Wiederverbindung bekannt werden; ein lokaler Stopp muss weiterhin möglich sein. Diese Grenze muss im Produkt nachvollziehbar sein.
+
+Die ICE-Strategie prüft zunächst direkte Kandidaten mit begrenzter Wartezeit und bindet TURN bei Isolation oder Timeout als ausdrücklichen Fallback ein. Ob ein späterer Wechsel zurück zu direkt störungsfrei funktioniert, muss praktisch geprüft werden; er darf laufende Aufnahmen nicht abbrechen oder einen bereits erteilten Befehl wiederholen. Verbindungsstatus und ausgewählter Pfad sollen erkennbar sein. Ein bloßes Vorhandensein von Direktkandidaten beweist keinen funktionierenden Direktstrom.
 
 Der Server-Signalisierungsrelay transportiert begrenzte, verschlüsselte Nachrichten und prüft beide frischen Gerätesitzungen, Raum, Rolle und Widerruf. Tests für Reihenfolge, Wiedergabe, Netzabbrüche, langsame Teilnehmer, Quoten und Widerruf während laufender Auslieferung sind vor Freigabe erforderlich. Der Relay sieht nur notwendige Verbindungsmetadaten; Passwörter, Skripttexte und private Schlüssel gehören nicht in QR-Codes oder unverschlüsselten LAN-Verkehr.
 
@@ -39,4 +44,4 @@ Als Alternative kann ein authentisierter HTTPS-WebSocket-Tunnel über den bereit
 
 ## Abnahmetests
 
-Neben Unit- und HTTP-Tests sind zwei echte Telefone mit Direktverbindung und mit aktivierter Client-Isolation erforderlich: Erstregistrierung, Neustart ohne Passwort, Server- und Netzwechsel, Ablauf und Erneuerung, ungültige Schlüssel/Nonces, parallele Einlösung, Gerätewiderruf während Sitzung und Upload, Offline-Wiederaufnahme, TURN/TCP und -UDP soweit freigegeben sowie Integrität von Bild, Ton und Originaldatei. Bestehende Projekte und Aufnahmen sind bei allen Tests zu erhalten.
+Neben Unit- und HTTP-Tests sind zwei echte Telefone mit Direktverbindung und mit aktivierter Client-Isolation erforderlich: Erstregistrierung, Neustart ohne Passwort, Server- und Netzwechsel, Ablauf und Erneuerung, ungültige Schlüssel/Nonces, parallele Einlösung, Gerätewiderruf während Sitzung und Upload, Offline-Wiederaufnahme, TURN/TCP und -UDP soweit freigegeben sowie Integrität von Bild, Ton und Originaldatei. Der Direktversuch ist anhand tatsächlich gewählter ICE-Kandidaten und empfangener Audio-/Videopakete zu belegen; danach wird der Serverzugang unterbrochen und kontinuierlicher Direktstream mit lokaler Aufnahme geprüft. Bei WLAN-Isolation ist entsprechend der tatsächlich gewählte TURN-Pfad zu belegen. Bestehende Projekte und Aufnahmen sind bei allen Tests zu erhalten.
