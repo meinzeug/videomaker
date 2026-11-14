@@ -4,6 +4,36 @@ Stand: Die Unterpfad-Integration besitzt **noch keine gemeinsame Sitzung**.
 Haben und Video-Maker haben eigene Anmeldungen. Die im Unterpfad-Browsertest
 geprüfte lokale Haben-Anmeldung ist kein Nachweis für Single Sign-on.
 
+Ein optionaler zusätzlicher Sitzungswächter ist vorbereitet: Bei
+`HABEN_VIDEOMAKER_SESSION_GUARD=required` fragt Haben die Video-Maker-Sitzung für
+geschützte Anfragen über `HABEN_VIDEOMAKER_SESSION_URL` auf IPv4-Loopback unter
+dem festen Pfad `/api/internal/buchhaltung/session` ab. Das gemeinsame Secret
+`HABEN_VIDEOMAKER_INTERNAL_SECRET` muss mindestens 32 Zeichen lang sein und
+Video-Makers `BUCHHALTUNG_SESSION_CHECK_SECRET` entsprechen. Der lokale Aufruf
+übermittelt nur das Video-Maker-Sitzungscookie und das Secret; nur Status 204
+erlaubt die Anfrage. Keine Anmeldung, Fehler und Timeout führen zu 401 bzw. 503.
+Jede Anfrage wird neu geprüft; ein Erfolg wird nicht zwischengespeichert.
+Standardmäßig ist dieser Wächter aus und ändert Upstreams Verhalten nicht.
+Im Pflichtmodus tragen auch erfolgreiche von der Middleware bearbeitete Antworten
+`Cache-Control: private, no-store`. Ob ein Browser nach Logout eine zuvor
+angezeigte Seite über seinen Zurück-Vorwärts-Speicher kurz wiederherstellt,
+ist damit nicht abschließend geklärt und muss gesondert getestet werden.
+
+**Der Wächter ist noch nicht für den Produktivbetrieb freigegeben.** Das Secret
+authentifiziert Haben gegenüber Video-Maker, aber die Loopback-Verbindung weist
+die Identität des angesprochenen Servers nicht nach. Ein fremder lokaler Prozess
+könnte bei einem Ausfall den Port besetzen, Cookie und Secret entgegennehmen und
+eine erfolgreiche Prüfung vortäuschen. Vor der Aktivierung ist eine beidseitig
+authentifizierte Verbindung zu implementieren und zu prüfen, beispielsweise mit
+mTLS oder einem Unix-Socket mit restriktiven Zugriffsrechten und geprüftem Peer.
+
+REST/MCP mit eigener Bearer-Authentifizierung und der GET-OIDC-Callback haben
+eng begrenzte Ausnahmen; der Bank-Callback bleibt geschützt. Der Wächter ist
+keine allein ausreichende Perimetersperre: Statische Dateien können vom
+Nitro-Server vor der Anwendungsmiddleware ausgeliefert werden. Der Dienst muss
+an Loopback gebunden und der öffentliche Proxy entsprechend abgesichert sein.
+Auch dieser Baustein erzeugt keine Haben-Sitzung und löst kein Single Sign-on.
+
 ## Ausgangslage
 
 Video-Maker verwaltet gegenwärtig eine signierte Admin-Sitzung im Cookie

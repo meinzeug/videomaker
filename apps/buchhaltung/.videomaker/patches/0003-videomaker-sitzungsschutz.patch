@@ -1,0 +1,209 @@
+diff --git a/apps/web/src/server/videomaker-session.test.ts b/apps/web/src/server/videomaker-session.test.ts
+new file mode 100644
+index 0000000..4ef0d2f
+--- /dev/null
++++ b/apps/web/src/server/videomaker-session.test.ts
+@@ -0,0 +1,89 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { guardVideomakerSession } from "./videomaker-session.ts";
++
++const config = { mode: "required", endpoint: "http://127.0.0.1:3000/api/internal/buchhaltung/session", secret: "s".repeat(32) };
++const request = (path = "/buchhaltung/belege", cookie = "kontrakurs_session=12345.test.signature", method = "GET") =>
++  new Request(`http://localhost:3199${path}`, { method, headers: { cookie, "x-forwarded-user": "inhaber" } });
++
++afterEach(() => vi.unstubAllEnvs());
++
++describe("Video-Maker-Sitzungsprüfung", () => {
++  it("ist ohne Aktivierung rückwärtskompatibel und lehnt fehlerhafte Pflichtkonfiguration ab", async () => {
++    const send = vi.fn();
++    expect(await guardVideomakerSession(request(), { ...config, mode: undefined }, send)).toBeNull();
++    for (const invalid of [
++      { ...config, mode: "requred" },
++      { ...config, endpoint: undefined },
++      { ...config, secret: "short" },
++      { ...config, endpoint: "https://example.com/api/internal/buchhaltung/session" },
++      { ...config, endpoint: "http://localhost:3000/api/internal/buchhaltung/session" },
++      { ...config, endpoint: "http://127.0.0.1:3000/andere" },
++      { ...config, endpoint: "http://127.0.0.1:3000/api/internal/buchhaltung/session?token=1" },
++      { ...config, endpoint: "http://user:pass@127.0.0.1:3000/api/internal/buchhaltung/session" },
++    ])
++      expect((await guardVideomakerSession(request(), invalid, send))?.status).toBe(503);
++    expect(send).not.toHaveBeenCalled();
++  });
++
++  it("verwendet nur das Video-Maker-Cookie und das interne Secret, niemals Browser-Header", async () => {
++    const send = vi.fn(async () => new Response(null, { status: 204 }));
++    expect(await guardVideomakerSession(request("/buchhaltung/belege", "haben=privat; kontrakurs_session=12345.test.signature"), config, send)).toBeNull();
++    expect(send).toHaveBeenCalledTimes(1);
++    const [url, init] = send.mock.calls[0] as unknown as [string, RequestInit];
++    expect(url).toBe(config.endpoint);
++    expect(init.headers).toEqual({ cookie: "kontrakurs_session=12345.test.signature", "X-Videomaker-Internal-Secret": config.secret });
++    expect(init.redirect).toBe("error");
++    expect(init.cache).toBe("no-store");
++    expect(init.signal).toBeInstanceOf(AbortSignal);
++  });
++
++  it("weist fehlende, widersprüchliche oder manipulierte Cookies ohne Anfrage ab", async () => {
++    const send = vi.fn();
++    for (const cookie of ["", "haben=foo", "kontrakurs_session=", "kontrakurs_session=a; kontrakurs_session=b", "kontrakurs_session=a,b"]) {
++      const result = await guardVideomakerSession(request("/buchhaltung/", cookie), config, send);
++      expect(result?.status).toBe(401);
++      expect(result?.headers.get("Cache-Control")).toBe("no-store");
++    }
++    expect(send).not.toHaveBeenCalled();
++  });
++
++  it("prüft jede Anfrage neu und akzeptiert nach Widerruf keine kopierte Sitzung", async () => {
++    const send = vi
++      .fn()
++      .mockResolvedValueOnce(new Response(null, { status: 204 }))
++      .mockResolvedValueOnce(new Response(null, { status: 401 }));
++    expect(await guardVideomakerSession(request(), config, send)).toBeNull();
++    expect((await guardVideomakerSession(request(), config, send))?.status).toBe(401);
++    expect(send).toHaveBeenCalledTimes(2);
++  });
++
++  it("schließt bei Ausfällen, Weiterleitungen und unerwarteten Antworten", async () => {
++    for (const send of [
++      async () => {
++        throw new Error("Netzfehler");
++      },
++      async () => new Response(null, { status: 302, headers: { location: "https://example.com" } }),
++      async () => new Response(null, { status: 200 }),
++      async () => new Response(null, { status: 503 }),
++    ])
++      expect((await guardVideomakerSession(request(), config, send))?.status).toBe(503);
++  });
++
++  it("nimmt nur tokenbasierte APIs und den eng begrenzten OIDC-Callback aus", async () => {
++    vi.stubEnv("BASE_URL", "/buchhaltung/");
++    const send = vi.fn();
++    for (const path of ["/buchhaltung/api/mcp", "/buchhaltung/api/v1/belege", "/buchhaltung/api/auth/callback/oidc"]) {
++      expect(await guardVideomakerSession(request(path, ""), config, send)).toBeNull();
++    }
++    for (const [path, method] of [
++      ["/buchhaltung/api/mcp/extra", "GET"],
++      ["/buchhaltung/api/v10/belege", "GET"],
++      ["/buchhaltung/api/auth/callback/oidc", "POST"],
++      ["/buchhaltung/api/bank/callback", "GET"],
++      ["/buchhaltung/api/belege/teilen", "POST"],
++      ["/buchhaltung/setup", "GET"],
++    ])
++      expect((await guardVideomakerSession(request(path, "", method), config, send))?.status).toBe(401);
++    expect(send).not.toHaveBeenCalled();
++  });
++});
+diff --git a/apps/web/src/server/videomaker-session.ts b/apps/web/src/server/videomaker-session.ts
+new file mode 100644
+index 0000000..901895d
+--- /dev/null
++++ b/apps/web/src/server/videomaker-session.ts
+@@ -0,0 +1,80 @@
++import { appPath } from "../lib/app-path.ts";
++
++type GuardConfig = { mode: string | undefined; endpoint: string | undefined; secret: string | undefined };
++type GuardFetch = (input: string, init: RequestInit) => Promise<Response>;
++
++/** Nur ausdrücklich aktivieren: die lokale Haben-Anmeldung bleibt ansonsten wie bei Upstream. */
++const configuration = (): GuardConfig => ({
++  mode: process.env.HABEN_VIDEOMAKER_SESSION_GUARD,
++  endpoint: process.env.HABEN_VIDEOMAKER_SESSION_URL,
++  secret: process.env.HABEN_VIDEOMAKER_INTERNAL_SECRET,
++});
++
++/** Diese Endpunkte authentifizieren selbst per Bearer-Token bzw. validieren den OIDC-Callback. */
++function independentlyAuthenticated(request: Request): boolean {
++  const path = new URL(request.url).pathname;
++  return path === appPath("/api/mcp") || path.startsWith(appPath("/api/v1/")) || (request.method === "GET" && path === appPath("/api/auth/callback/oidc"));
++}
++
++/** Niemals fremde Cookies oder mehrere widersprüchliche Sitzungscookies weiterreichen. */
++function sessionCookie(request: Request): string | null {
++  const values = (request.headers.get("cookie") ?? "")
++    .split(";")
++    .map((part) => part.trim())
++    .filter((part) => part.startsWith("kontrakurs_session="));
++  if (values.length !== 1 || !/^kontrakurs_session=[A-Za-z0-9_.-]{1,512}$/.test(values[0]!)) return null;
++  return values[0]!;
++}
++
++/** Der Identitätsdienst ist ausschließlich lokal erreichbar und hat einen festgelegten Endpunkt. */
++function endpointUrl(endpoint: string | undefined): string | null {
++  if (!endpoint) return null;
++  try {
++    const url = new URL(endpoint);
++    if (
++      url.protocol !== "http:" ||
++      url.hostname !== "127.0.0.1" ||
++      !url.port ||
++      url.username ||
++      url.password ||
++      url.pathname !== "/api/internal/buchhaltung/session" ||
++      url.search ||
++      url.hash
++    )
++      return null;
++    return url.href;
++  } catch {
++    return null;
++  }
++}
++
++/**
++ * Bei aktivierter Video-Maker-Sitzungsprüfung keinen gecachten Erfolg verwenden. Die Prüfung
++ * ergänzt die Haben-Anmeldung; sie erzeugt selbst keine Haben-Sitzung oder OIDC-Identität.
++ */
++export async function guardVideomakerSession(request: Request, config = configuration(), send: GuardFetch = fetch): Promise<Response | null> {
++  if (!config.mode || config.mode === "off") return null;
++  const endpoint = endpointUrl(config.endpoint);
++  if (config.mode !== "required" || !endpoint || !config.secret || config.secret.length < 32) {
++    return new Response("Die Video-Maker-Sitzungsprüfung ist nicht verfügbar.", { status: 503, headers: { "Cache-Control": "no-store" } });
++  }
++  if (independentlyAuthenticated(request)) return null;
++  const cookie = sessionCookie(request);
++  if (!cookie) return new Response("Bitte bei Video-Maker anmelden.", { status: 401, headers: { "Cache-Control": "no-store" } });
++  try {
++    const response = await send(endpoint, {
++      method: "GET",
++      headers: { cookie, "X-Videomaker-Internal-Secret": config.secret },
++      cache: "no-store",
++      redirect: "error",
++      signal: AbortSignal.timeout(2000),
++    });
++    if (response.status === 204) return null;
++    if (response.status === 401 || response.status === 403) {
++      return new Response("Bitte bei Video-Maker anmelden.", { status: 401, headers: { "Cache-Control": "no-store" } });
++    }
++  } catch {
++    // Keine Zugangsdaten, URLs oder Fehlerobjekte mit Anfragedaten protokollieren.
++  }
++  return new Response("Die Video-Maker-Sitzungsprüfung ist nicht verfügbar.", { status: 503, headers: { "Cache-Control": "no-store" } });
++}
+diff --git a/apps/web/src/start.ts b/apps/web/src/start.ts
+index 7e01d39..52988af 100644
+--- a/apps/web/src/start.ts
++++ b/apps/web/src/start.ts
+@@ -1,6 +1,17 @@
+ import { createCsrfMiddleware, createMiddleware, createStart } from "@tanstack/react-start";
+ import { csrfOptions } from "./server/csrf.ts";
+ import { withFrameAncestors } from "./server/security-headers.ts";
++import { guardVideomakerSession } from "./server/videomaker-session.ts";
++
++const videomakerSession = createMiddleware().server(async ({ request, next }) => {
++  const denial = await guardVideomakerSession(request);
++  if (denial) return denial;
++  const result = await next();
++  if (process.env.HABEN_VIDEOMAKER_SESSION_GUARD !== "required") return result;
++  const headers = new Headers(result.response.headers);
++  headers.set("Cache-Control", "private, no-store");
++  return { ...result, response: new Response(result.response.body, { status: result.response.status, statusText: result.response.statusText, headers }) };
++});
+ 
+ /** Läuft für jede Anfrage, Seiten wie API */
+ const securityHeaders = createMiddleware().server(async ({ next }) => {
+@@ -8,4 +19,4 @@ const securityHeaders = createMiddleware().server(async ({ next }) => {
+   return { ...result, response: withFrameAncestors(result.response) };
+ });
+ 
+-export const startInstance = createStart(() => ({ requestMiddleware: [createCsrfMiddleware(csrfOptions), securityHeaders] }));
++export const startInstance = createStart(() => ({ requestMiddleware: [videomakerSession, createCsrfMiddleware(csrfOptions), securityHeaders] }));

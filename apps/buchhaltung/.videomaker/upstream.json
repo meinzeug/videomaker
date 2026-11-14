@@ -2,5 +2,9 @@
   "repository": "https://github.com/firsttris/haben.git",
   "commit": "0b2613cb6ca57746033e51d93595487e8daa9dbe",
   "version": "0.8.2",
-  "integrationPatches": ["patches/0001-videomaker-unterpfad.patch", "patches/0002-native-einrichtung.patch"]
+  "integrationPatches": [
+    "patches/0001-videomaker-unterpfad.patch",
+    "patches/0002-native-einrichtung.patch",
+    "patches/0003-videomaker-sitzungsschutz.patch"
+  ]
 }

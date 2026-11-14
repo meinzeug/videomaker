@@ -86,3 +86,4 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .apk-download{width:44px;height:44px;border-radius:8px;display:flex;flex-direction:column;justify-content:center;gap:2px}.apk-download span{font-size:8px;line-height:1;color:#ff9ba0;letter-spacing:.03em}
 .apk-download:focus-visible{outline:2px solid #ff7378;outline-offset:2px}
 @media(max-width:500px){.top-actions{gap:0}.top-actions .status{display:none}}
+.haben-settings{max-width:760px;padding:24px}.haben-settings p{line-height:1.55}.haben-settings code{overflow-wrap:anywhere}.haben-settings button{display:inline-flex;align-items:center;gap:8px}
