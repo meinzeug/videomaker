@@ -21,7 +21,7 @@ export function validateFactSheet(raw:unknown,sources:unknown,report:unknown):Fa
  if(!facts.length)throw new Error('Das Faktenblatt enthält keine Aussagen mit bekannten Quellen.');
  let omitted=0;const quotes:Quote[]=[];
  for(const item of data.zitate.slice(0,100)){
-  const q=obj(item),text=str(q?.text,2000),quelle=str(q?.quelle,2000);
+  const q=obj(item),text=typeof q?.text==='string'?q.text.trim():'',quelle=str(q?.quelle,2000);
   if(text&&known.has(quelle)&&originals.get(quelle)?.some(source=>source.includes(text)))quotes.push({text,quelle});else omitted++;
  }
  const strings=(items:unknown[])=>items.map(x=>str(x,1200)).filter(Boolean).slice(0,100);

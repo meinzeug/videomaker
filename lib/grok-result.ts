@@ -32,7 +32,7 @@ export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,_c
  const quoted:string[]=[];
  for(let index=0;index<script.length;index++){
   const char=script[index],close=pairs[char];
-  if(close){const end=script.indexOf(close,index+1);if(end<0||end-index>2001){issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht vollständig begrenzt.'});break;}quoted.push(script.slice(index+1,end));index=end;}
+  if(close){const end=script.indexOf(close,index+1);if(end<0){issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht vollständig begrenzt.'});break;}quoted.push(script.slice(index+1,end));index=end;}
   else if(closers.has(char)){issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht vollständig begrenzt.'});break;}
  }
  // Each announced quotation must be checked separately, including multiple

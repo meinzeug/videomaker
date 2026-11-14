@@ -31,6 +31,17 @@ test('literal quotes require the exact text in a retrieved original, never a fal
  assert.deepEqual(facts.zitate,[rawFacts.zitate[0]]);assert.match(facts.hinweise_fuer_dennis.join(' '),/2 Zitat/);
  const fallback=validateFactSheet(rawFacts,source,{...report,source_excerpts:[{url,status:'unavailable',text:'bestätigte Originalzitat'}]});assert.deepEqual(fallback.zitate,[]);
 });
+test('long literal quotations are verified as a whole, never silently shortened',()=>{
+ const prefix='W'.repeat(2000),claimed=prefix+' erfundener Zusatz',raw={...rawFacts,zitate:[{text:claimed,quelle:url}]};
+ const incomplete=validateFactSheet(raw,source,{...report,source_excerpts:[{url,status:'retrieved',text:`${prefix} echter anderer Schluss`}]});
+ assert.deepEqual(incomplete.zitate,[]);assert.match(incomplete.hinweise_fuer_dennis.join(' '),/1 Zitat/);
+ const complete=validateFactSheet(raw,source,{...report,source_excerpts:[{url,status:'retrieved',text:`Vorher ${claimed} nachher`}]});
+ assert.equal(complete.zitate[0].text,claimed);
+ assert.ok(parseGrokScript(answer(`Zitat: „${claimed}“\n`+script),false,complete).project);
+ const modified=parseGrokScript(answer(`Zitat: „${prefix} anderer Schluss“\n`+script),false,complete);
+ assert.equal(modified.project,null);assert.ok(modified.issues.some(issue=>issue.code==='unverified_quote'));
+});
+
 test('source-verified surrounding quote marks are removed only for exact comparison',()=>{
  const quoted='„Bestätigter Wortlaut.“';const verified=validateFactSheet({...rawFacts,zitate:[{text:quoted,quelle:url}]},source,{...report,source_excerpts:[{url,status:'retrieved',text:`Hier steht ${quoted} Ende.`}]});
  assert.ok(parseGrokScript(answer(`Zitat: ${quoted}\n`+script),false,verified).project);
