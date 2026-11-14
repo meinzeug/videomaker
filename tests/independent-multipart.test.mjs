@@ -240,10 +240,10 @@ test('only source-confirmed named film titles can appear as titles, never as inv
  assert.equal(parseGrokScript(answer(`Der Film „${title}“ stammt von Hubertus Koch.`),false,wrongContext).project,null,'the same words appearing in speech do not verify a film title');
 });
 
-for(const variant of ['valid','missing','foreign','duplicate']) test(`targeted correction preserves original parts and makes only one repair call: ${variant}`,async()=>{
+for(const variant of ['valid','missing','foreign','duplicate','unverified']) test(`targeted correction preserves original parts and makes only one repair call: ${variant}`,async()=>{
  await isolated(['Einleitung','Zitat eins','Zitat zwei'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
   const original=['Unveränderter erster Teil.','Zitat: „Erfundener erster Wortlaut.“','Zitat: „Erfundener zweiter Wortlaut.“'];
-  const corrections={valid:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'},{teil:3,skript:'Zitat: „Eine belegte Aussage.“'}],missing:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'}],foreign:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'},{teil:4,skript:'Zitat: „Eine belegte Aussage.“'}],duplicate:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'},{teil:2,skript:'Zitat: „Eine belegte Aussage.“'}]};
+  const corrections={valid:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'},{teil:3,skript:'Zitat: „Eine belegte Aussage.“'}],missing:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'}],foreign:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'},{teil:4,skript:'Zitat: „Eine belegte Aussage.“'}],duplicate:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'},{teil:2,skript:'Zitat: „Eine belegte Aussage.“'}],unverified:[{teil:2,skript:'Zitat: „Eine unbelegte Aussage.“'},{teil:3,skript:'Zitat: „Eine belegte Aussage.“'}]};
   globalThis.fetch=async(urlArg,init)=>{
    if(calls.length===4){const request=JSON.parse(init.body);calls.push(request);return new Response(JSON.stringify({id:'repair-mock',model:request.model,usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify({teile:corrections[variant]})}}]}),{status:200});}
    const response=await baseFetch(urlArg,init),body=await response.json(),payload=JSON.parse(body.choices[0].message.content);
