@@ -29,7 +29,7 @@ test('foreign runtimes cannot reset or erase limits and backwards clock blocks p
 });
 
 test('IP normalization combines IPv4-mapped and equivalent IPv6 identities',()=>{
- const f=setup();try{assert.equal(f.admit({ip:'127.0.0.1'}),true);assert.equal(f.admit({ip:'::ffff:127.0.0.1'}),true);assert.equal(f.db.prepare('SELECT count(*) n FROM studio_signal_rates').get().n,1);
+ const f=setup();try{assert.equal(f.admit({ip:'127.0.0.1'}),true);assert.equal(f.admit({ip:'::ffff:127.0.0.1'}),true);assert.equal(f.admit({ip:'::ffff:7f00:1'}),true);assert.equal(f.admit({ip:'0:0:0:0:0:ffff:7f00:1'}),false);assert.equal(f.db.prepare('SELECT count(*) n FROM studio_signal_rates').get().n,1);
   assert.equal(f.admit({ip:'2001:0db8:0000:0000:0000:0000:0000:0001'}),true);assert.equal(f.admit({ip:'2001:db8::1'}),true);assert.equal(f.db.prepare('SELECT count(*) n FROM studio_signal_rates').get().n,2);assert.equal(f.admit({ip:'invalid'}),false);
  }finally{f.db.close();}
 });

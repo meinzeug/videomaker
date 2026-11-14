@@ -9,7 +9,7 @@ function fixture(db){if(process.env.NODE_ENV!=='test'||process.env.VIDEOMAKER_ST
 function normalizedIp(value){
  if(typeof value!=='string'||value.length>64)return null;
  if(value.startsWith('::ffff:')&&isIP(value.slice(7))===4)value=value.slice(7);
- const type=isIP(value);if(type===4)return value;if(type===6){try{return new URL('http://['+value+']/').hostname.slice(1,-1);}catch{return null;}}return null;
+ const type=isIP(value);if(type===4)return value;if(type===6){try{const normalized=new URL('http://['+value+']/').hostname.slice(1,-1);const mapped=/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(normalized);if(mapped){const hi=parseInt(mapped[1],16),lo=parseInt(mapped[2],16);return [hi>>8,hi&255,lo>>8,lo&255].join('.');}return normalized;}catch{return null;}}return null;
 }
 export function initializeStudioRateFixture(db){fixture(db);db.exec('CREATE TABLE IF NOT EXISTS studio_signal_rates(scope TEXT NOT NULL,key_hash TEXT NOT NULL,runtime_id TEXT NOT NULL,start_tick INTEGER NOT NULL,attempts INTEGER NOT NULL,blocked INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(scope,key_hash))');}
 /** Peer IP must come from a trusted transport/proxy; owner/session from verified authentication. */
