@@ -4,8 +4,8 @@ import {cameraStartWasRefused} from '@/lib/camera-ui-state';
 import CameraPreview from './camera-preview';
 import CameraRecovery from './camera-recovery';
 
-type Camera={id:string;name:string;phase:'idle'|'preparing'|'recording'|'finalizing'|'ready'|'partial'|'error';recordingId:string|null;projectId:string|null;pendingStart:boolean;lastCommand:{id:string;result:string;neverDelivered?:number|boolean}|null;recoverableClaim:{recordingId:string;projectId:string;phase:'partial'|'error'}|null;stopIntent:{id:string;recordingId:string;observed:boolean}|null};
-type Command={id:string;type:'record_start'|'record_stop';recordingId:string;projectId?:string;deviceId:string};
+type Camera={id:string;name:string;phase:'idle'|'preparing'|'recording'|'finalizing'|'ready'|'partial'|'error';recordingId:string|null;projectId:string|null;paused:boolean|null;cameraFront:boolean|null;cameraCanSwitch:boolean;lastControl:{id:string;result:string}|null;pendingStart:boolean;lastCommand:{id:string;result:string;neverDelivered?:number|boolean}|null;recoverableClaim:{recordingId:string;projectId:string;phase:'partial'|'error'}|null;stopIntent:{id:string;recordingId:string;observed:boolean}|null};
+type Command={id:string;type:'record_start'|'record_stop'|'record_pause'|'record_resume'|'camera_switch';recordingId:string;projectId?:string;deviceId:string;expectedFront?:boolean};
 type OpenClaim={recordingId:string;deviceId:string;deviceName:string|null;openedAt:number;lastConfirmedPhase:'ready'|'partial'|'error'|'unknown';recovery:{sizeBytes:number;sha256:string}|null};
 const labels:Record<Camera['phase'],string>={idle:'Aufnahmebereit',preparing:'Aufnahme wird vorbereitet',recording:'Aufnahme läuft',finalizing:'Aufnahme wird abgeschlossen',ready:'Lokal gespeichert',partial:'Lokal unvollständig gespeichert',error:'Kamera meldet einen Fehler'};
 
@@ -23,10 +23,16 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
    if(previous.type==='record_start'&&camera.recordingId===previous.recordingId&&camera.phase!=='idle')return null;
    if(previous.type==='record_start'&&cameraStartWasRefused(camera.lastCommand,previous.id))return null;
    if(previous.type==='record_stop'&&camera.stopIntent?.recordingId===previous.recordingId&&camera.stopIntent.observed)return null;
+   if(previous.type==='camera_switch'&&camera.cameraFront===previous.expectedFront)return null;
+   if(previous.type==='camera_switch'&&camera.lastControl?.id===previous.id&&['rejected','expired','server_expired'].includes(camera.lastControl.result))return null;
+   if(previous.type==='record_pause'||previous.type==='record_resume'){
+    if(camera.recordingId===previous.recordingId&&camera.paused===(previous.type==='record_pause'))return null;
+    if(camera.lastControl?.id===previous.id&&['rejected','expired','server_expired'].includes(camera.lastControl.result))return null;
+   }
    return previous;});
  }catch{if(revision===refreshSequence.current)setConnectionError(true);}finally{clearTimeout(timeout);}},[]);
  useEffect(()=>{void refresh();const timer=setInterval(()=>void refresh(),2000);return()=>{clearInterval(timer);refreshSequence.current++;};},[refresh]);
- useEffect(()=>{if(!pending)setMessage(previous=>previous.startsWith('Start angefragt.')||previous.startsWith('Stopp angefragt.')?'':previous);},[pending]);
+ useEffect(()=>{if(!pending)setMessage(previous=>previous.startsWith('Start angefragt.')||previous.startsWith('Stopp angefragt.')||previous.startsWith('Pause angefragt.')||previous.startsWith('Fortsetzen angefragt.')||previous.startsWith('Kamerawechsel angefragt.')?'':previous);},[pending]);
  const camera=cameras.find(item=>item.id===selected);
  useEffect(()=>{
   setOpenClaims(null);setClaimsError(false);
@@ -48,9 +54,10 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
  async function send(command:Command){
   setPending(command);setLoading(true);setMessage('Anfrage wird gesendet. Der Zustand der Kamera ist maßgeblich.');
   try{
-   const {deviceId,...body}=command;const response=await fetch(`/api/camera-devices/${encodeURIComponent(deviceId)}/commands`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();
+   const {deviceId,expectedFront: _expectedFront,...body}=command;const response=await fetch(`/api/camera-devices/${encodeURIComponent(deviceId)}/commands`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();
    if(!response.ok){setMessage(data.error||'Die Anfrage wurde nicht angenommen.');if(response.status>=400&&response.status<500)setPending(null);return;}
-   setMessage(command.type==='record_start'?'Start angefragt. Warte auf die Kamerabestätigung.':'Stopp angefragt. Warte auf die Kamerabestätigung.');
+   const verb=command.type==='record_start'?'Start':command.type==='record_stop'?'Stopp':command.type==='record_pause'?'Pause':command.type==='record_resume'?'Fortsetzen':'Kamerawechsel';
+   setMessage(`${verb} angefragt. Warte auf die Kamerabestätigung.`);
    await refresh();
   }catch{setMessage('Keine Bestätigung erhalten. Bitte Kamera prüfen oder dieselbe Anfrage erneut senden.');}
   finally{setLoading(false);}
@@ -68,12 +75,16 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
   {!cameras.length&&<p>Keine Kamera erreichbar.</p>}{connectionError&&<p role="alert">Verbindung unterbrochen. Den Aufnahmezustand bitte am Smartphone prüfen.</p>}
   {claimsError&&<p role="alert">Offene Kameravorgänge konnten nicht geladen werden.</p>}
   {openClaims?.projectId===projectId&&openClaims.claims.length>0&&<div><p><strong>Offene Kameravorgänge für dieses Skript</strong></p><p>Diese Vorgänge bleiben auch sichtbar, wenn das Smartphone nicht erreichbar ist. Prüfe eine mögliche Aufnahme am Gerät; ein Cloud-Upload ist hier noch nicht bestätigt.</p><ul>{openClaims.claims.map(claim=><li key={claim.recordingId}>{claim.deviceName||'Unbekanntes Gerät'} · Aufnahme {claim.recordingId.slice(0,8)} · {claim.lastConfirmedPhase==='ready'?'lokal gespeichert':claim.lastConfirmedPhase==='partial'?'unvollständig':claim.lastConfirmedPhase==='error'?'Fehler gemeldet':'Status ungeklärt'}{claim.recovery&&<CameraRecovery projectId={projectId} recordingId={claim.recordingId} proof={claim.recovery} disabled={recovering!==null&&recovering!==claim.recordingId} onBegin={()=>{if(recoveringRef.current)return false;recoveringRef.current=claim.recordingId;setRecovering(claim.recordingId);return true;}} onEnd={()=>{if(recoveringRef.current===claim.recordingId){recoveringRef.current=null;setRecovering(null);}}} onConfirmed={()=>setMessage('Die Kopie wurde auf dem Server mit passender Prüfsumme bestätigt. Das Original bleibt erhalten.')}/>}</li>)}</ul>{openClaims.hasMore&&<p>Weitere offene Vorgänge werden nicht angezeigt.</p>}</div>}
-  {camera&&<p role="status"><strong>{labels[camera.phase]}</strong>{camera.phase==='ready'&&' – der Upload ist damit noch nicht bestätigt.'}{camera.projectId&&camera.projectId!==projectId&&' · Anderes Skript'}</p>}
+  {camera&&<p role="status"><strong>{camera.phase==='recording'&&camera.paused===true?'Aufnahme pausiert':labels[camera.phase]}</strong>{camera.phase==='ready'&&' – der Upload ist damit noch nicht bestätigt.'}{camera.projectId&&camera.projectId!==projectId&&' · Anderes Skript'}</p>}
+  {camera?.lastControl&&['rejected','expired','server_expired'].includes(camera.lastControl.result)&&<p role="alert">Der letzte Kamerabefehl wurde nicht bestätigt. Bitte den Gerätestatus prüfen.</p>}
   {camera?.lastCommand&&cameraStartWasRefused(camera.lastCommand,camera.lastCommand.id)&&<p role="alert">Die letzte Startanfrage wurde nicht ausgeführt. Bitte den Kamerastatus prüfen.</p>}
   {camera?.recoverableClaim?.projectId===projectId&&<p>Für dieses Skript liegt eine fehlgeschlagene oder unvollständige Aufnahme vor. Eine lokale Datei kann am Smartphone gesichert werden.</p>}
-  <div className="device-actions"><button className="primary" disabled={!camera||camera.phase!=='idle'||camera.pendingStart||!!pending||loading||connectionError} onClick={()=>camera&&void send({id:crypto.randomUUID(),type:'record_start',recordingId:crypto.randomUUID(),projectId,deviceId:camera.id})}>Aufnahme starten</button>
+  {camera&&camera.cameraFront!==null&&<p>Aktive Kamera: {camera.cameraFront?'Vorne':'Hinten'}</p>}
+  <div className="device-actions"><button className="secondary-action" disabled={!camera||camera.phase!=='idle'||!camera.cameraCanSwitch||camera.cameraFront===null||!!pending||loading||connectionError} onClick={()=>{if(!camera||camera.cameraFront===null)return;const id=crypto.randomUUID();void send({id,type:'camera_switch',recordingId:id,expectedFront:!camera.cameraFront,deviceId:camera.id});}}>{camera?.cameraFront?'Zur Rückkamera wechseln':'Zur Frontkamera wechseln'}</button><button className="primary" disabled={!camera||camera.phase!=='idle'||camera.pendingStart||!!pending||loading||connectionError} onClick={()=>camera&&void send({id:crypto.randomUUID(),type:'record_start',recordingId:crypto.randomUUID(),projectId,deviceId:camera.id})}>Aufnahme starten</button>
+   <button className="secondary-action" disabled={!camera||camera.phase!=='recording'||camera.projectId!==projectId||camera.paused!==false||!!pending||loading||connectionError} onClick={()=>camera?.recordingId&&void send({id:crypto.randomUUID(),type:'record_pause',recordingId:camera.recordingId,deviceId:camera.id})}>Aufnahme pausieren</button>
+   <button className="secondary-action" disabled={!camera||camera.phase!=='recording'||camera.projectId!==projectId||camera.paused!==true||!!pending||loading||connectionError} onClick={()=>camera?.recordingId&&void send({id:crypto.randomUUID(),type:'record_resume',recordingId:camera.recordingId,deviceId:camera.id})}>Aufnahme fortsetzen</button>
    <button className="secondary-action" disabled={!camera||!camera.recordingId||!['preparing','recording'].includes(camera.phase)||!!pending||loading||connectionError} onClick={()=>camera?.recordingId&&void send({id:crypto.randomUUID(),type:'record_stop',recordingId:camera.recordingId,deviceId:camera.id})}>Aufnahme stoppen</button>
-   {pending&&<button className="secondary-action" disabled={loading||connectionError} onClick={()=>void send(pending)}>Anfrage erneut senden</button>}
+   {pending&&<><button className="secondary-action" disabled={loading||connectionError} onClick={()=>void send(pending)}>Anfrage erneut senden</button><button className="secondary-action" disabled={loading} onClick={()=>{setPending(null);setMessage('Anfrage ausgeblendet. Maßgeblich ist der gemeldete Zustand der Kamera.');}}>Anfrage ausblenden</button></>}
    {camera?.recoverableClaim?.projectId===projectId&&<button className="secondary-action" disabled={loading||connectionError||!!pending||!['idle','error','partial'].includes(camera.phase)} onClick={()=>void resolveFailure()}>Aufnahmesperre auflösen</button>}</div>
   {camera&&preview&&<CameraPreview deviceId={camera.id} generation={preview.generation} creationToken={preview.creationToken} available={preview.devices.some(item=>item.deviceId===camera.id&&item.available)}/>}
   {message&&<p role="status">{message}</p>}

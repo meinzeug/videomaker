@@ -1,0 +1,9 @@
+# Kamerafernsteuerung v2 – Entwicklungsstand
+
+Dieser Stand ist ausschließlich für isolierte Tests bestimmt. Der Serverpfad ist in Produktion weiterhin gesperrt; die Android-Oberfläche ist nicht freigeschaltet. Ein erfolgreiches Einreihen oder Quittieren ist keine Bestätigung, dass die Kamera ihren Zustand tatsächlich geändert hat.
+
+Ein registriertes, mit einem gültigen Geräteticket authentifiziertes Smartphone meldet `remote-record-v2`, `paused` (nur bei laufender Aufnahme), `cameraFront` und `cameraCanSwitch`. Das Dashboard bietet Pause/Fortsetzen nur für die bestätigte laufende Webaufnahme und das zugehörige Projekt an. Die Umschaltung ist nur bei gemeldetem Leerlauf und verfügbarer Kameraauswahl zulässig. Das Smartphone journalisiert die Entscheidung vor der Aktion; die Oberfläche bestätigt den Zustand ausschließlich anhand der nächsten Gerätemeldung. STOP besitzt weiterhin Vorrang. Ein laufender Start oder ein wartender Kamerawechsel schließen sich gegenseitig aus.
+
+Die Befehle `record_pause` und `record_resume` referenzieren die UUID der laufenden Aufnahme und kein eigenes Projekt. `camera_switch` trägt keine Aufnahme; damit das bestehende Befehlsformat eindeutig bleibt, sind `id` und `recordingId` identisch. Alle Befehle verwenden eine frische UUID und eine begrenzte Zustellfrist. Bei Wiederholung muss die vollständige Bindung identisch sein. Das Android-Journal verwendet bei den neuen Befehlen Version 3; ältere Installationen dürfen dieses Journal nicht stillschweigend als alten Stand interpretieren.
+
+Vor einer Produktivfreigabe fehlen insbesondere ein kompletter instrumentierter Test mit zwei physischen Smartphones, Kamera-Callback und Browser, Absturz-/Netzunterbrechungstests über die gesamte Kette sowie ein belastbares Retention- und Quotenkonzept. Der Testmodus ersetzt keine Gerätefreigabe; die bisherige Produktionssperre bleibt unverändert.
