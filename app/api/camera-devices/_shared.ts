@@ -3,6 +3,7 @@ import {createHmac} from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {sessionAuthorized,sessionValue} from '@/lib/auth';
 import {CameraRemoteError} from '@/lib/camera-remote-store';
+import {CameraLateAlertError} from '@/lib/camera-late-alerts';
 import {cameraRemoteEnabled} from '@/lib/camera-remote-feature';
 export const noStore={'Cache-Control':'private, no-store'};
 export function cameraRemoteDisabled(){return !cameraRemoteEnabled(process.env.NODE_ENV,process.env.CAMERA_REMOTE_TEST_ENABLE);}
@@ -29,6 +30,7 @@ export async function cameraJson(req:Request):Promise<unknown>{
 }
 export function cameraError(error:unknown){
  if(error instanceof CameraSessionError)return NextResponse.json({error:'Nicht erlaubt.'},{status:403,headers:noStore});
+ if(error instanceof CameraLateAlertError)return NextResponse.json({error:error.message,...(error.report?{code:'camera_late_report_conflict',...error.report}:{})},{status:error.code==='capacity'?503:409,headers:noStore});
  if(error instanceof CameraRemoteError)return NextResponse.json({error:error.message},{status:error.code==='invalid'?400:error.code==='project'?404:409,headers:noStore});
  console.error('Kamerasteuerung fehlgeschlagen.');return NextResponse.json({error:'Kamerasteuerung nicht verfügbar.'},{status:500,headers:noStore});
 }
