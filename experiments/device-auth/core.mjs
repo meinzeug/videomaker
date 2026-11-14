@@ -4,6 +4,8 @@ import {createHash,createPublicKey,randomBytes,randomUUID,verify} from 'node:cry
 const ORIGIN='https://videomaker.dorfspy.de',TTL=59_990,MAX_CHALLENGES=1024,MAX_PER_DEVICE=4,MAX_SESSIONS=1024,MAX_OPERATIONS=128;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HEX=/^[0-9a-f]{64}$/;
+// Process-local capabilities are intentionally non-serializable and test-only.
+const relayGrants=new WeakMap();
 const fail=code=>{throw Error(code);};
 function fixture(db){
  if(process.env.NODE_ENV!=='test'||process.env.VIDEOMAKER_DEVICE_AUTH_FIXTURE!=='1')fail('DEVICE_AUTH_FIXTURE_DISABLED');
@@ -145,5 +147,29 @@ export function authorizeDeviceRequest(db,{sessionCredential,requestNonce,signat
   const last=readPair(db,row.pair_id,row.device_id);if(!samePair(pair,last)||last.revoked||last.revision!==row.revision)return {error:'DENIED'};
   return {ownerHash:row.owner_hash,deviceId:row.device_id,pairId:row.pair_id,role:row.role,serverRevision:row.revision};
  }).immediate();
- if(result.error)fail(result.error);return result;
+ if(result.error)fail(result.error);
+ const identity=Object.freeze(result);
+ if(method==='GET'&&path==='/api/relay/connect')relayGrants.set(identity,{db,hash,requestNonce,state:'issued'});
+ return identity;
+}
+
+/** Internal test helper: only an exact, once-consumed server grant may guard a relay. */
+export function claimDeviceRelayFixture(db,identity,clock){
+ fixture(db);const grant=relayGrants.get(identity);if(!grant||grant.db!==db||grant.state!=='issued')return false;
+ grant.state='claimed';return checkDeviceRelayFixture(db,identity,clock);
+}
+
+/** Rechecks durable device, pair, token, operation and expiry; never authenticates an HTTP request. */
+export function checkDeviceRelayFixture(db,identity,clock){
+ fixture(db);const grant=relayGrants.get(identity);if(!grant||grant.db!==db||grant.state!=='claimed'||typeof clock!=='function')return false;
+ return db.transaction(()=>{
+  const row=db.prepare('SELECT * FROM device_auth_sessions WHERE token_hash=?').get(grant.hash);if(!row)return false;
+  let now=clockNow(clock);if(!fresh(row,now)){if(row.runtime_id===now.runtimeId)db.prepare('DELETE FROM device_auth_sessions WHERE token_hash=?').run(grant.hash);return false;}
+  const matches=()=>db.prepare('SELECT 1 FROM device_auth_operations WHERE token_hash=? AND operation_nonce=?').get(grant.hash,grant.requestNonce);
+  if(!matches()||row.owner_hash!==identity.ownerHash||row.device_id!==identity.deviceId||row.pair_id!==identity.pairId||row.role!==identity.role||row.revision!==identity.serverRevision)return false;
+  const pair=readPair(db,row.pair_id,row.device_id);if(pair.revoked||pair.owner_hash!==row.owner_hash||pair.role!==row.role||pair.revision!==row.revision)return false;
+  now=clockNow(clock);if(!fresh(row,now)){if(row.runtime_id===now.runtimeId)db.prepare('DELETE FROM device_auth_sessions WHERE token_hash=?').run(grant.hash);return false;}
+  if(!sameRow(row,db.prepare('SELECT * FROM device_auth_sessions WHERE token_hash=?').get(grant.hash),sessionFields)||!matches())return false;
+  const last=readPair(db,row.pair_id,row.device_id);return samePair(pair,last)&&!last.revoked&&last.revision===row.revision;
+ }).immediate();
 }

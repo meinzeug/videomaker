@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {randomBytes} from 'node:crypto';
+import {randomBytes,createHash,sign} from 'node:crypto';
 import {createRequire} from 'node:module';
 import Database from 'better-sqlite3';
 import {createServer as createHttpsServer} from 'node:https';
@@ -15,9 +15,11 @@ import {fixture} from './fixtures/relay-delivery-fixture.mjs';
 import {revokeRelayPairing,revokeRelayDevice} from '../lib/relay-pairing-registry.ts';
 import {revokeSession} from '../lib/session-revocations.ts';
 import {createBoundTurnFixture} from '../experiments/turn-wss/bound-bridge.mjs';
+import {initializeDeviceAuthFixture,reconnectTranscript,beginDeviceReconnect,completeDeviceReconnect,deviceRequestTranscript,authorizeDeviceRequest} from '../experiments/device-auth/core.mjs';
+import {createDeviceBoundTurnFixture} from '../experiments/turn-wss/device-bound-bridge.mjs';
 import {createBoundedFixtureServer} from '../experiments/turn-wss/bridge.mjs';
 
-process.env.NODE_ENV='test';process.env.VIDEOMAKER_TURN_WSS_FIXTURE='1';
+process.env.NODE_ENV='test';process.env.VIDEOMAKER_TURN_WSS_FIXTURE='1';process.env.VIDEOMAKER_DEVICE_AUTH_FIXTURE='1';
 const require=createRequire(process.env.VIDEOMAKER_TEST_REQUIRE_FROM||import.meta.url);
 const {WebSocket,WebSocketServer,createWebSocketStream}=require('next/dist/compiled/ws');
 const waitFor=async(fn,ms=3000)=>{const end=Date.now()+ms;while(Date.now()<end){if(fn())return;await delay(10);}throw Error('fixture timeout');};
@@ -132,4 +134,66 @@ test('expired browser session remains denied after clock rollback',()=>{
   let wall=1023;const guard=setup(f,{wallClock:()=>wall}).create();wall=10001;assert.equal(guard.recheckNow(),false);wall=1023;
   assert.throws(()=>setup(f,{wallClock:()=>wall}).create(),/TURN_BOUND_DENIED/);
  }finally{f.db.close();}
+});
+
+const digest=value=>createHash('sha256').update(value).digest('hex');
+function deviceSetup(f){
+ initializeDeviceAuthFixture(f.db);const runtimeId=f.db.prepare('SELECT runtime_id FROM relay_session_tokens LIMIT 1').get().runtime_id;
+ let time=1023;const clock=()=>({runtimeId,wall:time,tick:time});const device=f.camera,pairId=device.participant.request.pairId;
+ const clientChallenge=randomBytes(32).toString('hex');const attempt={clientChallenge,...beginDeviceReconnect(f.db,{deviceId:device.deviceId,pairId,clientChallenge},clock)};
+ const signature=sign('sha256',reconnectTranscript(attempt),device.keys.privateKey);
+ const session=completeDeviceReconnect(f.db,{attemptId:attempt.attemptId,clientChallenge,signature},clock);
+ const grant=(changes={})=>{
+  const requestNonce=randomBytes(32).toString('hex');const fields={ownerHash:f.owner,deviceId:device.deviceId,pairId,role:'camera',sessionHash:digest(Buffer.from(session.sessionCredential,'base64url')),requestNonce,method:'GET',path:'/api/relay/connect',bodySha256:digest(''),...changes};
+  return authorizeDeviceRequest(f.db,{sessionCredential:session.sessionCredential,requestNonce,signature:sign('sha256',deviceRequestTranscript(fields),device.keys.privateKey)},{method:fields.method,path:fields.path,bodySha256:fields.bodySha256},clock);
+ };
+ return {clock,grant,setTime:value=>{time=value;},guard:identity=>createDeviceBoundTurnFixture({db:f.db,identity,clock,pollMs:20})};
+}
+
+test('only an unmodified, once-consumed device proof authorizes the relay',()=>{
+ const f=fixture();try{
+  const x=deviceSetup(f),identity=x.grant();assert.throws(()=>x.guard({...identity}),/DEVICE_TURN_DENIED/);
+  const guard=x.guard(identity);assert.equal(guard.checkBeforeUpgrade(),true);assert.throws(()=>x.guard(identity),/DEVICE_TURN_DENIED/);
+  assert.throws(()=>x.guard(x.grant({method:'POST'})),/DEVICE_TURN_DENIED/);guard.close();
+ }finally{f.db.close();}
+});
+
+test('device-bound connection rejects revocation before and during upgrade', {timeout:10000},async()=>{
+ for(const mode of ['before','during']){
+  const f=fixture();let h;try{
+   const x=deviceSetup(f),guard=x.guard(x.grant()),revoke=()=>revokeRelayPairing(f.db,f.owner,f.camera.participant.request.pairId,1025,()=>true);
+   h=await harness(guard,mode==='during'?{revokeBeforeAttach:revoke}:{});if(mode==='before')revoke();
+   const ws=h.connect();await new Promise(resolve=>ws.once('close',resolve));assert.equal(h.received,0);if(mode==='before')assert.equal(h.denied,1);
+  }finally{if(h)await h.close();f.db.close();}
+ }
+});
+
+test('verified device connection closes on external revocation and no further bytes are forwarded', {timeout:10000},async()=>{
+ const directory=mkdtempSync(join(tmpdir(),'vm-device-turn-'));const path=join(directory,'state.sqlite'),f=fixture(new Database(path));let h;
+ try{
+  const x=deviceSetup(f),guard=x.guard(x.grant());h=await harness(guard);const ws=h.connect();await once(ws,'open');await waitFor(()=>h.handles.length===1);
+  const echo=once(ws,'message');ws.send(Buffer.from('before'));assert.equal((await echo)[0].toString(),'before');
+  const closed=new Promise(resolve=>ws.once('close',resolve));const child=spawn(process.execPath,['--experimental-strip-types',new URL('./fixtures/revoke-relay-worker.mjs',import.meta.url).pathname,path,f.owner,f.camera.participant.request.pairId],{stdio:'ignore'});
+  const [status]=await once(child,'exit');assert.equal(status,0);await closed;assert.equal(await h.handles[0].closed,'aborted');await waitFor(()=>h.peerClosed);assert.equal(h.received,6);
+ }finally{if(h)await h.close();f.db.close();rmSync(directory,{recursive:true,force:true});}
+});
+
+test('device relay expiry destroys the session and cannot be revived by clock rollback',()=>{
+ const f=fixture();try{
+  const x=deviceSetup(f),guard=x.guard(x.grant());x.setTime(1023+59990);assert.equal(guard.recheckNow(),false);x.setTime(1023);
+  assert.throws(()=>x.guard(x.grant()),/DENIED/);
+ }finally{f.db.close();}
+});
+
+test('device-bound relay rejects another database and rechecks both data directions', {timeout:10000},async()=>{
+ for(const direction of ['incoming','outgoing']){
+  const f=fixture(),other=fixture();let h;try{
+   const x=deviceSetup(f),identity=x.grant();initializeDeviceAuthFixture(other.db);
+   assert.throws(()=>createDeviceBoundTurnFixture({db:other.db,identity,clock:x.clock,pollMs:20}),/DEVICE_TURN_DENIED/);
+   const guard=createDeviceBoundTurnFixture({db:f.db,identity,clock:x.clock,pollMs:5000});h=await harness(guard);const ws=h.connect();await once(ws,'open');await waitFor(()=>h.handles.length===1);
+   const closed=new Promise(resolve=>ws.once('close',resolve));let got=false;ws.on('message',()=>{got=true;});revokeRelayDevice(f.db,f.owner,f.camera.deviceId,1025,()=>true);
+   if(direction==='incoming')ws.send(Buffer.from('must-not-arrive'));else h.sendPeer(Buffer.from('must-not-arrive'));
+   await closed;assert.equal(h.received,0);assert.equal(got,false);
+  }finally{if(h)await h.close();f.db.close();other.db.close();}
+ }
 });
