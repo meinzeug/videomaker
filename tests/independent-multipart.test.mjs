@@ -108,3 +108,49 @@ test('invalid or empty plans are preserved and never trigger paid script parts',
   }finally{globalThis.fetch=oldFetch;if(oldKey===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=oldKey;db.close();}
  }
 });
+
+test('large valid plans remain exact and visible without silently starting parts',async()=>{
+ const plan=Array.from({length:1025},(_,i)=>`Ziel ${i+1}`);
+ await isolated(plan,null,null,async({db,claim,calls})=>{
+  await assert.rejects(runGrokFlow(db,claim,true,()=>{if(calls.length)throw new Error('stop before parts');}),/stop before parts/);
+  assert.deepEqual(state.readGrokPlan(db,id),plan);assert.equal((plan.length+2)*3,3081);assert.equal(calls.length,1);assert.deepEqual(state.readGrokParts(db,id),[]);
+ });
+});
+
+for(const repairedTitles of [['Repariert eins','Repariert zwei','Repariert drei'],[]]) test(`metadata repair preserves original parts when ${repairedTitles.length?'valid':'invalid'}`,async()=>{
+ await isolated(['Anfang','Ende'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
+  const expected='Abschnitt 1 enthält eine belegte Aussage.\n\nAbschnitt 2 enthält eine belegte Aussage.';
+  globalThis.fetch=async(urlArg,init)=>{
+   const request=JSON.parse(init.body),schema=request.response_format?.json_schema?.name;
+   if(schema==='videomaker_metadaten'){
+    calls.push(request);assert.equal(request.model,'x-ai/grok-4.20');assert.ok(!('skript' in request.response_format.json_schema.schema.properties));
+    const body={...finalFields,titel:repairedTitles};return new Response(JSON.stringify({id:'metadata-mock',model:request.model,usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify(body)}}]}),{status:200});
+   }
+   const response=await baseFetch(urlArg,init);
+   if(calls.length===3){const value=await response.json(),payload=JSON.parse(value.choices[0].message.content);payload.titel=[];value.choices[0].message.content=JSON.stringify(payload);return new Response(JSON.stringify(value),{status:200});}
+   return response;
+  };
+  if(repairedTitles.length){const result=await runGrokFlow(db,claim,true,()=>{});assert.equal(result.state,'received');assert.equal(JSON.parse(result.responseText).script,expected);}
+  else await assert.rejects(runGrokFlow(db,claim,true,()=>{}),/Korrektur|Metadaten/i);
+  const saved=state.readGrokRun(db,id);assert.equal(JSON.parse(JSON.parse(saved.scriptRaw).text).skript,expected);assert.ok(saved.repairRaw);
+  assert.deepEqual(state.readGrokParts(db,id).map(p=>[p.part,p.state]),[[1,'ready'],[2,'ready']]);
+  assert.equal(calls.length,4,'at most one metadata correction');
+ });
+});
+
+test('malformed metadata correction keeps the original assembled script and parts',async()=>{
+ await isolated(['Anfang','Ende'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
+  globalThis.fetch=async(urlArg,init)=>{
+   const request=JSON.parse(init.body);
+   if(request.response_format?.json_schema?.name==='videomaker_metadaten'){
+    calls.push(request);return new Response(JSON.stringify({id:'metadata-mock',model:request.model,usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:'{unvollständig'}}]}),{status:200});
+   }
+   const response=await baseFetch(urlArg,init);
+   if(calls.length===3){const value=await response.json(),payload=JSON.parse(value.choices[0].message.content);payload.titel=[];value.choices[0].message.content=JSON.stringify(payload);return new Response(JSON.stringify(value),{status:200});}
+   return response;
+  };
+  await assert.rejects(runGrokFlow(db,claim,true,()=>{}),/Metadatenkorrektur/i);
+  const saved=state.readGrokRun(db,id);assert.equal(JSON.parse(JSON.parse(saved.scriptRaw).text).skript,'Abschnitt 1 enthält eine belegte Aussage.\n\nAbschnitt 2 enthält eine belegte Aussage.');
+  assert.equal(JSON.parse(saved.repairRaw).text,'{unvollständig');assert.deepEqual(state.readGrokParts(db,id).map(p=>[p.part,p.state]),[[1,'ready'],[2,'ready']]);assert.equal(calls.length,4);
+ });
+});

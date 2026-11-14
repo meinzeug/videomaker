@@ -31,6 +31,14 @@ test('HTTP status is read-only and uncertain second part is not repeated after p
   await start();assert.equal((await call('/api/login','POST',{password:'fixture-only-password'})).status,200);
   assert.equal((await call('/api/generate')).status,200);
   db=new Database(join(dir,'data','videomaker.sqlite'),{fileMustExist:true});
+  // A large but valid user/model-selected plan must remain exact and its
+  // worst-case attempt count visible. This synthetic state does not run AI.
+  const largeId=randomUUID(),largePlan=Array.from({length:1025},(_,i)=>`Teil ${i+1}`),stamp='2026-01-01T00:00:00.000Z';
+  db.prepare(`INSERT INTO generation_claims(research_id,project_id,image_mode,requested_channel,sources_json,report_json,channel_json,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?)`).run(largeId,randomUUID(),'descriptions','','[]','{}','null',stamp,stamp);
+  db.prepare(`INSERT INTO grok_generation_runs(research_id,phase,facts_json,primary_model,fallback_model,updated_at) VALUES(?,'facts_ready','{}',?,?,?)`).run(largeId,'x-ai/grok-4.3','x-ai/grok-4.20',stamp);
+  db.prepare(`INSERT INTO grok_generation_modes(research_id,mode,plan_json) VALUES(?,'planned',?)`).run(largeId,JSON.stringify(largePlan));
+  const large=await call(`/api/generate?researchId=${largeId}`);assert.equal(large.status,200);assert.equal(large.data.partCount,1025);assert.equal(large.data.completedParts,0);assert.equal(large.data.maxProviderAttempts,3081);
+  const list=await call('/api/generate');const listed=list.data.claims.find(c=>c.researchId===largeId);assert.equal(listed.partCount,1025);assert.equal(listed.maxProviderAttempts,3081);assert.equal(requests().length,0);
   const researchId=randomUUID(),url='https://example.org/a';
   db.prepare('INSERT INTO research_reports(id,created_at,sources,report) VALUES(?,?,?,?)').run(researchId,new Date().toISOString(),JSON.stringify([{title:'Test',url,source:'Test',date:'',description:'Test'}]),JSON.stringify({sources:[{url}],source_excerpts:[{url,status:'retrieved',text:'Synthetischer Fakt.'}]}));
   const first=call('/api/generate','POST',{researchId,imageMode:'descriptions'}).catch(()=>null);
