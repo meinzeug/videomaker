@@ -4,11 +4,10 @@ const fs=require('node:fs');
 const path=require('node:path');
 const directory=process.env.CHANNEL_GENERATION_FIXTURE_DIR;
 if(!directory||fs.readFileSync(path.join(directory,'.channel-fixture'),'utf8')!=='isolated-channel-generation\n')throw new Error('Channel mock requires its own marked fixture.');
-const original=globalThis.fetch;
 globalThis.fetch=async function(input,init){
  const url=typeof input==='string'?input:input.url;
- if(!url.startsWith('https://openrouter.ai/'))return original.apply(this,arguments);
- const request=JSON.parse(init.body),messages=request.messages,prompt=messages?.[1]?.content||'';
+ if(!url.startsWith('https://openrouter.ai/'))throw new Error('All outbound requests are blocked in this synthetic fixture.');
+ const request=JSON.parse(init.body),messages=request.messages,prompt=[...messages].reverse().find(m=>m.role==='user')?.content||'';
  fs.appendFileSync(path.join(directory,'ai-requests.log'),JSON.stringify(messages)+'\n');
  if(prompt.includes('TEST_MOCK_FAILURE'))return new Response(JSON.stringify({error:{message:'mock failure'}}),{status:500,headers:{'Content-Type':'application/json'}});
  if(prompt.includes('TEST_DELETE_DURING_GENERATION')||prompt.includes('TEST_LOGOUT_DURING_GENERATION')){
@@ -22,7 +21,7 @@ globalThis.fetch=async function(input,init){
  const isGrokScript=!request.tools&&String(request.model||'').startsWith('x-ai/grok-')&&!isFacts;
  const sourceUrl=prompt.match(/https:\/\/[^"\\\s]+/)?.[0]||urls[0];
  const marker=prompt.match(/TEST_[A-Z_]+/)?.[0]||'Beispiel';
- const facts={fakten:[{text:`Synthetischer Testbefund ${marker}`,quellen:[sourceUrl]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[]};
+ const facts={fakten:[{text:`Synthetischer Testbefund ${marker}`,quellen:[sourceUrl]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[],...(prompt.includes('skriptplan')?{skriptplan:{teile:['Ein zusammenhängender Sprechertext']}}:{})};
  const cta='Wenn ihr weiter Klartext wollt, lasst ein Abo da und gebt dem Video einen Daumen nach oben.';
  const outro='Ich bin gespannt, wie ihr das seht, denn dieses Video ist jetzt mit Absicht zu Ende. Ciao, bis bald!';
  let channel='Kontrakurs';

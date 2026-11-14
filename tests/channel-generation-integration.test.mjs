@@ -30,8 +30,8 @@ test('isolated mocked AI generation assigns channel, preserves legacy and handle
   assert.ok((await call('/api/channels')).data.channels.some(x=>x.id===markerId&&x.name===markerName),'Server muss die markierte Fixture-Datenbank verwenden');
   const channel=(await call('/api/channels','POST',{name:'Testkanal',platform:'tiktok',handle:'@test'})).data;
   function seed(value){const id=randomUUID();db.prepare('INSERT INTO research_reports VALUES(?,?,?,?)').run(id,'2026-01-01T00:00:00Z',JSON.stringify([{url:'https://example.org/a'}]),JSON.stringify({marker:value}));return id;}
-  function callsFor(value){return readFileSync(join(fixture,'ai-requests.log'),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(messages=>messages?.[1]?.content?.includes(value)).length;}
-  function factCallsFor(value){return readFileSync(join(fixture,'ai-requests.log'),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(messages=>messages?.[0]?.content?.includes('strukturiertes Faktenblatt')&&messages?.[1]?.content?.includes(value)).length;}
+  function callsFor(value){return readFileSync(join(fixture,'ai-requests.log'),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(messages=>messages?.at(-1)?.content?.includes(value)).length;}
+  function factCallsFor(value){return readFileSync(join(fixture,'ai-requests.log'),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(messages=>messages?.[0]?.content?.includes('strukturiertes Faktenblatt')&&messages?.at(-1)?.content?.includes(value)).length;}
   let response=await call('/api/research','POST',{topic:'Testthema',sources:[],channelId:channel.id});
   assert.equal(response.status,200);assert.ok(response.data.id);assert.equal(response.data.report.search_requests,2);
   const boundResearch=response.data.id;
@@ -59,9 +59,8 @@ test('isolated mocked AI generation assigns channel, preserves legacy and handle
   id=seed('legacy');response=await call('/api/generate','POST',{imageMode:'descriptions',researchId:id});
   assert.equal(response.status,200);assert.match(response.data.content.script,/Willkommen bei Kontrakurs/);assert.equal(response.data.content.generation_target,undefined);assert.deepEqual(response.data.content.generation_warnings,[]);
   id=seed('TEST_WRONG_CHANNEL');response=await call('/api/generate','POST',{imageMode:'descriptions',researchId:id,channelId:channel.id});
-  assert.equal(response.status,409);assert.equal(response.data.code,'generation_invalid');
-  const wrongChannel=(await call(`/api/generate?researchId=${id}`)).data;assert.equal(wrongChannel.state,'invalid');assert.match(wrongChannel.responseText,/Willkommen bei Kontrakurs/);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM projects WHERE id=(SELECT project_id FROM generation_claims WHERE research_id=?)').get(id).n,0,'falscher Kanal darf auch nach Korrektur nicht gespeichert werden');
+  assert.equal(response.status,200);assert.match(response.data.channelWarning,/anderen Kanal/);assert.match(response.data.content.script,/Willkommen bei Kontrakurs/);
+  const wrongChannel=(await call(`/api/generate?researchId=${id}`)).data;assert.equal(wrongChannel.state,'complete');assert.match(wrongChannel.project.content.generation_warnings.join(' '),/anderen Kanal/);
   id=seed('TEST_MOCK_FAILURE');response=await call('/api/generate','POST',{imageMode:'descriptions',researchId:id,channelId:channel.id});
   assert.equal(response.status,503);assert.equal(response.data.researchRetained,undefined);assert.equal(response.data.code,'generation_status_required');assert.ok(db.prepare('SELECT 1 FROM research_reports WHERE id=?').get(id));
   assert.equal((await call(`/api/generate?researchId=${id}`)).data.state,'pending');
@@ -138,8 +137,8 @@ test('isolated mocked AI generation assigns channel, preserves legacy and handle
   assert.equal(factCallsFor('TEST_DELETE_DURING_GENERATION'),beforeRelease,'verlorene Browserantwort darf das Faktenblatt nicht erneut anfordern');
   unlinkSync(join(fixture,'waiting'));unlinkSync(join(fixture,'release'));
   const requests=readFileSync(join(fixture,'ai-requests.log'),'utf8').trim().split('\n').map(JSON.parse);
-  assert.ok(requests.some(m=>m[0].content===CHANNEL_SCRIPT_SYSTEM&&m[1].content.includes('Testkanal')&&m[1].content.includes('45 bis 90 Sekunden')),'ein anderer Kanal erhält seine kanal- und plattformgebundene Vorlage');
-  assert.ok(requests.some(m=>m[0].content===KONTRAKURS_SCRIPT_SYSTEM),'Kontrakurs behält den exakt vorgegebenen Systemprompt');
+  assert.ok(requests.some(m=>m[0].content===CHANNEL_SCRIPT_SYSTEM&&m.at(-1).content.includes('Testkanal')&&m.at(-1).content.includes('tiktok')),'ein anderer Kanal erhält seine kanal- und plattformgebundene Vorlage');
+  assert.ok(requests.some(m=>m[0].content===KONTRAKURS_SCRIPT_SYSTEM),'Kontrakurs behält seine Stil-Orientierung');
   const synthetic=Array.from({length:22},()=>randomUUID());
   const insert=db.prepare("INSERT INTO generation_claims(research_id,project_id,image_mode,requested_channel,sources_json,report_json,channel_json,state,response_text,created_at,updated_at) VALUES(?,?,'descriptions','','[]','{\"summary\":\"Test\"}','null','pending',NULL,?,?)");
   db.transaction(()=>{for(const testId of synthetic)insert.run(testId,randomUUID(),'2000-01-01T00:00:00Z','2000-01-01T00:00:00Z');})();
