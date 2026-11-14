@@ -4,6 +4,7 @@ on:
     branches: [wip/apk-neutral-ci-20261115]
 permissions:
   contents: read
+  actions: read
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -97,6 +98,8 @@ jobs:
         with:
           name: apk-neutral-next-32f61b5
           path: artifact
+          run-id: 43651842747
+          github-token: ${{ github.token }}
       - name: Verify complete artifact and run against server Node version
         env:
           SESSION_SECRET: isolated-test-only-secret-012345678901234
