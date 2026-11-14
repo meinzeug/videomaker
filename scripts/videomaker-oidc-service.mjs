@@ -21,9 +21,10 @@ try{
  db=openProviderDatabase(process.env.VIDEOMAKER_OIDC_DATABASE);
  const service=createVideomakerOidcService(config,{db,binding});
  const server=createServer((req,res)=>void service.handle(req,res));
+ server.headersTimeout=5000;server.requestTimeout=10000;server.keepAliveTimeout=2000;
  server.listen(port,'127.0.0.1',()=>console.log('OIDC-Dienst auf lokalem Loopback gestartet.'));
  let stopping=false;
- const stop=()=>{if(stopping)return;stopping=true;server.close(()=>{db.close();});};
+ const stop=()=>{if(stopping)return;stopping=true;server.close(()=>{db.close();});server.closeIdleConnections();setTimeout(()=>server.closeAllConnections(),5000).unref();};
  process.once('SIGINT',stop);process.once('SIGTERM',stop);
  server.on('error',()=>{console.error('OIDC-Dienst konnte nicht gestartet werden.');if(!stopping){stopping=true;db.close();}process.exitCode=1;});
 }catch{db?.close();console.error('OIDC-Dienst nicht gestartet. Konfiguration und Datenbank prüfen.');process.exitCode=1;}
