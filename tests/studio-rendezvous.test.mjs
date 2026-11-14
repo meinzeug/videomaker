@@ -174,3 +174,11 @@ test('a computed key is never written if either session logs out before the resp
   assert.throws(()=>deliverStudioResultFixture(f.db,f.camera,f.clock,f.auth,()=>{delivered=true;return true;}));assert.equal(delivered,false);assert.equal(f.db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,1);
  }finally{f.db.close();}
 });
+
+test('fault injection documents that queued bytes cannot be retracted after a commit failure',()=>{
+ const f=setup();try{
+  ready(f);f.db.exec('CREATE TABLE fixture_parent(id INTEGER PRIMARY KEY); CREATE TABLE fixture_child(parent INTEGER REFERENCES fixture_parent(id) DEFERRABLE INITIALLY DEFERRED)');let queued=false;
+  assert.throws(()=>deliverStudioResultFixture(f.db,f.camera,f.clock,f.auth,()=>{f.db.prepare('INSERT INTO fixture_child VALUES(42)').run();queued=true;return true;}));
+  assert.equal(queued,true);assert.equal(f.db.prepare('SELECT count(*) n FROM fixture_child').get().n,0);
+ }finally{f.db.close();}
+});
