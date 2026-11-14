@@ -16,7 +16,9 @@ test('TLS-gebundener Sitzungsclient übermittelt nur gültige Protokollanfragen'
  const server=createServer({key:readFileSync(key),cert:readFileSync(cert)},(req,res)=>{
   seen.push({op:req.headers['x-oidc-binding-operation'],cookie:req.headers.cookie,reference:req.headers['x-oidc-session-reference'],secret:req.headers['x-videomaker-internal-secret'],length:req.headers['content-length']});
   if(req.headers['x-oidc-binding-operation']==='issue'){res.writeHead(200,{'content-type':'application/json'}).end(JSON.stringify({reference}));return;}
-  res.writeHead(req.headers['x-oidc-binding-operation']==='check'?204:401).end();
+  const accepted=req.headers['x-oidc-binding-operation']==='check'||
+   (req.headers['x-oidc-binding-operation']==='match'&&req.headers.cookie==='kontrakurs_session=abc.def'&&req.headers['x-oidc-session-reference']===reference);
+  res.writeHead(accepted?204:401).end();
  });
  try{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -28,12 +30,17 @@ test('TLS-gebundener Sitzungsclient übermittelt nur gültige Protokollanfragen'
   assert.equal(await client.issue('kontrakurs_session=abc.def'),reference);
   assert.equal(await client.check(reference),true);
   assert.equal(await client.reset('kontrakurs_session=abc.def'),false);
+  assert.equal(await client.match(reference,'kontrakurs_session=abc.def'),true);
+  assert.equal(await client.match(reference,'kontrakurs_session=anderes.cookie'),false);
+  assert.equal(await client.match('ungueltig','kontrakurs_session=abc.def'),false);
+  assert.equal(await client.match(reference,'kontrakurs_session=abc; other=secret'),false);
   assert.equal(await client.issue('kontrakurs_session=abc; other=secret'),null);
   assert.equal(await client.check('invalid'),false);
-  assert.equal(seen.length,3);
-  assert.deepEqual(seen.map(item=>item.op),['issue','check','reset']);
+  assert.equal(seen.length,5);
+  assert.deepEqual(seen.map(item=>item.op),['issue','check','reset','match','match']);
   assert.ok(seen.every(item=>item.secret===secret&&item.length==='0'));
   assert.equal(seen[1].cookie,undefined);assert.equal(seen[1].reference,reference);
+  assert.equal(seen[3].cookie,'kontrakurs_session=abc.def');assert.equal(seen[3].reference,reference);
   assert.throws(()=>createOidcBindingClient({endpoint:endpoint.replace('https:','http:'),secret,caFile:cert}),/endpunkt/i);
   assert.throws(()=>createOidcBindingClient({endpoint:endpoint.replace('127.0.0.1','example.com'),secret,caFile:cert}),/endpunkt/i);
   assert.throws(()=>createOidcBindingClient({endpoint:endpoint+'?x=1',secret,caFile:cert}),/endpunkt/i);
@@ -53,6 +60,6 @@ test('TLS-gebundener Sitzungsclient übermittelt nur gültige Protokollanfragen'
    await assert.rejects(createOidcBindingClient({endpoint:wrongEndpoint,secret,caFile:otherCert}).issue('kontrakurs_session=abc.def'));
    assert.equal(wrongNameRequests,0,'Bei falschem TLS-Namen keine Zugangsdaten senden');
   }finally{await new Promise(resolve=>wrongName.close(resolve));}
-  assert.equal(seen.length,3,'Bei ungültiger Gegenstelle keine Zugangsdaten senden');
+  assert.equal(seen.length,5,'Bei ungültiger Gegenstelle keine Zugangsdaten senden');
  }finally{await new Promise(resolve=>server.close(resolve));rmSync(directory,{recursive:true,force:true});}
 });

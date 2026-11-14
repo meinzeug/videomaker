@@ -4,7 +4,7 @@ import {request} from 'node:https';
 import {dirname,isAbsolute,parse,resolve} from 'node:path';
 
 type Configuration={endpoint:string;secret:string;caFile:string};
-type Operation='issue'|'check'|'reset';
+type Operation='issue'|'check'|'reset'|'match';
 const cookiePattern=/^kontrakurs_session=[A-Za-z0-9_.-]{1,512}$/;
 const referencePattern=/^[A-Za-z0-9_-]{43}$/;
 const maxActive=16;
@@ -40,9 +40,10 @@ export function createOidcBindingClient(config:Configuration) {
  try{endpoint=new URL(config.endpoint);}catch{throw new Error('Ungültiger OIDC-Sitzungsendpunkt');}
  if(endpoint.protocol!=='https:'||endpoint.hostname!=='127.0.0.1'||!endpoint.port||endpoint.username||endpoint.password||endpoint.pathname!=='/api/internal/oidc/session-binding'||endpoint.search||endpoint.hash)throw new Error('Ungültiger OIDC-Sitzungsendpunkt');
  const secret=config.secret,caFile=config.caFile;
- if(!/^[\x21-\x7e]{32,512}$/.test(secret)||!isAbsolute(caFile))throw new Error('Ungültige OIDC-Sitzungskonfiguration');
- const send=async(operation:Operation,credential:string):Promise<string|boolean|null>=>{
+ if(!/^[\x21-\x7e]{32,256}$/.test(secret)||!isAbsolute(caFile))throw new Error('Ungültige OIDC-Sitzungskonfiguration');
+ const send=async(operation:Operation,credential:string,reference?:string):Promise<string|boolean|null>=>{
   if((operation==='check'?!referencePattern.test(credential):!cookiePattern.test(credential)))return operation==='issue'?null:false;
+  if(operation==='match'&&(!reference||!referencePattern.test(reference)))return false;
   if(active>=maxActive||caReads>=maxActive)throw new Error('OIDC-Sitzungsprüfung ausgelastet');
   active++;
   const signal=AbortSignal.timeout(2000);
@@ -53,7 +54,11 @@ export function createOidcBindingClient(config:Configuration) {
    const ca=await Promise.race([pendingCa,new Promise<never>((_,reject)=>signal.addEventListener('abort',()=>reject(new Error('Zeitüberschreitung')),{once:true}))]);
    const response=await new Promise<{status:number;body:string}>((resolveResponse,reject)=>{
     const headers:Record<string,string>={'content-length':'0','x-videomaker-internal-secret':secret,'x-oidc-binding-operation':operation};
-    if(operation==='check')headers['x-oidc-session-reference']=credential;else headers.cookie=credential;
+    if(operation==='check')headers['x-oidc-session-reference']=credential;
+    else {
+     headers.cookie=credential;
+     if(operation==='match')headers['x-oidc-session-reference']=reference!;
+    }
     const outgoing=request(endpoint,{method:'POST',headers,ca,servername:'videomaker-session.internal',rejectUnauthorized:true,agent:false,signal},incoming=>{
      let body='',size=0;
      incoming.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>1024)incoming.destroy(new Error('Antwort zu groß'));else body+=chunk.toString('utf8');});
@@ -75,5 +80,6 @@ export function createOidcBindingClient(config:Configuration) {
   issue:(cookie:string)=>send('issue',cookie) as Promise<string|null>,
   check:(reference:string)=>send('check',reference) as Promise<boolean>,
   reset:(cookie:string)=>send('reset',cookie) as Promise<boolean>,
+  match:(reference:string,cookie:string)=>send('match',cookie,reference) as Promise<boolean>,
  };
 }

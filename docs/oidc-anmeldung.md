@@ -45,8 +45,11 @@ den Zielserver mit eigener CA und festem TLS-Namen. Die CA muss sich auf einem
 geschützten, symlinkfreien Pfad befinden. Ungültige Sitzung oder Referenz werden
 abgelehnt; bei Konfigurations-, TLS- und Kommunikationsfehlern wird kein Erfolg
 angenommen. Der Test erzeugt dafür nur kurzlebige Testzertifikate und einen
-lokalen Proxy. Dieser Client ist noch nicht in einen produktiven OIDC-Anbieter
-eingebunden; er stellt selbst weder OIDC noch eine gemeinsame Anmeldung bereit.
+lokalen Proxy. Die Operation `match` prüft Referenz und Cookie gemeinsam; der
+Test verwendet dafür den echten internen Video-Maker-Endpunkt und weist eine
+andere gültige Sitzung sowie die ursprüngliche Sitzung nach Logout ab. Dieser
+Client ist noch nicht in einen produktiven OIDC-Anbieter eingebunden; er stellt
+selbst weder OIDC noch eine gemeinsame Anmeldung bereit.
 
 Der separate Test `tests/fixtures/haben-oidc-integration.test.mjs` prüft den
 echten Haben-Callback mit PostgreSQL 18 und dem echten `oidc-provider` unter

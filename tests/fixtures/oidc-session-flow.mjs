@@ -111,7 +111,10 @@ async function authorize(jar){
 }
 const exchange=code=>fetch(`${issuer}/token`,{method:'POST',headers:{authorization:`Basic ${basic}`,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'authorization_code',code,redirect_uri:redirect,code_verifier:verifier})});
 try {
- const firstCookie=await login(),oldJar=jarWithCookie(firstCookie),firstCode=await authorize(oldJar);
+ const firstCookie=await login(),secondCookie=await login(),firstReference=await issue(firstCookie);
+ assert.ok(firstReference);assert.equal(await binding.match(firstReference,firstCookie),true);
+ assert.equal(await binding.match(firstReference,secondCookie),false);
+ const oldJar=jarWithCookie(firstCookie),firstCode=await authorize(oldJar);
  assert.ok(firstCode);
  let response=await exchange(firstCode);assert.equal(response.status,200);const tokens=await response.json();
  response=await fetch(`${issuer}/me`,{headers:{authorization:`Bearer ${tokens.access_token}`}});assert.equal(response.status,200);
@@ -119,10 +122,11 @@ try {
  mapDb.close();mapDb=new Database(databaseFile);map=createOidcProviderSessionMap(mapDb);
  response=await fetch(`${issuer}/me`,{headers:{authorization:`Bearer ${tokens.access_token}`}});assert.equal(response.status,200);
  await logout(firstCookie);
+ assert.equal(await binding.match(firstReference,firstCookie),false);
  response=await fetch(`${issuer}/me`,{headers:{authorization:`Bearer ${tokens.access_token}`}});assert.equal(response.status,401);
  assert.equal(await authorize(oldJar),null);
 
- const secondCookie=await login();oldJar.set('kontrakurs_session',secondCookie.split('=')[1]);
+ oldJar.set('kontrakurs_session',secondCookie.split('=')[1]);
  const oldSessionCode=await authorize(oldJar);
  if(oldSessionCode)assert.equal((await exchange(oldSessionCode)).status,400);
 
