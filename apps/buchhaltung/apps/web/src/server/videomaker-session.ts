@@ -9,9 +9,23 @@ type GuardFetch = (endpoint: string, options: { cookie: string; secret: string; 
 type BindingLookup = (request: Request) => Promise<string | null>;
 const LIMIT = 16;
 const STATE = Symbol.for("videomaker.haben.sessionGuard");
-const shared = globalThis as typeof globalThis & { [STATE]?: { active: number; caReads: number } };
-shared[STATE] ??= { active: 0, caReads: 0 };
+const shared = globalThis as typeof globalThis & { [STATE]?: { active: number; caReads: number; lookups?: number } };
+shared[STATE] ??= { active: 0, caReads: 0, lookups: 0 };
 const limits = shared[STATE];
+
+/** A timeout frees the request; a stuck lookup still consumes one of two slots until it actually ends. */
+async function boundedLookup(request: Request, lookup: BindingLookup): Promise<string | null> {
+  if ((limits.lookups ?? 0) >= 2) throw new Error("Zu viele ausstehende Sitzungsprüfungen");
+  limits.lookups = (limits.lookups ?? 0) + 1;
+  const pending = Promise.resolve().then(() => lookup(request));
+  void pending.then(() => { limits.lookups!--; }, () => { limits.lookups!--; });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([pending, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Zeitüberschreitung")), 2000); })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 /** Nur ausdrücklich aktivieren: die lokale Haben-Anmeldung bleibt ansonsten wie bei Upstream. */
 const configuration = (): GuardConfig => ({
@@ -141,7 +155,7 @@ export async function guardVideomakerSession(request: Request, config = configur
     return new Response("Die Video-Maker-Sitzungsprüfung ist ausgelastet.", { status: 503, headers: { "Cache-Control": "no-store" } });
   limits.active++;
   try {
-    const reference = await lookup(request);
+    const reference = await boundedLookup(request, lookup);
     if (reference !== null && !/^[A-Za-z0-9_-]{43}$/.test(reference))
       return new Response("Bitte erneut bei Video-Maker anmelden.", { status: 401, headers: { "Cache-Control": "no-store" } });
     if (reference !== null && (!config.bindingSecret || config.bindingSecret.length < 32 || config.bindingSecret.length > 256))

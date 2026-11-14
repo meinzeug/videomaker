@@ -77,13 +77,33 @@ describe("Video-Maker-Sitzungsprüfung", () => {
           release.push(() => resolve(204));
         }),
     );
-    const requests = Array.from({ length: 16 }, () => guardVideomakerSession(request(), config, send));
+    const requests: Array<Promise<Response | null>> = [];
+    for (let group = 0; group < 8; group++) {
+      requests.push(guardVideomakerSession(request(), config, send), guardVideomakerSession(request(), config, send));
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes((group + 1) * 2));
+    }
     expect((await guardVideomakerSession(request(), config, send))?.status).toBe(503);
-    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(16));
     for (const finish of release) finish();
     expect(await Promise.all(requests)).toEqual(Array.from({ length: 16 }, () => null));
     expect(await guardVideomakerSession(request(), config, async () => 204)).toBeNull();
   });
+
+  it("begrenzt hängende Lookups auch nach dem Timeout und gibt Plätze erst nach tatsächlichem Ende frei", async () => {
+    const releases: Array<() => void> = [];
+    const lookup = vi.fn(() => new Promise<null>((resolve) => releases.push(() => resolve(null))));
+    const send = vi.fn(async () => 204);
+    const first = guardVideomakerSession(request(), config, send, lookup);
+    const second = guardVideomakerSession(request(), config, send, lookup);
+    await vi.waitFor(() => expect(lookup).toHaveBeenCalledTimes(2));
+    expect((await guardVideomakerSession(request(), config, send, lookup))?.status).toBe(503);
+    expect((await first)?.status).toBe(503);
+    expect((await second)?.status).toBe(503);
+    expect((await guardVideomakerSession(request(), config, send, lookup))?.status).toBe(503);
+    expect(lookup).toHaveBeenCalledTimes(2);
+    expect(send).not.toHaveBeenCalled();
+    releases.forEach((release) => release());
+    await vi.waitFor(async () => expect(await guardVideomakerSession(request(), config, send, async () => null)).toBeNull());
+  }, 10_000);
 
   it("schließt bei Ausfällen, Weiterleitungen und unerwarteten Antworten", async () => {
     for (const send of [

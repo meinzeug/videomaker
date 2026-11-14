@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sql } from "drizzle-orm";
-import { db, type Tx } from "./db/index.ts";
+import { db, guardLookupDatabase, type Tx } from "./db/index.ts";
 import type { Rolle } from "../lib/rollen.ts";
 import type { GroupRejection } from "./sso-groups.ts";
 
@@ -40,6 +40,16 @@ const scope = new AsyncLocalStorage<CallbackScope>();
 /** Adapter und Hooks benutzen im Callback dieselbe Verbindung: Konto, Zuordnung, Rolle und Sitzung entstehen gemeinsam */
 export const authTransaction = () => scope.getStore()?.transaction?.tx;
 export const authDatabase = () => authTransaction() ?? db;
+
+/** Isolate guard reads and cancel slow PostgreSQL statements without changing the application's global timeout. */
+export async function withBoundedSessionLookup<T>(work: () => Promise<T>): Promise<T> {
+  return guardLookupDatabase().transaction(async (tx) => {
+    await tx.execute(sql`set local statement_timeout = '1500ms'`);
+    await tx.execute(sql`set local lock_timeout = '1000ms'`);
+    // The adapter and auth hooks must use this same transaction; the outer transaction owns commit/rollback.
+    return scope.run({ transaction: { tx, commit: async () => {}, rollback: async () => {} } }, work);
+  });
+}
 
 /** Nachweis des laufenden Callbacks; nur innerhalb von atomicAuthCallback gesetzt, nie aus Browserdaten */
 export const callbackProof = () => scope.getStore()?.proof;

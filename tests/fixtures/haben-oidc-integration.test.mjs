@@ -67,14 +67,24 @@ test('Haben-Callback unter Buchhaltung akzeptiert ein gebundenes Videomaker-Test
    await provider.interactionFinished(req,res,result,{mergeWithLastSubmission:false});
   }catch{res.writeHead(500).end();}
  });
- let sql,capturedIdToken;
+ let sql,capturedIdToken,tamperToken=false;
  const originalFetch=globalThis.fetch;
  globalThis.fetch=async(input,init)=>{
   const response=await originalFetch(input,init);
   const url=input instanceof Request?input.url:String(input);
   if(new URL(url).origin===issuer&&new URL(url).pathname==='/token'&&response.ok){
    const tokens=await response.clone().json();
-   if(typeof tokens.id_token==='string')capturedIdToken=tokens.id_token;
+   if(typeof tokens.id_token==='string'){
+    capturedIdToken=tokens.id_token;
+    if(tamperToken){
+     const [header,payload,signature]=tokens.id_token.split('.');
+     const claims=JSON.parse(Buffer.from(payload,'base64url').toString('utf8'));
+     claims.videomaker_session_ref='a'.repeat(43);
+     tokens.id_token=`${header}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.${signature}`;
+     const headers=new Headers(response.headers);headers.delete('content-length');
+     return new Response(JSON.stringify(tokens),{status:response.status,statusText:response.statusText,headers});
+    }
+   }
   }
   return response;
  };
@@ -125,6 +135,11 @@ test('Haben-Callback unter Buchhaltung akzeptiert ein gebundenes Videomaker-Test
   const sessionBindings=await sql`select session_id,reference from videomaker_session_bindings`;
   expect(sessionBindings).toHaveLength(1);
   expect(sessionBindings[0].reference).toBe(issued);
+  const {authDatabase,withBoundedSessionLookup}=await import('../../apps/buchhaltung/apps/web/src/server/auth-transaction.ts');
+  const slowStarted=Date.now();
+  await expect(withBoundedSessionLookup(()=>authDatabase().execute('select pg_sleep(3)'))).rejects.toThrow();
+  expect(Date.now()-slowStarted).toBeLessThan(5000);
+  expect((await sql`select count(*)::int as n from session`)[0].n).toBe(1);
   const sessionResponse=await request('/get-session',undefined,habenSession);
   expect((await sessionResponse.text()).includes(issued)).toBe(false);
   const loginAgain=async()=>{
@@ -145,6 +160,13 @@ test('Haben-Callback unter Buchhaltung akzeptiert ein gebundenes Videomaker-Test
   expect(missingClaim.headers.getSetCookie().join()).not.toContain('session_token=');
   expect((await sql`select count(*)::int as n from session`)[0].n).toBe(1);
   includeBindingClaim=true;
+  tamperToken=true;
+  const tampered=await loginAgain();
+  expect(new URL(tampered.headers.get('location'),appUrl).searchParams.get('sso')).toBeTruthy();
+  expect(tampered.headers.getSetCookie().join()).not.toContain('session_token=');
+  expect((await sql`select count(*)::int as n from session`)[0].n).toBe(1);
+  expect((await sql`select count(*)::int as n from videomaker_session_bindings`)[0].n).toBe(1);
+  tamperToken=false;
   await sql`create function test_binding_failure() returns trigger language plpgsql as $$ begin raise exception 'binding failure'; end $$`;
   await sql`create trigger test_binding_failure before insert on videomaker_session_bindings for each row execute function test_binding_failure()`;
   const failedInsert=await loginAgain();

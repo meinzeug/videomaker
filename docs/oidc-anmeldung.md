@@ -78,6 +78,15 @@ Ohne Haben-Sitzung bleibt die bisherige Prüfung des Video-Maker-Cookies für de
 Anmeldestart erhalten. Der produktive Anbieter und die nötige TLS-/Proxy- und
 Browserkonfiguration fehlen weiterhin; der Wächter ist nicht freigegeben.
 
+Hängen Session-Lookups, beendet der Wächter die Anfrage nach zwei Sekunden mit
+503. Höchstens zwei noch nicht abgeschlossene Lookups werden zugelassen; ihre
+Plätze bleiben bis zum wirklichen Ende belegt. Sie verwenden einen separaten
+PostgreSQL-Pool mit begrenzter Verbindungs-, Warteschlangen-, Abfrage- und
+Abbruchzeit sowie lokale Datenbankfristen. Der isolierte Test belegt einen
+abgebrochenen langsamen PostgreSQL-Befehl und prüft, dass hängende Lookups keine
+unbeschränkte Warteschlange erzeugen. Nicht abbrechbare Systemaufrufe können
+ihre jeweils belegten Plätze weiterhin länger halten.
+
 Die vorbereitete interne Referenzschnittstelle hat zusätzlich die Operation
 `match`: Sie prüft das vorgelegte Video-Maker-Cookie und die OIDC-Referenz
 gemeinsam in der Transaktion mit Widerruf und Schlüsselgeneration. Ein gültiges

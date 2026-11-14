@@ -27,6 +27,14 @@ Je Haben-Prozess werden höchstens 16 Prüfungen gleichzeitig bearbeitet; bei
 Proxy eine Ratenbegrenzung. Die Zwei-Sekunden-Frist begrenzt die Antwortzeit;
 ein vom Betriebssystem nicht abbrechbarer Dateisystemaufruf kann danach noch
 weiterlaufen. Solche ausstehenden CA-Zugriffe bleiben ebenfalls begrenzt.
+Für die Auflösung der Haben-Sitzungsbindung stehen höchstens zwei gleichzeitige
+Lookups zur Verfügung. Nach zwei Sekunden antwortet der Wächter mit 503; ein
+noch laufender Lookup belegt seinen Platz bis zum tatsächlichen Ende. Die
+Datenbankabfragen laufen über einen getrennten Pool mit höchstens zwei
+Verbindungen und zeitlich begrenztem Verbindungsaufbau, Warten, Abfragen und
+Abbruch; PostgreSQL erzwingt zusätzlich lokale Abfrage- und Sperrfristen. Ein
+nicht abbrechbarer System- oder DNS-Aufruf kann dennoch länger dauern, ohne dass
+weitere Lookups unbegrenzt auflaufen.
 Standardmäßig ist dieser Wächter aus und ändert Upstreams Verhalten nicht.
 Im Pflichtmodus tragen auch erfolgreiche von der Middleware bearbeitete Antworten
 `Cache-Control: private, no-store`. Ob ein Browser nach Logout eine zuvor

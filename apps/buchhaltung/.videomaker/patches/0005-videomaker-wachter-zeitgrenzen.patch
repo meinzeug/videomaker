@@ -1,0 +1,171 @@
+diff --git a/apps/web/src/server/auth-transaction.ts b/apps/web/src/server/auth-transaction.ts
+index aeb3bcd..e6f3f39 100644
+--- a/apps/web/src/server/auth-transaction.ts
++++ b/apps/web/src/server/auth-transaction.ts
+@@ -1,6 +1,6 @@
+ import { AsyncLocalStorage } from "node:async_hooks";
+ import { sql } from "drizzle-orm";
+-import { db, type Tx } from "./db/index.ts";
++import { db, guardLookupDatabase, type Tx } from "./db/index.ts";
+ import type { Rolle } from "../lib/rollen.ts";
+ import type { GroupRejection } from "./sso-groups.ts";
+ 
+@@ -41,6 +41,16 @@ const scope = new AsyncLocalStorage<CallbackScope>();
+ export const authTransaction = () => scope.getStore()?.transaction?.tx;
+ export const authDatabase = () => authTransaction() ?? db;
+ 
++/** Isolate guard reads and cancel slow PostgreSQL statements without changing the application's global timeout. */
++export async function withBoundedSessionLookup<T>(work: () => Promise<T>): Promise<T> {
++  return guardLookupDatabase().transaction(async (tx) => {
++    await tx.execute(sql`set local statement_timeout = '1500ms'`);
++    await tx.execute(sql`set local lock_timeout = '1000ms'`);
++    // The adapter and auth hooks must use this same transaction; the outer transaction owns commit/rollback.
++    return scope.run({ transaction: { tx, commit: async () => {}, rollback: async () => {} } }, work);
++  });
++}
++
+ /** Nachweis des laufenden Callbacks; nur innerhalb von atomicAuthCallback gesetzt, nie aus Browserdaten */
+ export const callbackProof = () => scope.getStore()?.proof;
+ export function setCallbackProof(proof: SsoProof): void {
+diff --git a/apps/web/src/server/db/index.ts b/apps/web/src/server/db/index.ts
+index e5bbd86..2f56bac 100644
+--- a/apps/web/src/server/db/index.ts
++++ b/apps/web/src/server/db/index.ts
+@@ -19,6 +19,19 @@ clients.add(client);
+ 
+ export const db = drizzle(client, { schema });
+ 
++// The web guard uses a separate, tightly bounded pool: a stalled session lookup
++// must not consume all application connections or enqueue unlimited DB work.
++const GUARD = Symbol.for("videomaker.haben.guardDatabase");
++const guardRegistry = globalThis as typeof globalThis & { [GUARD]?: { client: postgres.Sql; database: typeof db } };
++export function guardLookupDatabase(): typeof db {
++  if (!guardRegistry[GUARD]) {
++    const guardClient = postgres(env().DATABASE_URL, { max: 2, connect_timeout: 2, queue_timeout: 2, query_timeout: 2, cancel_timeout: 1 });
++    clients.add(guardClient);
++    guardRegistry[GUARD] = { client: guardClient, database: drizzle(guardClient, { schema }) };
++  }
++  return guardRegistry[GUARD]!.database;
++}
++
+ export const databaseAccessInfo = () => readDatabaseAccess(client);
+ export type { DatabaseAccessInfo } from "./roles.ts";
+ 
+@@ -29,6 +42,7 @@ export type { DatabaseAccessInfo } from "./roles.ts";
+ export async function closeDatabase(timeoutSeconds = 5): Promise<void> {
+   const open = [...clients];
+   clients.clear();
++  guardRegistry[GUARD] = undefined;
+   await Promise.all(open.map((c) => c.end({ timeout: timeoutSeconds })));
+ }
+ 
+diff --git a/apps/web/src/server/videomaker-session-binding.ts b/apps/web/src/server/videomaker-session-binding.ts
+index 2dc04a0..f2301da 100644
+--- a/apps/web/src/server/videomaker-session-binding.ts
++++ b/apps/web/src/server/videomaker-session-binding.ts
+@@ -1,12 +1,17 @@
+ import { eq } from "drizzle-orm";
+-import { auth } from "./auth.ts";
+-import { db, schema } from "./db/index.ts";
++import { auth, authContextReady } from "./auth.ts";
++import { authDatabase, withBoundedSessionLookup } from "./auth-transaction.ts";
++import { schema } from "./db/index.ts";
+ 
+ /** null means no Haben session; an empty value means a session exists without a binding. */
+ export async function currentVideomakerReference(request: Request): Promise<string | null> {
+-  const current = await auth().api.getSession({ headers: request.headers, query: { disableCookieCache: true, disableRefresh: true } });
+-  if (!current) return null;
+-  const [binding] = await db.select({ reference: schema.videomakerSessionBindings.reference })
+-    .from(schema.videomakerSessionBindings).where(eq(schema.videomakerSessionBindings.sessionId, current.session.id));
+-  return binding?.reference ?? "";
++  // Provider discovery happens before reserving a PostgreSQL connection.
++  if (!(await authContextReady())) throw new Error("Authentifizierung nicht verfügbar");
++  return withBoundedSessionLookup(async () => {
++    const current = await auth().api.getSession({ headers: request.headers, query: { disableCookieCache: true, disableRefresh: true } });
++    if (!current) return null;
++    const [binding] = await authDatabase().select({ reference: schema.videomakerSessionBindings.reference })
++      .from(schema.videomakerSessionBindings).where(eq(schema.videomakerSessionBindings.sessionId, current.session.id));
++    return binding?.reference ?? "";
++  });
+ }
+diff --git a/apps/web/src/server/videomaker-session.test.ts b/apps/web/src/server/videomaker-session.test.ts
+index 3947a91..7ad24c8 100644
+--- a/apps/web/src/server/videomaker-session.test.ts
++++ b/apps/web/src/server/videomaker-session.test.ts
+@@ -77,14 +77,34 @@ describe("Video-Maker-Sitzungsprüfung", () => {
+           release.push(() => resolve(204));
+         }),
+     );
+-    const requests = Array.from({ length: 16 }, () => guardVideomakerSession(request(), config, send));
++    const requests: Array<Promise<Response | null>> = [];
++    for (let group = 0; group < 8; group++) {
++      requests.push(guardVideomakerSession(request(), config, send), guardVideomakerSession(request(), config, send));
++      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes((group + 1) * 2));
++    }
+     expect((await guardVideomakerSession(request(), config, send))?.status).toBe(503);
+-    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(16));
+     for (const finish of release) finish();
+     expect(await Promise.all(requests)).toEqual(Array.from({ length: 16 }, () => null));
+     expect(await guardVideomakerSession(request(), config, async () => 204)).toBeNull();
+   });
+ 
++  it("begrenzt hängende Lookups auch nach dem Timeout und gibt Plätze erst nach tatsächlichem Ende frei", async () => {
++    const releases: Array<() => void> = [];
++    const lookup = vi.fn(() => new Promise<null>((resolve) => releases.push(() => resolve(null))));
++    const send = vi.fn(async () => 204);
++    const first = guardVideomakerSession(request(), config, send, lookup);
++    const second = guardVideomakerSession(request(), config, send, lookup);
++    await vi.waitFor(() => expect(lookup).toHaveBeenCalledTimes(2));
++    expect((await guardVideomakerSession(request(), config, send, lookup))?.status).toBe(503);
++    expect((await first)?.status).toBe(503);
++    expect((await second)?.status).toBe(503);
++    expect((await guardVideomakerSession(request(), config, send, lookup))?.status).toBe(503);
++    expect(lookup).toHaveBeenCalledTimes(2);
++    expect(send).not.toHaveBeenCalled();
++    releases.forEach((release) => release());
++    await vi.waitFor(async () => expect(await guardVideomakerSession(request(), config, send, async () => null)).toBeNull());
++  }, 10_000);
++
+   it("schließt bei Ausfällen, Weiterleitungen und unerwarteten Antworten", async () => {
+     for (const send of [
+       async () => {
+diff --git a/apps/web/src/server/videomaker-session.ts b/apps/web/src/server/videomaker-session.ts
+index d4e6243..089495f 100644
+--- a/apps/web/src/server/videomaker-session.ts
++++ b/apps/web/src/server/videomaker-session.ts
+@@ -9,10 +9,24 @@ type GuardFetch = (endpoint: string, options: { cookie: string; secret: string;
+ type BindingLookup = (request: Request) => Promise<string | null>;
+ const LIMIT = 16;
+ const STATE = Symbol.for("videomaker.haben.sessionGuard");
+-const shared = globalThis as typeof globalThis & { [STATE]?: { active: number; caReads: number } };
+-shared[STATE] ??= { active: 0, caReads: 0 };
++const shared = globalThis as typeof globalThis & { [STATE]?: { active: number; caReads: number; lookups?: number } };
++shared[STATE] ??= { active: 0, caReads: 0, lookups: 0 };
+ const limits = shared[STATE];
+ 
++/** A timeout frees the request; a stuck lookup still consumes one of two slots until it actually ends. */
++async function boundedLookup(request: Request, lookup: BindingLookup): Promise<string | null> {
++  if ((limits.lookups ?? 0) >= 2) throw new Error("Zu viele ausstehende Sitzungsprüfungen");
++  limits.lookups = (limits.lookups ?? 0) + 1;
++  const pending = Promise.resolve().then(() => lookup(request));
++  void pending.then(() => { limits.lookups!--; }, () => { limits.lookups!--; });
++  let timer: ReturnType<typeof setTimeout> | undefined;
++  try {
++    return await Promise.race([pending, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Zeitüberschreitung")), 2000); })]);
++  } finally {
++    if (timer) clearTimeout(timer);
++  }
++}
++
+ /** Nur ausdrücklich aktivieren: die lokale Haben-Anmeldung bleibt ansonsten wie bei Upstream. */
+ const configuration = (): GuardConfig => ({
+   mode: process.env.HABEN_VIDEOMAKER_SESSION_GUARD,
+@@ -141,7 +155,7 @@ export async function guardVideomakerSession(request: Request, config = configur
+     return new Response("Die Video-Maker-Sitzungsprüfung ist ausgelastet.", { status: 503, headers: { "Cache-Control": "no-store" } });
+   limits.active++;
+   try {
+-    const reference = await lookup(request);
++    const reference = await boundedLookup(request, lookup);
+     if (reference !== null && !/^[A-Za-z0-9_-]{43}$/.test(reference))
+       return new Response("Bitte erneut bei Video-Maker anmelden.", { status: 401, headers: { "Cache-Control": "no-store" } });
+     if (reference !== null && (!config.bindingSecret || config.bindingSecret.length < 32 || config.bindingSecret.length > 256))
