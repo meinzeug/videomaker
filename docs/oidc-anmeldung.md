@@ -78,6 +78,15 @@ Der dafür notwendige produktive Anbieter und die transaktionale Zuordnung
 existieren noch nicht; der Wächter darf nicht als gebundener gemeinsamer Logout
 dargestellt werden.
 
+Die vorbereitete interne Referenzschnittstelle hat zusätzlich die Operation
+`match`: Sie prüft das vorgelegte Video-Maker-Cookie und die OIDC-Referenz
+gemeinsam in der Transaktion mit Widerruf und Schlüsselgeneration. Ein gültiges
+Cookie einer anderen Sitzung, eine abgelaufene Referenz und ein widerrufenes
+Cookie werden abgelehnt. Die Schnittstelle liefert nur den Status, keine
+Sitzungsdaten. Dies ist ein Baustein und noch keine Korrektur des Haben-Wächters:
+Der vom Anbieter signierte Referenz-Claim und dessen unveränderliche Bindung an
+die konkrete Haben-Sitzung beim Callback fehlen weiterhin.
+
 Der Lauf benötigt Node 22, installierte Video-Maker- und Haben-Abhängigkeiten,
 die unter `OIDC_PROVIDER_TEST_DIR` separat installierte Testbibliothek
 `oidc-provider` und einen leeren, ausschließlich lokalen PostgreSQL-18-

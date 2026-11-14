@@ -23,7 +23,7 @@ export async function POST(request:Request) {
  if(!internalSessionSecretValid(secret,request.headers.get('x-videomaker-internal-secret')))return new Response(null,{status:401,headers});
  const operation=request.headers.get('x-oidc-binding-operation');
  // The internal protocol is header-only; explicitly require a zero-length body.
- if((operation!=='issue'&&operation!=='check'&&operation!=='reset')||request.headers.get('content-length')!=='0'||request.headers.has('transfer-encoding'))return new Response(null,{status:400,headers});
+ if((operation!=='issue'&&operation!=='check'&&operation!=='reset'&&operation!=='match')||request.headers.get('content-length')!=='0'||request.headers.has('transfer-encoding'))return new Response(null,{status:400,headers});
  if((state.__videomakerOidcBindingActive??0)>=16)return new Response(null,{status:503,headers});
  state.__videomakerOidcBindingActive=(state.__videomakerOidcBindingActive??0)+1;
  let database:Database.Database|undefined;
@@ -38,6 +38,10 @@ export async function POST(request:Request) {
    return reference?Response.json({reference},{status:200,headers}):new Response(null,{status:401,headers});
   }
   const reference=request.headers.get('x-oidc-session-reference')||'';
+  if(operation==='match') {
+   const cookie=cookieValue(request);
+   return new Response(null,{status:cookie&&bindings.matchesCookie(reference,cookie)?204:401,headers});
+  }
   return new Response(null,{status:bindings.isActive(reference)?204:401,headers});
  } catch {
   return new Response(null,{status:503,headers});

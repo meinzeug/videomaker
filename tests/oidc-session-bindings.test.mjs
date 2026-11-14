@@ -40,6 +40,28 @@ test('Referenz bindet echten signierten Sitzungscookie an denselben Widerruf ohn
  } finally {db.close();}
 });
 
+test('Cookie und Referenz gehören zur selben aktiven Sitzung; Fremdsitzung und Widerruf werden abgewiesen',()=>{
+ const {db,binding,now,advance}=fixture();
+ try{
+  const original=makeCookie(now()+60_000,'original'),other=makeCookie(now()+60_000,'other');
+  const ref=binding.issue(original),otherRef=binding.issue(other);
+  assert.equal(binding.matchesCookie(ref,original),true);
+  assert.equal(binding.matchesCookie(ref,other),false);
+  assert.equal(binding.matchesCookie(otherRef,original),false);
+  assert.equal(binding.matchesCookie('invalid',original),false);
+  assert.equal(binding.matchesCookie(ref,original+'x'),false);
+  assert.equal(binding.matchesCookie(ref,''),false);
+  revokeSession(db,secret,original,now());
+  assert.equal(binding.matchesCookie(ref,original),false);
+  assert.equal(binding.matchesCookie(ref,other),false);
+  assert.equal(binding.matchesCookie(otherRef,other),true);
+  advance(60_001);
+  assert.equal(binding.matchesCookie(otherRef,other),false);
+  advance(-120_000);
+  assert.equal(binding.matchesCookie(otherRef,other),false,'beobachtener Ablauf bleibt auch nach Uhrkorrektur bestehen');
+ }finally{db.close();}
+});
+
 test('verfälschte, abgelaufene oder widerrufene Cookies und ungültige Referenzen scheitern geschlossen',()=>{
  const {db,binding,now}=fixture();
  try {

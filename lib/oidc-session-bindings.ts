@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { sessionHashRevokedReadOnly } from './session-revocations.ts';
 
@@ -90,6 +90,19 @@ export function createOidcSessionBindings(db:Database.Database,verify:Verify,clo
     const current=now(),currentGeneration=generation();
     const row=db.prepare('SELECT session_hash,expires_at,key_generation FROM oidc_session_bindings WHERE reference_hash=?').get(digest(reference)) as {session_hash:string;expires_at:number;key_generation:number}|undefined;
     return !!row&&row.key_generation===currentGeneration&&row.expires_at>current&&!sessionHashRevokedReadOnly(db,row.session_hash);
+   }).immediate();
+  },
+  /** Check the original browser session and reference together in the logout transaction domain. */
+  matchesCookie(reference:string,cookie:string):boolean {
+   observeGeneration();
+   if(typeof reference!=='string'||!referencePattern.test(reference)||typeof cookie!=='string'||!cookie||cookie.length>512)return false;
+   return db.transaction(()=>{
+    const current=now(),currentGeneration=generation(),proof=verify(db,cookie);
+    if(!proof||!/^[a-f0-9]{64}$/.test(proof.sessionHash)||!Number.isSafeInteger(proof.expiresAt)||proof.expiresAt<=current)return false;
+    const row=db.prepare('SELECT session_hash,expires_at,key_generation FROM oidc_session_bindings WHERE reference_hash=?').get(digest(reference)) as {session_hash:string;expires_at:number;key_generation:number}|undefined;
+    if(!row||row.key_generation!==currentGeneration||row.expires_at<=current||!/^[a-f0-9]{64}$/.test(row.session_hash))return false;
+    if(!timingSafeEqual(Buffer.from(row.session_hash,'hex'),Buffer.from(proof.sessionHash,'hex')))return false;
+    return !sessionHashRevokedReadOnly(db,row.session_hash);
    }).immediate();
   },
   /** Retire this signed-in browser's references after a provider restart; never rebind old provider UIDs. */
