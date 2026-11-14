@@ -2,10 +2,11 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {cameraStartWasRefused} from '@/lib/camera-ui-state';
 import CameraPreview from './camera-preview';
+import CameraRecovery from './camera-recovery';
 
 type Camera={id:string;name:string;phase:'idle'|'preparing'|'recording'|'finalizing'|'ready'|'partial'|'error';recordingId:string|null;projectId:string|null;pendingStart:boolean;lastCommand:{id:string;result:string;neverDelivered?:number|boolean}|null;recoverableClaim:{recordingId:string;projectId:string;phase:'partial'|'error'}|null;stopIntent:{id:string;recordingId:string;observed:boolean}|null};
 type Command={id:string;type:'record_start'|'record_stop';recordingId:string;projectId?:string;deviceId:string};
-type OpenClaim={recordingId:string;deviceId:string;deviceName:string|null;openedAt:number;lastConfirmedPhase:'ready'|'partial'|'error'|'unknown'};
+type OpenClaim={recordingId:string;deviceId:string;deviceName:string|null;openedAt:number;lastConfirmedPhase:'ready'|'partial'|'error'|'unknown';recovery:{sizeBytes:number;sha256:string}|null};
 const labels:Record<Camera['phase'],string>={idle:'Aufnahmebereit',preparing:'Aufnahme wird vorbereitet',recording:'Aufnahme läuft',finalizing:'Aufnahme wird abgeschlossen',ready:'Lokal gespeichert',partial:'Lokal unvollständig gespeichert',error:'Kamera meldet einen Fehler'};
 
 /** Appears only when the internal camera API is enabled; production remains 404. */
@@ -13,6 +14,7 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
  const [available,setAvailable]=useState(false),[cameras,setCameras]=useState<Camera[]>([]),[selected,setSelected]=useState(''),[loading,setLoading]=useState(false),[pending,setPending]=useState<Command|null>(null),[message,setMessage]=useState(''),[connectionError,setConnectionError]=useState(false);
  const [preview,setPreview]=useState<{generation:string;creationToken:string;devices:{deviceId:string;available:boolean}[]}|null>(null);
  const [openClaims,setOpenClaims]=useState<{projectId:string;claims:OpenClaim[];hasMore:boolean}|null>(null),[claimsError,setClaimsError]=useState(false);
+ const [recovering,setRecovering]=useState<string|null>(null),recoveringRef=useRef<string|null>(null);
  const refreshSequence=useRef(0);
  const refresh=useCallback(async()=>{const revision=++refreshSequence.current,controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),1800);try{
   const response=await fetch('/api/camera-devices',{cache:'no-store',signal:controller.signal});if(revision!==refreshSequence.current)return;if(response.status===404){setAvailable(false);setConnectionError(false);return;}if(!response.ok)throw Error();
@@ -34,8 +36,8 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
    const response=await fetch(`/api/camera-devices/claims?projectId=${encodeURIComponent(projectId)}`,{cache:'no-store',signal:controller.signal});
    if(!response.ok)throw Error();const data=await response.json();
    if(!data||!Array.isArray(data.claims)||typeof data.hasMore!=='boolean')throw Error();
-   if(active&&current===revision){setOpenClaims({projectId,claims:data.claims,hasMore:data.hasMore});setClaimsError(false);}
-  }catch{if(active&&current===revision){setOpenClaims(null);setClaimsError(true);}}finally{clearTimeout(timeout);}};
+   if(active&&current===revision&&!recoveringRef.current){setOpenClaims({projectId,claims:data.claims,hasMore:data.hasMore});setClaimsError(false);}
+  }catch{if(active&&current===revision&&!recoveringRef.current){setOpenClaims(null);setClaimsError(true);}}finally{clearTimeout(timeout);}};
   void load();const timer=setInterval(()=>void load(),5000);return()=>{active=false;clearInterval(timer);};
  },[available,projectId]);
  useEffect(()=>{
@@ -65,7 +67,7 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
   <label>Kamera <select value={camera?selected:''} disabled={!!pending} onChange={event=>setSelected(event.target.value)}><option value="">Gerät auswählen</option>{cameras.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
   {!cameras.length&&<p>Keine Kamera erreichbar.</p>}{connectionError&&<p role="alert">Verbindung unterbrochen. Den Aufnahmezustand bitte am Smartphone prüfen.</p>}
   {claimsError&&<p role="alert">Offene Kameravorgänge konnten nicht geladen werden.</p>}
-  {openClaims?.projectId===projectId&&openClaims.claims.length>0&&<div role="status"><p><strong>Offene Kameravorgänge für dieses Skript</strong></p><p>Diese Vorgänge bleiben auch sichtbar, wenn das Smartphone nicht erreichbar ist. Prüfe eine mögliche Aufnahme am Gerät; ein Cloud-Upload ist hier noch nicht bestätigt.</p><ul>{openClaims.claims.map(claim=><li key={claim.recordingId}>{claim.deviceName||'Unbekanntes Gerät'} · Aufnahme {claim.recordingId.slice(0,8)} · {claim.lastConfirmedPhase==='ready'?'lokal gespeichert':claim.lastConfirmedPhase==='partial'?'unvollständig':claim.lastConfirmedPhase==='error'?'Fehler gemeldet':'Status ungeklärt'}</li>)}</ul>{openClaims.hasMore&&<p>Weitere offene Vorgänge werden nicht angezeigt.</p>}</div>}
+  {openClaims?.projectId===projectId&&openClaims.claims.length>0&&<div><p><strong>Offene Kameravorgänge für dieses Skript</strong></p><p>Diese Vorgänge bleiben auch sichtbar, wenn das Smartphone nicht erreichbar ist. Prüfe eine mögliche Aufnahme am Gerät; ein Cloud-Upload ist hier noch nicht bestätigt.</p><ul>{openClaims.claims.map(claim=><li key={claim.recordingId}>{claim.deviceName||'Unbekanntes Gerät'} · Aufnahme {claim.recordingId.slice(0,8)} · {claim.lastConfirmedPhase==='ready'?'lokal gespeichert':claim.lastConfirmedPhase==='partial'?'unvollständig':claim.lastConfirmedPhase==='error'?'Fehler gemeldet':'Status ungeklärt'}{claim.recovery&&<CameraRecovery projectId={projectId} recordingId={claim.recordingId} proof={claim.recovery} disabled={recovering!==null&&recovering!==claim.recordingId} onBegin={()=>{if(recoveringRef.current)return false;recoveringRef.current=claim.recordingId;setRecovering(claim.recordingId);return true;}} onEnd={()=>{if(recoveringRef.current===claim.recordingId){recoveringRef.current=null;setRecovering(null);}}} onConfirmed={()=>setMessage('Die Kopie wurde auf dem Server mit passender Prüfsumme bestätigt. Das Original bleibt erhalten.')}/>}</li>)}</ul>{openClaims.hasMore&&<p>Weitere offene Vorgänge werden nicht angezeigt.</p>}</div>}
   {camera&&<p role="status"><strong>{labels[camera.phase]}</strong>{camera.phase==='ready'&&' – der Upload ist damit noch nicht bestätigt.'}{camera.projectId&&camera.projectId!==projectId&&' · Anderes Skript'}</p>}
   {camera?.lastCommand&&cameraStartWasRefused(camera.lastCommand,camera.lastCommand.id)&&<p role="alert">Die letzte Startanfrage wurde nicht ausgeführt. Bitte den Kamerastatus prüfen.</p>}
   {camera?.recoverableClaim?.projectId===projectId&&<p>Für dieses Skript liegt eine fehlgeschlagene oder unvollständige Aufnahme vor. Eine lokale Datei kann am Smartphone gesichert werden.</p>}

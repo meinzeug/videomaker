@@ -25,8 +25,8 @@ test('open claims remain visible when their device is absent, and are scoped to 
  db.prepare("INSERT INTO camera_project_final_status VALUES(?,?,?,'ready',?)").run(ready,project,device,50);
  const before=db.prepare('SELECT total_changes() AS n').get().n, result=listOpenCameraClaims(db,project);
  assert.deepEqual(result,{claims:[
-  {recordingId:unknown,deviceId:missing,deviceName:null,openedAt:20,lastConfirmedPhase:'unknown'},
-  {recordingId:ready,deviceId:device,deviceName:'Samsung',openedAt:10,lastConfirmedPhase:'ready'},
+  {recordingId:unknown,deviceId:missing,deviceName:null,openedAt:20,lastConfirmedPhase:'unknown',recovery:null},
+  {recordingId:ready,deviceId:device,deviceName:'Samsung',openedAt:10,lastConfirmedPhase:'ready',recovery:null},
  ],hasMore:false});
  assert.equal(db.prepare('SELECT total_changes() AS n').get().n,before);db.close();
 });
@@ -40,6 +40,28 @@ test('conflicting ready and failure reports are shown as unknown without resolvi
  assert.equal(listOpenCameraClaims(db,project).claims[0].lastConfirmedPhase,'unknown');
  assert.equal(db.prepare('SELECT closed_at FROM camera_project_claims WHERE recording_id=?').get(take).closed_at,null);
  db.close();
+});
+
+test('recovery proof is exposed only for matching READY evidence with bounded size',()=>{
+ const {db,add}=fixture(),project=randomUUID(),device=randomUUID(),take=randomUUID(),sha='a'.repeat(64);
+ add(take,device,project,1);
+ db.prepare("INSERT INTO camera_project_final_status VALUES(?,?,?,'ready',?)").run(take,project,device,2);
+ assert.equal(listOpenCameraClaims(db,project).claims[0].recovery,null);
+ db.prepare("INSERT INTO camera_project_device_manifests VALUES(?,?,?,'ready',?,?,?)").run(take,project,device,42,sha,3);
+ assert.deepEqual(listOpenCameraClaims(db,project).claims[0].recovery,{sizeBytes:42,sha256:sha});
+ db.prepare("INSERT INTO camera_project_failures VALUES(?,?,?,'error',?)").run(take,project,device,4);
+ assert.equal(listOpenCameraClaims(db,project).claims[0].recovery,null);
+ db.close();
+});
+
+test('partial, foreign or oversized device proof never enables cross-device recovery',()=>{
+ for(const variant of ['partial','other-device','other-project','oversized']){
+  const {db,add}=fixture(),project=randomUUID(),device=randomUUID(),take=randomUUID(),sha='a'.repeat(64);
+  add(take,device,project,1);
+  db.prepare("INSERT INTO camera_project_final_status VALUES(?,?,?,'ready',?)").run(take,project,device,2);
+  db.prepare('INSERT INTO camera_project_device_manifests VALUES(?,?,?,?,?,?,?)').run(take,variant==='other-project'?randomUUID():project,variant==='other-device'?randomUUID():device,variant==='partial'?'partial':'ready',variant==='oversized'?1024*1024*1024+1:42,sha,3);
+  assert.equal(listOpenCameraClaims(db,project).claims[0].recovery,null,variant);db.close();
+ }
 });
 
 test('response is bounded and discloses truncation without modifying claims',()=>{

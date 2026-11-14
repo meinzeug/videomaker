@@ -4,7 +4,7 @@ import { isRecordingId, MAX_RECORDING_SIZE, recordingPath, recordingsDir, type R
 import { recordingFileReceipt } from '@/lib/recording-receipt';
 import {prepareRecordingIntent,commitRecordingIntent,linkRecordingDurably,syncDirectory} from '@/lib/recording-upload-intent';
 import {acquireRecordingUpload,cleanupStaleRecordingUploads,readRecordingChunk,recordingFreeBytes,requireRecordingSpace} from '@/lib/recording-upload-guard';
-import {CAMERA_PROJECT_CLAIMS_SCHEMA,CameraUploadGateError,cameraUploadIdFor,ensureCameraClaimUploadMappings,lockAndValidateCameraUpload,releaseCameraUploadLock,recordCameraVerifiedUpload} from '@/lib/camera-project-claims';
+import {CAMERA_PROJECT_CLAIMS_SCHEMA,CameraUploadGateError,assertCameraUploadConsistent,cameraUploadIdFor,ensureCameraClaimUploadMappings,lockAndValidateCameraUpload,releaseCameraUploadLock,recordCameraVerifiedUpload} from '@/lib/camera-project-claims';
 import { createHash } from 'node:crypto';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -39,7 +39,8 @@ async function existingReceipt(item:Recording, projectId:string, mime:string, le
  // A verified upload releases a remote project claim only if the same device
  // has also reported this exact take locally finished. ACK alone is insufficient.
  const database=db();
- const result=database.transaction(()=>{
+ let result;
+ try{result=database.transaction(()=>{
   // Logout and this check serialize under the same SQLite writer lock. An
   // already committed upload is never removed when a later receipt is denied.
   if(!sessionAuthorized(database,credential))return 'unauthorized';
@@ -48,7 +49,10 @@ async function existingReceipt(item:Recording, projectId:string, mime:string, le
   if(cameraRecordingId&&(database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('camera_project_claims','camera_project_upload_receipts','camera_remote_devices')").get() as {n:number}).n===3)
    recordCameraVerifiedUpload(database,cameraRecordingId,projectId,item.id,receipt.sha256,receipt.sizeBytes,Date.now());
   return 'ok';
- }).immediate();
+ }).immediate();}catch(error){
+  if(error instanceof CameraUploadGateError)return NextResponse.json({code:error.gateCode,error:error.message},{status:409,headers:{'Cache-Control':'private, no-store'}});
+  throw error;
+ }
  if(result==='unauthorized')return NextResponse.json({error:'Sitzung abgelaufen. Bitte erneut anmelden und den Upload prüfen.'},{status:403,headers:{'Cache-Control':'private, no-store'}});
  if(result==='changed')return NextResponse.json({error:'Aufnahme wurde während der Prüfung verändert.'},{status:409,headers:{'Cache-Control':'private, no-store'}});
  return NextResponse.json({id:item.id,projectId,...receipt},{headers:{'Cache-Control':'no-store'}});
@@ -145,6 +149,7 @@ export async function POST(req:Request,{params}:Context) {
    // link and database commit, so a completed logout cannot overtake it.
    if(!sessionAuthorized(db(),credential))return 'unauthorized';
    if(!db().prepare('SELECT 1 FROM projects WHERE id=?').get(id))return 'missing';
+   if(cameraRecordingId)assertCameraUploadConsistent(db(),cameraRecordingId);
    const old=db().prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').all(recordingId) as Recording[];
    if(old.length)return old.length===1&&old[0].project_id===id?'exists':'conflict';
    if(existsSync(target)&&!existsSync(marker))return 'unfamiliar';
@@ -170,6 +175,7 @@ export async function POST(req:Request,{params}:Context) {
     lease.check();
     if(!sessionAuthorized(db(),credential))return 'unauthorized';
     if(!db().prepare('SELECT 1 FROM projects WHERE id=?').get(id))return 'missing';
+    if(cameraRecordingId)assertCameraUploadConsistent(db(),cameraRecordingId);
     const old=db().prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').all(recordingId) as Recording[];
     if(old.length)return old.length===1&&old[0].project_id===id?'exists':'conflict';
     syncDirectory(recordingsDir());
@@ -192,6 +198,7 @@ export async function POST(req:Request,{params}:Context) {
   lease.check();
   return NextResponse.json(receipt,{status:created?201:200,headers:{'Cache-Control':'no-store'}});
  } catch(error) {
+  if(error instanceof CameraUploadGateError)return NextResponse.json({code:error.gateCode,error:error.message},{status:409,headers:{'Cache-Control':'private, no-store'}});
   if(error instanceof Error && error.message==='TOO_LARGE')return NextResponse.json({error:'Die Aufnahme ist größer als 1 GB.'},{status:413});
   if(error instanceof Error && error.message==='INCOMPLETE')return NextResponse.json({error:'Die Aufnahme wurde nicht vollständig übertragen.'},{status:400});
   if(error instanceof Error && error.message==='HASH_MISMATCH')return NextResponse.json({error:'Prüfsumme stimmt nicht. Die Aufnahme wurde nicht übernommen.'},{status:422});
