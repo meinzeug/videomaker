@@ -177,3 +177,17 @@ test('unrepresentable assembled data stops durably without requesting remaining 
   await assert.rejects(runGrokFlow(db,claim,false,()=>{}),/Speichergrenze/);assert.equal(calls.length,3);
  });
 });
+
+test('assembled script preserves every original part byte-for-byte apart from the explicit separator',async()=>{
+ await isolated(['Erster Teil','Zweiter Teil'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
+  const original=['\n  Anfang mit Leerraum.\n','\nFortsetzung mit Leerraum.  \n'];
+  globalThis.fetch=async(urlArg,init)=>{
+   const result=await baseFetch(urlArg,init);if(calls.length===1)return result;
+   const value=await result.json(),payload=JSON.parse(value.choices[0].message.content);payload.skript=original[calls.length-2];value.choices[0].message.content=JSON.stringify(payload);
+   return new Response(JSON.stringify(value),{status:200});
+  };
+  const result=await runGrokFlow(db,claim,true,()=>{});
+  assert.equal(JSON.parse(result.responseText).script,original.join('\n\n'));
+  assert.deepEqual(state.readGrokParts(db,id).map(part=>JSON.parse(JSON.parse(part.response).text).skript),original);
+ });
+});
