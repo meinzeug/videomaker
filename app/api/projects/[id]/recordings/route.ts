@@ -1,8 +1,8 @@
-import { authorized, sameOrigin } from '@/lib/auth';
+import { authorized, sameOrigin, sessionAuthorized, sessionValue } from '@/lib/auth';
 import db from '@/lib/db';
 import { isRecordingId, MAX_RECORDING_SIZE, recordingPath, recordingsDir, type Recording } from '@/lib/recordings';
 import { recordingFileReceipt } from '@/lib/recording-receipt';
-import {ensureRecordingIntent,linkRecordingDurably,syncDirectory} from '@/lib/recording-upload-intent';
+import {prepareRecordingIntent,commitRecordingIntent,linkRecordingDurably,syncDirectory} from '@/lib/recording-upload-intent';
 import {acquireRecordingUpload,cleanupStaleRecordingUploads,readRecordingChunk,recordingFreeBytes,requireRecordingSpace} from '@/lib/recording-upload-guard';
 import {CAMERA_PROJECT_CLAIMS_SCHEMA,CameraUploadGateError,cameraUploadIdFor,ensureCameraClaimUploadMappings,lockAndValidateCameraUpload,releaseCameraUploadLock,recordCameraVerifiedUpload} from '@/lib/camera-project-claims';
 import { createHash } from 'node:crypto';
@@ -23,7 +23,7 @@ export async function GET(_req:Request,{params}:Context) {
 }
 
 /** A receipt describes bytes read from the stored file, not merely the request. */
-async function existingReceipt(item:Recording, projectId:string, mime:string, length:number, expectedHash:string|null, heartbeat:()=>void, cameraRecordingId:string|null) {
+async function existingReceipt(item:Recording, projectId:string, mime:string, length:number, expectedHash:string|null, heartbeat:()=>void, cameraRecordingId:string|null, credential:string) {
  if(item.project_id!==projectId||item.mime!==mime||(length>0&&item.size!==length))return NextResponse.json({error:'Aufnahme-ID bereits für andere Daten vergeben.'},{status:409});
  let receipt;
  try {receipt=await recordingFileReceipt(recordingPath(item.id,item.mime),item.size,heartbeat);}
@@ -39,16 +39,24 @@ async function existingReceipt(item:Recording, projectId:string, mime:string, le
  // A verified upload releases a remote project claim only if the same device
  // has also reported this exact take locally finished. ACK alone is insufficient.
  const database=db();
- database.transaction(()=>{
-  if((database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('camera_project_claims','camera_project_upload_receipts','camera_remote_devices')").get() as {n:number}).n!==3)return;
+ const result=database.transaction(()=>{
+  // Logout and this check serialize under the same SQLite writer lock. An
+  // already committed upload is never removed when a later receipt is denied.
+  if(!sessionAuthorized(database,credential))return 'unauthorized';
   const stillPresent=database.prepare('SELECT 1 FROM project_recordings WHERE id=? AND project_id=? AND mime=? AND size=? AND created_at=?').get(item.id,projectId,item.mime,item.size,item.created_at);
-  if(stillPresent&&cameraRecordingId)recordCameraVerifiedUpload(database,cameraRecordingId,projectId,item.id,receipt.sha256,receipt.sizeBytes,Date.now());
+  if(!stillPresent)return 'changed';
+  if(cameraRecordingId&&(database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('camera_project_claims','camera_project_upload_receipts','camera_remote_devices')").get() as {n:number}).n===3)
+   recordCameraVerifiedUpload(database,cameraRecordingId,projectId,item.id,receipt.sha256,receipt.sizeBytes,Date.now());
+  return 'ok';
  }).immediate();
+ if(result==='unauthorized')return NextResponse.json({error:'Sitzung abgelaufen. Bitte erneut anmelden und den Upload prüfen.'},{status:403,headers:{'Cache-Control':'private, no-store'}});
+ if(result==='changed')return NextResponse.json({error:'Aufnahme wurde während der Prüfung verändert.'},{status:409,headers:{'Cache-Control':'private, no-store'}});
  return NextResponse.json({id:item.id,projectId,...receipt},{headers:{'Cache-Control':'no-store'}});
 }
 
 export async function POST(req:Request,{params}:Context) {
  if(!await authorized()||!await sameOrigin(req))return NextResponse.json({error:'Nicht erlaubt'},{status:403});
+ const credential=await sessionValue();
  const {id}=await params;
  const recordingId=(req.headers.get('x-recording-id') || '').toLowerCase();
  const rawCameraRecordingId=req.headers.get('x-camera-recording-id');
@@ -87,13 +95,13 @@ export async function POST(req:Request,{params}:Context) {
    if(size!==existing.size)return NextResponse.json({error:'Aufnahme-ID bereits für andere Daten vergeben.'},{status:409});
    const digest=incoming.digest('hex');
    if(expectedHash&&digest!==expectedHash)return NextResponse.json({error:'Prüfsumme stimmt nicht. Die Aufnahme wurde nicht übernommen.'},{status:422});
-   return await existingReceipt(existing,id,mime,size,digest,lease.check,cameraRecordingId);
+   return await existingReceipt(existing,id,mime,size,digest,lease.check,cameraRecordingId,credential);
   } catch(error) {
    if(error instanceof Error&&['UPLOAD_TIMEOUT','UPLOAD_LEASE_LOST'].includes(error.message))return NextResponse.json({error:'Upload unterbrochen. Bitte erneut versuchen.'},{status:408});
    return NextResponse.json({error:'Die Aufnahme wurde nicht vollständig übertragen.'},{status:400});
   }
  }
- let temporary='';
+ let temporary='',intentTemporary='';
  try {
   await mkdir(recordingsDir(),{recursive:true,mode:0o700});
   lease.check();
@@ -128,22 +136,30 @@ export async function POST(req:Request,{params}:Context) {
   const marker=path.join(recordingsDir(),`.upload-intent-${recordingId}.json`);
   if(existsSync(target)&&!existsSync(marker))return NextResponse.json({error:'Unbekannte vorhandene Aufnahmedatei; keine Daten wurden überschrieben.'},{status:409});
   const intent={version:1 as const,recordingId,projectId:id,mime,sizeBytes:size,sha256:incomingReceipt.sha256};
-  if(!await ensureRecordingIntent(recordingsDir(),intent,lease.token,lease.check))return NextResponse.json({error:'Aufnahme-ID ist bereits an andere Daten gebunden.'},{status:409});
+  intentTemporary=await prepareRecordingIntent(recordingsDir(),intent,lease.token,lease.check);
   lease.check();
   const createdAt=new Date().toISOString();
   const result=db().transaction(()=>{
    lease.check();
+   // Hold the writer lock from the final revocation check through the file
+   // link and database commit, so a completed logout cannot overtake it.
+   if(!sessionAuthorized(db(),credential))return 'unauthorized';
    if(!db().prepare('SELECT 1 FROM projects WHERE id=?').get(id))return 'missing';
    const old=db().prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').all(recordingId) as Recording[];
    if(old.length)return old.length===1&&old[0].project_id===id?'exists':'conflict';
+   if(existsSync(target)&&!existsSync(marker))return 'unfamiliar';
+   if(!commitRecordingIntent(recordingsDir(),intent,intentTemporary,lease.check))return 'intent_conflict';
    // Never overwrite an orphaned or pre-existing file, even after a crash.
    if(linkRecordingDurably(temporary,target)==='exists')return 'recover';
    lease.check();
    db().prepare('INSERT INTO project_recordings(id,project_id,created_at,mime,size) VALUES(?,?,?,?,?)').run(recordingId,id,createdAt,mime,size);
    return 'created';
-  })();
+  }).immediate();
+  if(result==='unauthorized')return NextResponse.json({error:'Sitzung abgelaufen. Bitte erneut anmelden und den Upload prüfen.'},{status:403,headers:{'Cache-Control':'private, no-store'}});
   if(result==='missing')return NextResponse.json({error:'Skript wurde gelöscht.'},{status:404});
   if(result==='conflict')return NextResponse.json({error:'Aufnahme-ID bereits vergeben.'},{status:409});
+  if(result==='unfamiliar')return NextResponse.json({error:'Unbekannte vorhandene Aufnahmedatei; keine Daten wurden überschrieben.'},{status:409});
+  if(result==='intent_conflict')return NextResponse.json({error:'Aufnahme-ID ist bereits an andere Daten gebunden.'},{status:409});
   let created=result==='created';
   if(result==='recover'){
    // A matching durable journal and actual bytes are both required to claim an orphan.
@@ -152,6 +168,7 @@ export async function POST(req:Request,{params}:Context) {
    if(orphan.sha256!==incomingReceipt.sha256)return NextResponse.json({error:'Vorhandene Aufnahmedatei stimmt nicht überein.'},{status:409});
    const recovered=db().transaction(()=>{
     lease.check();
+    if(!sessionAuthorized(db(),credential))return 'unauthorized';
     if(!db().prepare('SELECT 1 FROM projects WHERE id=?').get(id))return 'missing';
     const old=db().prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').all(recordingId) as Recording[];
     if(old.length)return old.length===1&&old[0].project_id===id?'exists':'conflict';
@@ -159,7 +176,8 @@ export async function POST(req:Request,{params}:Context) {
     lease.check();
     db().prepare('INSERT INTO project_recordings(id,project_id,created_at,mime,size) VALUES(?,?,?,?,?)').run(recordingId,id,createdAt,mime,size);
     return 'recovered';
-   })();
+   }).immediate();
+   if(recovered==='unauthorized')return NextResponse.json({error:'Sitzung abgelaufen. Bitte erneut anmelden und den Upload prüfen.'},{status:403,headers:{'Cache-Control':'private, no-store'}});
    if(recovered==='missing')return NextResponse.json({error:'Skript wurde gelöscht.'},{status:404});
    if(recovered==='conflict')return NextResponse.json({error:'Aufnahme-ID bereits vergeben.'},{status:409});
    created=recovered==='recovered';
@@ -167,7 +185,7 @@ export async function POST(req:Request,{params}:Context) {
   lease.check();
   const saved=db().prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').get(recordingId) as Recording|undefined;
   if(!saved)return NextResponse.json({error:'Aufnahme konnte nicht bestätigt werden.'},{status:500});
-  const response=await existingReceipt(saved,id,mime,length,expectedHash ?? incomingReceipt.sha256,lease.check,cameraRecordingId);
+  const response=await existingReceipt(saved,id,mime,length,expectedHash ?? incomingReceipt.sha256,lease.check,cameraRecordingId,credential);
   lease.check();
   if(response.status!==200)return response;
   const receipt=await response.json();
@@ -181,6 +199,6 @@ export async function POST(req:Request,{params}:Context) {
   if(error instanceof Error && ['UPLOAD_TIMEOUT','UPLOAD_LEASE_LOST'].includes(error.message))return NextResponse.json({error:'Upload unterbrochen. Bitte erneut versuchen.'},{status:408});
   console.error('Aufnahme konnte nicht gespeichert werden:',error);
   return NextResponse.json({error:'Speichern fehlgeschlagen. Bitte Speicherplatz und Verbindung prüfen und erneut versuchen.'},{status:500});
- } finally {if(temporary)await rm(temporary,{force:true}).catch(()=>{});}
+ } finally {if(intentTemporary)await rm(intentTemporary,{force:true}).catch(()=>{});if(temporary)await rm(temporary,{force:true}).catch(()=>{});}
  } finally {try{releaseCameraUploadLock(db(),lease.token);}catch{/* A stale lock remains fail-closed until a safe retry. */}try{lease.release();}catch{/* A timed-out lease cannot authorize a receipt. */}}
 }

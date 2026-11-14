@@ -54,8 +54,12 @@ test('verified uploads are idempotent, conflict-safe, project-bound and survive 
   await writeFile(stored,bytes);
   const race=randomUUID();const raceHeaders={...headers,'X-Recording-Id':race};
   const simultaneous=await Promise.all([req('POST',url,bytes,raceHeaders),req('POST',url,bytes,raceHeaders)]);
-  assert.deepEqual(simultaneous.map(x=>x.status).sort(),[200,201]);
-  for(const response of simultaneous)assert.equal((await response.json()).sha256,digest);
+  // A second caller either arrives after completion, or sees the existing
+  // upload's lock. The latter must be a specifically retryable busy result.
+  assert.equal(simultaneous.filter(x=>x.status===201).length,1);
+  assert.equal(simultaneous.filter(x=>x.status===200||x.status===409).length,1);
+  for(const response of simultaneous){const body=await response.json();if(response.status===409)assert.equal(body.code,'camera_upload_busy');else assert.equal(body.sha256,digest);}
+  r=await req('POST',url,bytes,raceHeaders);assert.equal(r.status,200);assert.equal((await r.json()).sha256,digest);
   r=await req('DELETE',`/api/projects/${project}`);assert.equal(r.status,200);projects.splice(projects.indexOf(project),1);
   r=await req('POST',url,bytes,headers);assert.equal(r.status,404);
  } finally {for(const id of projects)await req('DELETE',`/api/projects/${id}`).catch(()=>{});}
