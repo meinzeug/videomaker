@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import {CAMERA_STOP_INTENT_SCHEMA,reserveCameraStopSlot,requestCameraStopIntent,deliverCameraStopIntent,CameraStopIntentError} from './camera-stop-intent.ts';
 import {CAMERA_PROJECT_CLAIMS_SCHEMA,CameraProjectClaimError,claimCameraProject,recordCameraFinalStatus,recordCameraDeviceManifest,recordCameraFailureStatus,closeCameraProjectClaim} from './camera-project-claims.ts';
+import {CAMERA_LATE_ALERT_SCHEMA,recordLateCameraAlert} from './camera-late-alerts.ts';
 const isUuid=(value:unknown):value is string=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 
 /** Device telemetry is authoritative; ready is a local file, never a cloud receipt. */
@@ -78,7 +79,7 @@ export function ensureCameraRemoteSchema(db:Database.Database){
     OR (OLD.delivered_at IS NULL AND NEW.delivered_at IS NOT NULL AND (OLD.result<>'queued' OR OLD.delivery_known<>1))
     THEN RAISE(ABORT,'invalid camera delivery change') END; END;`);
  }).immediate();
- db.exec(CAMERA_STOP_INTENT_SCHEMA);db.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);
+ db.exec(CAMERA_STOP_INTENT_SCHEMA);db.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);db.exec(CAMERA_LATE_ALERT_SCHEMA);
 }
 function expireCommands(db:Database.Database,clock:CameraClock){
  db.transaction(()=>{
@@ -115,11 +116,15 @@ export function receiveCameraHeartbeat(db:Database.Database,input:CameraHeartbea
   if(previous)db.prepare('UPDATE camera_remote_devices SET sequence=?,name=?,phase=?,recording_id=?,project_id=?,updated_at=?,runtime_id=?,updated_tick=? WHERE id=?').run(input.sequence,input.name,input.phase,input.recordingId,input.projectId,clock.wall,clock.runtimeId,clock.tick,input.id);
   else db.prepare('INSERT INTO camera_remote_devices(id,owner_hash,sequence,name,phase,recording_id,project_id,updated_at,runtime_id,updated_tick) VALUES(?,?,?,?,?,?,?,?,?,?)').run(input.id,ownerHash,input.sequence,input.name,input.phase,input.recordingId,input.projectId,clock.wall,clock.runtimeId,clock.tick);
   reserveCameraStopSlot(db,input.id);
-  if(input.phase==='ready'||input.phase==='partial'){
+  let lateAlert=false;
+  if(input.phase==='error'||input.phase==='partial'){
+   lateAlert=recordLateCameraAlert(db,{...input,phase:input.phase},deviceAuthenticated,clock.wall);
+  }
+  if(input.phase==='ready'||(input.phase==='partial'&&!lateAlert)){
    if(deviceAuthenticated){try{recordCameraDeviceManifest(db,input.id,input.recordingId,input.projectId,input.phase,input.sizeBytes!,input.sha256!,clock.wall);}catch(error){if(error instanceof CameraProjectClaimError)throw new CameraRemoteError(error.code,error.message);throw error;}}
    recordCameraFinalStatus(db,input.id,input.recordingId,input.projectId,input.phase,clock.wall);
   }
-  if(input.phase==='error')recordCameraFailureStatus(db,input.id,input.recordingId,input.projectId,'error',clock.wall);
+  if(input.phase==='error'&&!lateAlert)recordCameraFailureStatus(db,input.id,input.recordingId,input.projectId,'error',clock.wall);
   if(input.phase==='ready'||input.phase==='partial'||input.phase==='error'){
    db.prepare("UPDATE camera_remote_commands SET observed_final_at=? WHERE device_id=? AND type='record_start' AND recording_id=? AND project_id=? AND observed_final_at IS NULL").run(clock.wall,input.id,input.recordingId,input.projectId);
    db.prepare("UPDATE camera_stop_reservations SET released_at=? WHERE device_id=? AND recording_id=? AND used_at IS NULL AND released_at IS NULL AND recording_id IN (SELECT recording_id FROM camera_remote_commands WHERE device_id=? AND project_id=? AND type='record_start')").run(clock.wall,input.id,input.recordingId,input.id,input.projectId);
