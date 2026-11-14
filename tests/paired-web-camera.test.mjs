@@ -60,6 +60,22 @@ test('pause, resume, stop and switch require exact current take and camera facin
  }finally{f.db.close();}
 });
 
+test('pause, resume and stop do not confirm a different project for the same take',()=>{
+ for(const [action,initial,final] of [['pause','recording','paused'],['resume','paused','recording'],['stop','recording','ready']]){
+  for(const initialProject of [randomUUID(),null]){const f=setup();try{const take=randomUUID(),other=randomUUID();f.report(f.state(1,initial,take,initialProject));
+   const c=f.command(1,action,take);f.queue(c);assert.equal(f.poll().expectedProjectId,initialProject);f.ack(c.id,true);
+   f.report(f.state(2,final,take,other,false,c.id));assert.equal(f.db.prepare('SELECT stage FROM pwc_commands').get().stage,'admitted');
+   f.report(f.state(3,final,take,initialProject,false,c.id));assert.equal(f.db.prepare('SELECT stage FROM pwc_commands').get().stage,'confirmed');
+  }finally{f.db.close();}}
+ }
+});
+
+test('project change before delivery supersedes the take-bound command',()=>{
+ const f=setup();try{const take=randomUUID();f.report(f.state(1,'recording',take,f.project));const c=f.command(1,'pause',take);f.queue(c);
+  f.db.prepare('UPDATE pwc_states SET project_id=?').run(randomUUID());assert.deepEqual(f.poll(),{empty:true,stage:'superseded'});
+ }finally{f.db.close();}
+});
+
 test('stale state and revoked browser session fail closed',()=>{
  const f=setup();try{f.report(f.state(1));f.setTime(4000);assert.throws(()=>f.queue(f.command()));f.report(f.state(2));f.revokeBrowser();assert.throws(()=>f.queue(f.command(2)));assert.equal(f.db.prepare('SELECT count(*) n FROM pwc_commands').get().n,0);}finally{f.db.close();}
 });
