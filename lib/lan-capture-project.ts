@@ -20,6 +20,7 @@ export function ensureLanCaptureProject(database:Database.Database,recordingId:s
  const recording=recordingId.toLowerCase();
  return database.transaction(()=>{
   authorize();
+  initializeLanCaptureProjects(database);
   const existing=database.prepare('SELECT project_id FROM lan_capture_projects WHERE workspace_id=? AND recording_id=?').get(SINGLE_WORKSPACE,recording) as {project_id:string}|undefined;
   if(existing){
    if(!database.prepare('SELECT 1 FROM projects WHERE id=?').get(existing.project_id))throw new LanCaptureProjectError('project_deleted');
