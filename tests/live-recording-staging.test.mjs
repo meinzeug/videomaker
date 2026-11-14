@@ -62,6 +62,7 @@ test('Lücken, fremde Bindungen, Hashfehler, stale Revision und veränderte Date
   assert.throws(()=>f.store.seal(id,project,recording,value.length,'0'.repeat(64)),/FINAL_MISMATCH/);
   const key=f.db.prepare('SELECT file_key FROM live_recording_stages WHERE id=?').get(id).file_key;
   const file=join(f.directory,'.live-recording-staging',`${key}.part`);writeFileSync(file,Buffer.from('corrupted!'));
+  assert.throws(()=>f.store.put(id,project,recording,0,0,value,sum(value)),/STAGE_CHANGED/,'eine alte ACK-Wiederholung darf beschädigte Bytes nicht bestätigen');
   assert.equal(f.store.status(id,project,recording).chunks[0].state,'invalid','Status darf beschädigte Bytes nicht bestätigen');
   assert.throws(()=>f.store.seal(id,project,recording,value.length,sum(value)),/STAGE_CHANGED/);
   assert.equal(f.store.put(id,project,recording,0,1,value,sum(value)).revision,2);

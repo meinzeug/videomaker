@@ -61,6 +61,12 @@ export function createLiveStaging(db:Database.Database,root:string,freeBytes?:(d
   if(!info.isFile()||info.dev.toString()!==s.dev||info.ino.toString()!==s.ino){closeSync(fd);return fail('STAGE_CHANGED');}
   return fd;
  };
+ const assertReadyBytes=(s:Session,chunk:Chunk)=>{
+  const fd=openChecked(s),bytes=Buffer.alloc(chunk.size);let read=0;
+  try{while(read<bytes.length){const n=readSync(fd,bytes,read,bytes.length-read,chunk.part*LIVE_CHUNK_BYTES+read);if(!n)break;read+=n;}}
+  finally{closeSync(fd);}
+  if(read!==bytes.length||digest(bytes)!==chunk.sha256)fail('STAGE_CHANGED');
+ };
  const reserve=(bytes:number)=>{
   const has=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recording_upload_slots'").get();
   const reserved=has?(db.prepare('SELECT COALESCE(SUM(reserved_bytes),0) AS n FROM recording_upload_slots').get() as {n:number}).n:0;
@@ -132,7 +138,7 @@ export function createLiveStaging(db:Database.Database,root:string,freeBytes?:(d
     if(part>(last?.part??-1)+1||last&&part===last.part+1&&last.size!==LIVE_CHUNK_BYTES)fail('NONCONTIGUOUS');
     if(last&&part<last.part&&bytes.length!==LIVE_CHUNK_BYTES)fail('INVALID_CHUNK');
     const old=db.prepare('SELECT * FROM live_recording_chunks WHERE stage_id=? AND part=?').get(current.id,part) as Chunk|undefined;
-    if(old?.state==='ready'&&old.revision===expectedRevision+1&&old.sha256===expectedSha&&old.size===bytes.length)return 'done';
+    if(old?.state==='ready'&&old.revision===expectedRevision+1&&old.sha256===expectedSha&&old.size===bytes.length){assertReadyBytes(current,old);return 'done';}
     if(old?.state==='writing'){
      if(old.expected_revision!==expectedRevision)fail('REVISION_CONFLICT');
      // An interrupted write may no longer be reconstructible after MP4 rewrites.
@@ -154,7 +160,7 @@ export function createLiveStaging(db:Database.Database,root:string,freeBytes?:(d
    const result=db.transaction(()=>{
     const current=checked(id,project,recording);if(current.state!=='open')return fail('NOT_OPEN');assertLanBinding(current.project_id,current.recording_id);
     const chunk=db.prepare('SELECT * FROM live_recording_chunks WHERE stage_id=? AND part=?').get(current.id,part) as Chunk|undefined;
-    if(chunk?.state==='ready'&&chunk.revision===expectedRevision+1&&chunk.sha256===expectedSha&&chunk.size===bytes.length)return {revision:chunk.revision,sha256:expectedSha};
+    if(chunk?.state==='ready'&&chunk.revision===expectedRevision+1&&chunk.sha256===expectedSha&&chunk.size===bytes.length){assertReadyBytes(current,chunk);return {revision:chunk.revision,sha256:expectedSha};}
     if(!chunk||chunk.state!=='writing'||chunk.expected_revision!==expectedRevision||chunk.sha256!==expectedSha||chunk.size!==bytes.length)return fail('REVISION_CONFLICT');
     reserve(bytes.length);const fd=openChecked(current);
     try{let written=0;while(written<bytes.length){const n=writeSync(fd,bytes,written,bytes.length-written,part*LIVE_CHUNK_BYTES+written);if(n<=0)fail('WRITE_FAILED');written+=n;}fsyncSync(fd);testHook?.('after-chunk-fsync');}finally{closeSync(fd);}
