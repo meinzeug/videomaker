@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 
 /**
  * Isolated double-entry journal prototype, not a finished UG accounting system.
- * It does not implement taxes, periods, closing, document retention, exports,
+ * It does not implement taxes, periods, closing, document retention, tax exports,
  * statutory reporting or GoBD compliance. Callers must provide trusted server
  * timestamps and protect every future API with authentication and authorization.
  *
