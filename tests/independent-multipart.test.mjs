@@ -278,3 +278,43 @@ test('malformed legacy single-part response is retained and reported as a contro
   assert.equal(readGenerationClaim(db,id).responseText,'{unvollständig','original response remains accessible');
  });
 });
+
+test('internal research-process notes are identified without forbidding public factsheets or journalism',async()=>{
+ const {validateFactSheet}=await load('fact-sheet.ts'),{parseGrokScript}=await load('grok-result.ts');
+ const facts=validateFactSheet({fakten:[{text:'Eine belegte Aussage.',quellen:[url],belege:[{text:'Eine belegte Aussage.',quelle:url}]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[]},sources,report,true);
+ const answer=script=>JSON.stringify({...finalFields,skript:script});
+ for(const text of [
+  'Weder Zeitpunkt noch Wortlaut liegen im Faktenblatt vor.',
+  'Im vorliegenden Faktenblatt steht dazu nichts.',
+  'Stand der Recherche: Die Angabe ist unklar.',
+  'Das PDF war nicht abrufbar.',
+ ]){
+  const result=parseGrokScript(answer(text),false,facts);
+  assert.equal(result.project,null,text);assert.ok(result.issues.some(x=>x.code==='internal_research'),text);
+ }
+ for(const text of [
+  'Das Faktenblatt der Bundesregierung nennt die geplante Änderung.',
+  'Die Recherche der Journalistin untersuchte die Abläufe.',
+  'Die Quelle des Gutachtens ist seit Jahren nicht zugänglich.',
+  'Das PDF des Ministeriums ist öffentlich nicht abrufbar.',
+ ]) assert.ok(parseGrokScript(answer(text),false,facts).project,`legitimate external reference must not be banned: ${text}`);
+});
+
+for(const variant of ['clean','still-internal']) test(`one targeted repair handles an internal research note: ${variant}`,async()=>{
+ await isolated(['Anfang','Ende'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
+  const original=['Unveränderter Anfang.','Der genaue Zeitpunkt liegt nicht im Faktenblatt vor.'];
+  globalThis.fetch=async(urlArg,init)=>{
+   if(calls.length===3){const request=JSON.parse(init.body);calls.push(request);const replacement=variant==='clean'?'Die Quelle nennt eine belegte Aussage.':'Das Faktenblatt enthält dazu keine Angabe.';return new Response(JSON.stringify({id:'repair-mock',model:request.model,usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify({...finalFields,teile:[{teil:2,skript:replacement}]})}}]}),{status:200});}
+   const response=await baseFetch(urlArg,init),body=await response.json(),payload=JSON.parse(body.choices[0].message.content);
+   if(calls.length>1)payload.skript=original[calls.length-2];
+   body.choices[0].message.content=JSON.stringify(payload);return new Response(JSON.stringify(body),{status:200});
+  };
+  if(variant==='clean'){
+   const result=await runGrokFlow(db,claim,true,()=>{}),content=JSON.parse(result.responseText);
+   assert.equal(content.script,'Unveränderter Anfang.\n\nDie Quelle nennt eine belegte Aussage.');
+   assert.equal(content._originalScript,original.join('\n\n'));
+  }else await assert.rejects(runGrokFlow(db,claim,true,()=>{}),/Korrektur|Recherche|Hinweis/i);
+  assert.deepEqual(state.readGrokParts(db,id).map(p=>JSON.parse(JSON.parse(p.response).text).skript),original);
+  assert.equal(calls.length,4,'there is at most one targeted repair');
+ });
+});
