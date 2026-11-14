@@ -43,6 +43,14 @@ test('widerrufene Sitzung, ungültige ID und vorhandener Web-Kameraanspruch erze
   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM lan_capture_projects').get().n,0);
  }finally{f.close();}
 });
+test('Widerruf vor Commit legt auch das Mapping-Schema nicht an',()=>{
+ const database=new Database(':memory:');
+ try{
+  database.exec('CREATE TABLE projects(id TEXT PRIMARY KEY,created_at TEXT NOT NULL,title TEXT NOT NULL,sources TEXT NOT NULL,content TEXT NOT NULL)');
+  assert.throws(()=>ensureLanCaptureProject(database,randomUUID(),()=>{throw Error('UNAUTHORIZED');}),/UNAUTHORIZED/);
+  assert.equal(database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lan_capture_projects'").get(),undefined);
+ }finally{database.close();}
+});
 test('zwei Prozesse legen für dieselbe Aufnahme transaktional genau ein Projekt an',async()=>{
  const f=fixture(),recording=randomUUID(),workers=[];
  try{

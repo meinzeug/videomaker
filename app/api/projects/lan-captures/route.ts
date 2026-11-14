@@ -1,6 +1,6 @@
 import {authorized,sameOrigin,sessionAuthorized,sessionValue} from '@/lib/auth';
 import db from '@/lib/db';
-import {ensureLanCaptureProject,initializeLanCaptureProjects,LanCaptureProjectError} from '@/lib/lan-capture-project';
+import {ensureLanCaptureProject,LanCaptureProjectError} from '@/lib/lan-capture-project';
 import {readRecordingChunk} from '@/lib/recording-upload-guard';
 import {NextResponse} from 'next/server';
 
@@ -25,7 +25,7 @@ export async function POST(req:Request){
  }catch{return reply({error:'Anfrage ist unvollständig.'},400);}finally{try{reader.releaseLock();}catch{}}
  let value:unknown;try{value=JSON.parse(body.toString('utf8'));}catch{return reply({error:'Ungültige Aufnahme.'},400);}
  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==1||typeof (value as Record<string,unknown>).recordingId!=='string')return reply({error:'Ungültige Aufnahme.'},400);
- const database=db();initializeLanCaptureProjects(database);
+ const database=db();
  try{
   const result=ensureLanCaptureProject(database,(value as {recordingId:string}).recordingId,()=>{if(!sessionAuthorized(database,credential))throw new LanCaptureProjectError('unauthorized');});
   return reply(result,result.created?201:200);
