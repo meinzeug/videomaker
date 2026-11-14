@@ -1,0 +1,42 @@
+# Gerätesitzungen und Verbindungspfade (Entwurf)
+
+Dieser Entwurf ist **nicht implementiert oder freigeschaltet**. Videomaker ist das Hauptprojekt; die Android-App KontraPrompter muss beim Implementieren und Prüfen gemeinsam mit ihm geändert werden. Bestehende Konten, laufende Sitzungen, Aufnahmeprojekte und gespeicherte Videos bleiben erhalten.
+
+## Tatsächlicher Stand
+
+- Videomaker verwendet ein gemeinsames Adminpasswort und signierte, widerrufbare Cookies mit zwölf Stunden Gültigkeit. Der Login begrenzt Fehlversuche derzeit im Arbeitsspeicher des Prozesses; dies ist keine dauerhafte, prozessübergreifende Geräte-Registrierung.
+- Die Android-App bewahrt weder Passwort noch Cookie dauerhaft auf. Nach Prozessende oder Sitzungsablauf ist eine erneute Anmeldung nötig. Manche Uploadfreigaben sind bewusst an die aktuelle Sitzung gebunden und dürfen bei einer Neuanmeldung nicht unbemerkt ausgeweitet werden.
+- Die aktuelle LAN-Verbindung authentifiziert Nachrichten mit einem Sitzungscode, verschlüsselt ihren TCP-Inhalt aber nicht. Eine gepinnte TLS-Verbindung und ein verschlüsselter Server-Signalisierungsrelay sind separate Arbeiten; vorbereitete WIP-Bausteine sind keine Produktivfreigabe.
+- Die beiden Testtelefone erreichen denselben WLAN-Zugangspunkt und Videomaker, konnten sich dort jedoch nicht direkt erreichen. Ein gemeinsames WLAN garantiert daher keinen Direktpfad.
+
+## Geräte registrieren
+
+1. Eine angemeldete Dashboard-Sitzung startet eine Geräteregistrierung für eine konkrete Rolle und einen Owner. Der Server erzeugt eine zufällige, einmalige, kurzlebige Challenge und zeigt sie als QR-Code mit der festen HTTPS-Studioadresse. Es steht kein Adminpasswort oder dauerhafter Zugang im QR-Code.
+2. Die App erzeugt einen nicht exportierbaren privaten Schlüssel im Android Keystore und sendet den öffentlichen Schlüssel mit einer Signatur über ein eindeutig versioniertes, längencodiertes Transkript aus Challenge, Studio-Origin, Owner, Gerät, Rolle und Schlüssel. Sie prüft die HTTPS-Serveridentität. Die Registrierung und der einmalige Verbrauch der Challenge erfolgen nach frischer Sitzungs- und Rechteprüfung atomar.
+3. Das Dashboard zeigt Gerät, Rolle und Schlüsselfingerabdruck und bestätigt die Zuordnung. Nur die konkret bestätigte Challenge darf aktiviert werden. Abgelaufene, ersetzte, widerrufene und bereits verbrauchte Challenges bleiben abgelehnt. Auf beiden Seiten müssen verbindliche Grenzwerte, persistente Rate-Limits und Auditereignisse gelten; Fehler dürfen keine Teilregistrierung freischalten.
+
+Erste Zuordnung und Freigabe sind von automatischem Wiederverbinden bereits registrierter Geräte zu unterscheiden. Gerätedaten und private Schlüssel gelangen nicht in Android-Backups. Der private Schlüssel bleibt im Keystore; seine Hardwarebindung ist geräteabhängig und muss anhand der tatsächlichen Eigenschaften dargestellt werden, nicht vorausgesetzt werden.
+
+## Automatische Anmeldung und Widerruf
+
+- Zum Wiederverbinden fordert das Gerät über HTTPS eine kurzlebige Servernonce an und signiert sie mit seinem Keystore-Schlüssel. Das Transkript bindet Protokollversion, Origin, Gerät, Owner, Rolle, Nonce und Ablauf. Die Nonce ist zufällig, begrenzt und nur einmal gültig; parallele Wiederholungen dürfen höchstens eine Sitzung ausstellen.
+- Der Server prüft Gerätebindung und Widerruf transaktional bei Challenge, Einlösung und sensiblen Aktionen. Kurze Gerätesitzungen werden an den nachgewiesenen Schlüssel gebunden; bloße Geräte-ID, Browsercookie oder ungebundener Bearer sind kein Gerätenachweis. Secrets und Signaturen stehen weder in Logs noch URLs. Zeitablauf, Replays und konkurrierende Widerrufe müssen fehlschlagen; Serverzeit-Rücksprung und Wiederanlauf brauchen eigene Tests.
+- Die App hält die kurzlebige Sitzung nur solange wie nötig und erneuert sie im Hintergrund mit Backoff, ohne ein Adminpasswort zu speichern. Das Dashboard kann jedes Gerät einzeln und unmittelbar widerrufen. Widerruf blockiert neue Sitzungen, TURN-Tickets und Fernbefehle; bestehende Verbindungen müssen durch überprüftes Fencing geschlossen werden. Ein ausfallendes Studio darf lokale Originalaufnahmen nicht löschen.
+- Automatische Uploads bleiben an Owner, Gerät, gewähltes Projekt, konkrete Aufnahme und die vorherige Freigabe gebunden. Ein Sitzungswechsel allein darf weder ein anderes Konto übernehmen noch eine manuelle Freigabe stillschweigend erneuern. Ungültige, widerrufene oder nicht mehr zugeordnete Aufträge bleiben lokal und zeigen einen nachvollziehbaren Zustand.
+- Registrierungs- und Challenge-Endpunkte brauchen pro Owner, Gerät und Netzwerkquelle begrenzte, **prozessübergreifende** Raten und Kapazitätsgrenzen. Bereinigung darf weder Replay- noch Widerrufsschutz durch einen Uhr-Rücksprung aushebeln. Der bisherige Admin-Login wird nicht ersetzt.
+
+## Direkt und über den Server
+
+Ein registriertes Paar versucht zuerst einen zeitlich begrenzten Direktaufbau im vorhandenen Netz. Identitäten, Rollen, Pair-ID und aktuelle Zustimmungen werden vor jeder neuen Verbindung geprüft. Authentisierte und gepinnte Ende-zu-Ende-Verschlüsselung schützt Signalisierung und Steuerung; ein HMAC auf Klartext allein erfüllt das nicht. Bei Isolation oder Timeout erfolgt ein nachvollziehbarer Wechsel zu einem vom Studio autorisierten Serverpfad. Rückkehr zum Direktpfad darf laufende Aufnahmen nicht abbrechen oder einen bereits erteilten Befehl wiederholen.
+
+Der Server-Signalisierungsrelay transportiert begrenzte, verschlüsselte Nachrichten und prüft beide frischen Gerätesitzungen, Raum, Rolle und Widerruf. Tests für Reihenfolge, Wiedergabe, Netzabbrüche, langsame Teilnehmer, Quoten und Widerruf während laufender Auslieferung sind vor Freigabe erforderlich. Der Relay sieht nur notwendige Verbindungsmetadaten; Passwörter, Skripttexte und private Schlüssel gehören nicht in QR-Codes oder unverschlüsselten LAN-Verkehr.
+
+TURN ist ein eigener Medienpfad und ersetzt die Signalisierung nicht. Jedes berechtigte Gerät erhält zeitlich begrenzte TURN-REST-Credentials erst nach frischem Geräte-/Paar-/Raumnachweis. Mehrere Allocations und Refreshes innerhalb der Gültigkeit sind möglich; es sind keine Einmal-Credentials. Ein TURN-Shared-Secret bleibt ausschließlich im Server. Aussteller und Relay brauchen globale und gerätebezogene Limits; neue Username-Werte dürfen Quoten nicht aushebeln. Erneuerung lang laufender Aufnahmen muss explizit implementiert und getestet werden.
+
+Auf dem untersuchten Server erreicht UDP 3478 den bereits bestehenden fremden TURN-Dienst; eine getrennte, authentisierte Testinstanz auf UDP 3488 antwortete lokal, eingehende Pakete beider Telefonnetze erreichten jedoch nicht einmal eine eigens angelegte Host-Zählregel. Das spricht für ein vorgeschaltetes Filter- oder Routingproblem; die konkrete Stelle ist nicht identifiziert. Die Testinstanz und ihre Regel wurden entfernt, der bestehende Dienst wurde nicht geändert. Vor einer produktiven separaten TURN-Instanz muss ein autorisierter Netzverwaltungsweg die tatsächlich benötigten Listener- und Relayports prüfen und gegebenenfalls gezielt freigeben.
+
+Als Alternative kann ein authentisierter HTTPS-WebSocket-Tunnel über den bereits erreichbaren Port 443 untersucht werden. WebRTC versteht **keine** `wss:`-TURN-URL: Dafür wären ein expliziter lokaler TCP-Proxy in der App, ein begrenzter und authentisierter Server-Tunnel zu einem ausschließlich lokal gebundenen TURN/TCP-Listener und korrekte Ende-zu-Ende-Tests nötig. Die Erreichbarkeit von Relay-zu-Relay-Verkehr, Zertifikatsprüfung, Kopplung an Device-Sitzung, Quoten, Backpressure und Widerruf sind offen. Das ist ein Entwurf, kein vorhandener Fallback.
+
+## Abnahmetests
+
+Neben Unit- und HTTP-Tests sind zwei echte Telefone mit Direktverbindung und mit aktivierter Client-Isolation erforderlich: Erstregistrierung, Neustart ohne Passwort, Server- und Netzwechsel, Ablauf und Erneuerung, ungültige Schlüssel/Nonces, parallele Einlösung, Gerätewiderruf während Sitzung und Upload, Offline-Wiederaufnahme, TURN/TCP und -UDP soweit freigegeben sowie Integrität von Bild, Ton und Originaldatei. Bestehende Projekte und Aufnahmen sind bei allen Tests zu erhalten.
