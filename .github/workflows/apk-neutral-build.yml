@@ -23,6 +23,15 @@ jobs:
           ADMIN_PASSWORD: isolated-build-only-password
           DATA_DIR: /tmp/videomaker-isolated-build-data
           NEXT_TELEMETRY_DISABLED: '1'
+      - name: Materialize and inspect build links
+        run: |
+          set -eu
+          rm -rf .next/cache
+          find .next -type l -printf '%p -> %l\n' | sort > BUILD-LINKS-BEFORE-MATERIALIZATION.txt
+          cp -RL .next "$RUNNER_TEMP/videomaker-next-materialized"
+          rm -rf .next
+          mv "$RUNNER_TEMP/videomaker-next-materialized" .next
+          test -z "$(find .next -type l -print -quit)"
       - name: Test production server with synthetic login and APK
         env:
           SESSION_SECRET: isolated-test-only-secret-012345678901234
@@ -56,6 +65,7 @@ jobs:
         run: |
           set -eu
           rm -rf .next/cache
+          test -z "$(find .next -type l -print -quit)"
           git diff --exit-code
           git rev-parse HEAD > BUILD-SOURCE-COMMIT.txt
           node --version > BUILD-NODE-VERSION.txt
