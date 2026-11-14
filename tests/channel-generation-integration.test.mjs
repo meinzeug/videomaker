@@ -38,6 +38,14 @@ test('isolated mocked AI generation assigns channel, preserves legacy and handle
   assert.ok(response.data.report.source_access.every(item=>item.status==='retrieved'));
   assert.ok(response.data.report.source_excerpts.every(item=>item.text.includes('Synthetischer Originaltext')));
   const boundResearch=response.data.id;
+  const selectedInput={title:'Ausgangsquelle',url:'https://example.org/user-source',source:'Testquelle',date:'',description:''};
+  const duplicateInput={...selectedInput,title:'Auch im Web gefunden',url:'https://example.org/a#abschnitt'};
+  const expanded=await call('/api/research','POST',{topic:'Ausgangsquelle und Web',sources:[selectedInput,duplicateInput],channelId:channel.id});
+  assert.equal(expanded.status,200);const expandedUrls=expanded.data.report.source_excerpts.map(item=>item.url);
+  assert.ok(expandedUrls.includes(selectedInput.url),'an explicitly provided starting source remains available even when the research model does not cite it');
+  assert.ok(expandedUrls.includes('https://example.net/b'),'additional verified web sources also remain available');
+  assert.equal(expandedUrls.length,4,'two original sources and three results with one duplicate yield four excerpts');
+  assert.equal(new Set(expandedUrls).size,expandedUrls.length,'source excerpts must be deduplicated');
   assert.equal((await call('/api/generate','POST',{imageMode:'descriptions',researchId:boundResearch,channelId:randomUUID()})).status,400);
   db.prepare('UPDATE channels SET name=? WHERE id=?').run('Zwischenzeitlich geändert',channel.id);
   response=await call('/api/generate','POST',{imageMode:'descriptions',researchId:boundResearch,channelId:channel.id});
