@@ -3,8 +3,9 @@ import {completeForGeneration,SYSTEM_PROMPT,parseJson,isTransientOpenRouterError
 import db from '@/lib/db';
 import {startImages} from '@/lib/images';
 import {channelGreetingMayMismatch,ensureChannelFraming} from '@/lib/script-format';
-import {CHANNEL_SCRIPT_SYSTEM,scriptGenerationPrompt,GenerationChannelNotFound,InvalidGenerationChannel,ResearchChannelMismatch,saveGeneratedProject} from '@/lib/channel-generation';
+import {CHANNEL_SCRIPT_SYSTEM,CUSTOM_SCRIPT_SYSTEM,customScriptPrompt,scriptGenerationPrompt,GenerationChannelNotFound,InvalidGenerationChannel,ResearchChannelMismatch,saveGeneratedProject} from '@/lib/channel-generation';
 import {acquireGenerationClaim,claimSnapshot,completeGenerationClaim,ensureGenerationClaimsSchema,GenerationClaimConflict,GenerationResearchMissing,invalidateGenerationResponse,readGenerationClaim,saveGenerationResponse,type GenerationClaim} from '@/lib/generation-claims';
+import {InvalidScriptOptions,normalizeScriptOptions,usesCustomScript} from '@/lib/script-options';
 import {NextResponse} from 'next/server';
 
 export const maxDuration=300;
@@ -40,8 +41,8 @@ export async function GET(req:Request) {
     const page=(anchor?database.prepare("SELECT research_id AS researchId,state,created_at AS createdAt,image_mode AS imageMode,requested_channel AS channelId,report_json AS reportJson FROM generation_claims WHERE state<>'complete' AND (created_at<? OR (created_at=? AND research_id<?)) ORDER BY created_at DESC,research_id DESC LIMIT 21").all(anchor.createdAt,anchor.createdAt,before):database.prepare("SELECT research_id AS researchId,state,created_at AS createdAt,image_mode AS imageMode,requested_channel AS channelId,report_json AS reportJson FROM generation_claims WHERE state<>'complete' ORDER BY created_at DESC,research_id DESC LIMIT 21").all()) as Array<{researchId:string;state:string;createdAt:string;imageMode:string;channelId:string;reportJson:string}>;
     const nextBefore=page.length>20?page[19].researchId:null;
     const claims=page.slice(0,20).map(({reportJson,...row})=>{
-     let summary='';try{const value=JSON.parse(reportJson)?.summary;if(typeof value==='string')summary=value.replace(/[\u0000-\u001f\u007f]+/g,' ').replace(/\s+/g,' ').trim().slice(0,180);}catch{}
-     return {...row,summary};
+     let summary='',scriptOptions=null;try{const report=JSON.parse(reportJson),value=report?.summary;if(typeof value==='string')summary=value.replace(/[\u0000-\u001f\u007f]+/g,' ').replace(/\s+/g,' ').trim().slice(0,180);scriptOptions=normalizeScriptOptions(report?.generation_options);}catch{}
+     return {...row,summary,scriptOptions};
     });
     return {total,claims,nextBefore};
    })();
@@ -69,6 +70,7 @@ export async function POST(req:Request) {
  try{
   const data=await req.json().catch(()=>({}));
   if(!data||!['render','descriptions'].includes(data.imageMode))return NextResponse.json({error:'Bitte wähle eine Bildoption aus.'},{status:400,headers});
+  const scriptOptions=normalizeScriptOptions(data.scriptOptions);
   if(!validId(data.researchId))return NextResponse.json({error:'Vor der Skripterstellung muss eine vertiefte Recherche durchgeführt werden.'},{status:400,headers});
   researchId=data.researchId;
   const database=db();ensureGenerationClaimsSchema(database);
@@ -78,7 +80,7 @@ export async function POST(req:Request) {
    // Do not leave a permanent reservation when a request could not possibly
    // be sent. Existing received/completed claims remain recoverable without a key.
    if(!readGenerationClaim(database,data.researchId)&&!process.env.OPENROUTER_API_KEY)throw new Error('OpenRouter-API-Schlüssel fehlt.');
-   return acquireGenerationClaim(database,data.researchId,data.imageMode,data.channelId,new Date().toISOString());
+   return acquireGenerationClaim(database,data.researchId,data.imageMode,data.channelId,new Date().toISOString(),scriptOptions);
   }).immediate();
   let claim:GenerationClaim=acquired.claim;claimAcquired=true;
   if(!acquired.created&&claim.state==='pending')return NextResponse.json({code:'generation_pending',error:'Für diese Recherche läuft eine Erstellung oder ihr Ergebnis ist ungeklärt. Es wird kein zweiter Skriptaufruf gestartet.'},{status:409,headers});
@@ -89,7 +91,8 @@ export async function POST(req:Request) {
   }
   if(acquired.created){
    const snapshot=claimSnapshot(claim);
-   const response=await completeForGeneration(snapshot.channel?CHANNEL_SCRIPT_SYSTEM:SYSTEM_PROMPT,scriptGenerationPrompt(snapshot.channel,snapshot.sources,snapshot.report),32000);
+   const customized=usesCustomScript(snapshot.options);
+   const response=await completeForGeneration(customized?CUSTOM_SCRIPT_SYSTEM:snapshot.channel?CHANNEL_SCRIPT_SYSTEM:SYSTEM_PROMPT,customized?customScriptPrompt(snapshot.channel,snapshot.sources,snapshot.report,snapshot.options!):scriptGenerationPrompt(snapshot.channel,snapshot.sources,snapshot.report),32000);
    // Persist the provider response *before* processing it or attempting the
    // project transaction. A crash before this commit remains unresolved.
    saveGenerationResponse(database,claim.researchId,response.text,new Date().toISOString(),response.truncated);
@@ -104,11 +107,17 @@ export async function POST(req:Request) {
   }catch{invalidateGenerationResponse(database,claim.researchId,new Date().toISOString());throw new InvalidProviderAnswer('Die gespeicherte KI-Antwort ist unvollständig. Sie kann im Erstellungsstatus gesichert werden.');}
   const snapshot=claimSnapshot(claim),channel=snapshot.channel;
   const content:Record<string,unknown>={titles:result.titles,thumbnail:result.thumbnail,broll:result.broll,script:result.script};
-  const greetingWarning=!!channel&&channelGreetingMayMismatch(result.script as string,channel.name);
-  content.script=ensureChannelFraming(result.script as string,channel?.name,channel?.platform);
+  const customized=usesCustomScript(snapshot.options);
+  const greetingWarning=!customized&&!!channel&&channelGreetingMayMismatch(result.script as string,channel.name);
+  content.script=customized?(result.script as string).trim():ensureChannelFraming(result.script as string,channel?.name,channel?.platform);
   content.research=snapshot.report;content.image_mode=claim.imageMode;
+  if(snapshot.options)content.script_options=snapshot.options;
   if(channel)content.generation_target=channel;
-  content.generation_warnings=greetingWarning?['Die Begrüßung nennt möglicherweise einen anderen Kanal. Bitte vor der Aufnahme prüfen und bei Bedarf bearbeiten.']:[];
+  const warnings=greetingWarning?['Die Begrüßung nennt möglicherweise einen anderen Kanal. Bitte vor der Aufnahme prüfen und bei Bedarf bearbeiten.']:[];
+  const access=(snapshot.report as {source_access?:unknown})?.source_access;
+  if(Array.isArray(access)&&access.some(item=>item?.status==='unavailable'))warnings.push('Mindestens eine Quelle war nicht abrufbar. Es wurde nur die gespeicherte Kurzbeschreibung verwendet.');
+  if(Array.isArray(access)&&access.some(item=>item?.truncated))warnings.push('Mindestens ein ausgelesener Quelltext wurde auf 40.000 Zeichen begrenzt.');
+  content.generation_warnings=warnings;
   const project:Project={id:claim.projectId,created_at:new Date().toISOString(),title:(result.titles as string[])[0],sources:snapshot.sources,content};
   // The project insert, channel association, research deletion and completed
   // claim commit together. A second finalizer returns the first project.
@@ -129,7 +138,8 @@ export async function POST(req:Request) {
  }catch(error){
   if(error instanceof SessionRevoked)return NextResponse.json({error:'Nicht erlaubt.'},{status:403,headers});
   if(error instanceof GenerationResearchMissing||error instanceof GenerationChannelNotFound)return NextResponse.json({error:error.message},{status:404,headers});
-  if(error instanceof InvalidGenerationChannel||error instanceof ResearchChannelMismatch||error instanceof GenerationClaimConflict)return NextResponse.json({error:error.message},{status:400,headers});
+  if(error instanceof InvalidGenerationChannel||error instanceof ResearchChannelMismatch||error instanceof InvalidScriptOptions)return NextResponse.json({error:error.message},{status:400,headers});
+  if(error instanceof GenerationClaimConflict)return NextResponse.json({error:error.message},{status:409,headers});
   if(error instanceof InvalidProviderAnswer)return NextResponse.json({code:'generation_invalid',error:error.message},{status:409,headers});
   console.error('generation failed',error instanceof Error?error.message:'unknown');
   const retryAfter=retryAfterSeconds(error),retryable=isTransientOpenRouterError(error);

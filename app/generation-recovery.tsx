@@ -1,8 +1,9 @@
 'use client';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import type {Project} from './studio-types';
+import type {ScriptOptions} from '@/lib/script-options';
 
-type Claim={researchId:string;state:'pending'|'received'|'invalid';createdAt:string;imageMode:'render'|'descriptions';channelId:string;summary:string};
+type Claim={researchId:string;state:'pending'|'received'|'invalid';createdAt:string;imageMode:'render'|'descriptions';channelId:string;summary:string;scriptOptions?:ScriptOptions|null};
 type Result={total:number;claims:Claim[];nextBefore:string|null};
 
 /** An explicit status/recovery path; it never retries an uncertain provider call. */
@@ -47,7 +48,7 @@ export default function GenerationRecovery({refreshKey,onProject}:{refreshKey:nu
    }
    if(body.state==='complete'&&body.project){onProject(body.project as Project);setNotice('Das gespeicherte Skript wurde geöffnet.');await refresh();return;}
    if(body.state==='received'){
-    const finish=await fetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({researchId:claim.researchId,imageMode:claim.imageMode,channelId:claim.channelId||null})});
+    const finish=await fetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({researchId:claim.researchId,imageMode:claim.imageMode,channelId:claim.channelId||null,scriptOptions:claim.scriptOptions??null})});
     const project=await finish.json();if(!finish.ok)throw new Error(project?.error||'Das Skript konnte noch nicht fertiggestellt werden.');if(!mounted.current)return;
     onProject(project as Project);setNotice('Das gespeicherte Skript wurde geöffnet.');await refresh();return;
    }
