@@ -93,14 +93,27 @@ test('Haben-Callback unter Buchhaltung akzeptiert ein gebundenes Videomaker-Test
   const result=await request(`/callback/oidc?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,undefined,habenCookie);
   expect(result.status).toBe(302);
   expect(new URL(result.headers.get('location'),appUrl).searchParams.get('sso')).toBeNull();
+  const habenSession=result.headers.getSetCookie().find(value=>value.includes('session_token='))?.split(';')[0];
+  expect(habenSession).toBeTruthy();
   const accounts=await sql`select account_id from account where provider_id='oidc'`;
   expect(accounts.map(row=>row.account_id)).toContain(JSON.stringify([issuer,'videomaker-fixture-owner']));
   const sessions=await sql`select sso_role from session`;
   expect(sessions.map(row=>row.sso_role)).toContain('inhaber');
   const replay=await request(`/callback/oidc?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,undefined,habenCookie);
   expect(new URL(replay.headers.get('location'),appUrl).searchParams.get('sso')).toBeTruthy();
+  const {guardVideomakerSession}=await import('../../apps/buchhaltung/apps/web/src/server/videomaker-session.ts');
+  const guardConfig={mode:'required',endpoint:'https://127.0.0.1:4443/api/internal/buchhaltung/session',secret:'synthetischer-guard-schluessel-123456789',caFile:'/nur-test'};
+  const verifyGuard=async(_endpoint,options)=>verifiedSessionBindingProof(vmDb,options.cookie.slice('kontrakurs_session='.length),vmSecret)?204:401;
+  const guardedRequest=vm=>new Request(`${appUrl}/belege`,{headers:{cookie:`${habenSession}; ${vm}`}});
+  expect(await guardVideomakerSession(guardedRequest(vmCookie),guardConfig,verifyGuard)).toBeNull();
   revokeSession(vmDb,vmSecret,vmValue,Date.now());
   expect(bindings.isActive(issued)).toBe(false);
+  expect((await guardVideomakerSession(guardedRequest(vmCookie),guardConfig,verifyGuard)).status).toBe(401);
+  const otherBody=`${Date.now()+300000}.andere-test-sitzung`;
+  const otherCookie=`kontrakurs_session=${otherBody}.${signSessionBody(otherBody,vmSecret)}`;
+  // Known gap: current guard accepts any valid Videomaker cookie, even when
+  // the real Haben session was created with another now-revoked session.
+  expect(await guardVideomakerSession(guardedRequest(otherCookie),guardConfig,verifyGuard)).toBeNull();
   const afterLogout=await request('/sign-in/social',{provider:'oidc',callbackURL:'/buchhaltung/'});
   expect(afterLogout.status).toBe(200);
   const blocked=await fetch((await afterLogout.json()).url,{redirect:'manual',headers:{cookie:vmCookie}});

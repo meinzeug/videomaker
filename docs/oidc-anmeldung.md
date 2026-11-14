@@ -62,6 +62,22 @@ Browser-Redirects, Cookie-Domain und SameSite-Verhalten bleiben zu prüfen. Er b
 ausdrücklich auch, dass eine bereits erstellte Haben-Sitzung nach Video-Maker-
 Logout ohne zusätzlichen Sitzungsschutz bestehen bleibt.
 
+Die Gegenprobe ruft nach einem echten Haben-Callback auch den vorhandenen
+optionalen Wächter mit dem ausgestellten Haben-Sitzungscookie auf. Er weist das
+ursprüngliche, danach widerrufene Video-Maker-Cookie ab. Eine **andere gültige**
+Video-Maker-Sitzung zusammen mit demselben alten Haben-Cookie lässt er jedoch
+durch: Der Wächter prüft bislang nur, ob irgendeine Video-Maker-Sitzung gültig
+ist, und bindet sie nicht an die Haben-Sitzung. Die Gegenprobe dokumentiert das
+aktuelle Verhalten, keine Sicherheitsfreigabe. Für eine echte Bindung müssen
+der vertrauenswürdige OIDC-Anbieter einen nachweislich an die ursprüngliche
+Video-Maker-Sitzung gebundenen Wert liefern, Haben diesen im geprüften Callback
+unveränderlich der neu erstellten Sitzung zuordnen und der Wächter diese
+Zuordnung mit dem aktuellen Cookie einschließlich Widerruf prüfen. Eine
+Zuordnung erst beim ersten Zugriff nach dem Login ist dafür nicht ausreichend.
+Der dafür notwendige produktive Anbieter und die transaktionale Zuordnung
+existieren noch nicht; der Wächter darf nicht als gebundener gemeinsamer Logout
+dargestellt werden.
+
 Der Lauf benötigt Node 22, installierte Video-Maker- und Haben-Abhängigkeiten,
 die unter `OIDC_PROVIDER_TEST_DIR` separat installierte Testbibliothek
 `oidc-provider` und einen leeren, ausschließlich lokalen PostgreSQL-18-
