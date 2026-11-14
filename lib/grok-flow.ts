@@ -125,7 +125,7 @@ export async function runGrokFlow(db:Database.Database,claim:GenerationClaim,cre
   }
  }
  if(run.phase==='facts_pending'||run.phase==='script_pending'||run.phase==='repair_pending')throw new GrokPending('Ein Modellaufruf läuft oder sein Ergebnis ist ungeklärt. Es wird kein weiterer Aufruf gestartet.');
- const originalEnvelope=envelope(run.scriptRaw);let resultEnvelope=originalEnvelope;
+ const originalEnvelope=envelope(run.scriptRaw);let resultEnvelope=originalEnvelope,ignoredRepairParts:number[]=[];
  if(run.phase==='repair_ready'){
   const repair=envelope(run.repairRaw);let original:Record<string,unknown>|null=null,metadata:Record<string,unknown>|null=null;
   try{if(repair.truncated)throw new Error();original=record(parseJson(originalEnvelope.text));metadata=record(parseJson(repair.text));if(!original||!metadata)throw new Error();}
@@ -135,10 +135,11 @@ export async function runGrokFlow(db:Database.Database,claim:GenerationClaim,cre
   const repaired={...original};for(const issue of originalIssues)if(['titel','thumbnail_text','pin_kommentar','quellen','hinweise_fuer_dennis'].includes(issue.code))repaired[issue.code]=metadata[issue.code];
   if(originalIssues.some(issue=>issue.code==='unverified_quote')){
    const targets=planned?quotationTargets(db,id,original,facts):[],parts=metadata.teile;
-   if(!targets.length||!Array.isArray(parts)||parts.length!==targets.length)throw new GrokInvalid('Die Zitatkorrektur ist unvollständig. Die Originalteile bleiben erhalten.');
-   const wanted=new Set(targets.map(target=>target.teil)),replacements=new Map<number,string>();
-   for(const candidate of parts){const item=record(candidate);if(!item||typeof item.teil!=='number'||!Number.isSafeInteger(item.teil)||!wanted.has(item.teil)||replacements.has(item.teil)||typeof item.skript!=='string'||!item.skript.trim())throw new GrokInvalid('Die Zitatkorrektur enthält falsche Teilnummern. Die Originalteile bleiben erhalten.');replacements.set(item.teil,item.skript);}
-   const saved=readGrokParts(db,id);repaired.skript=saved.map(part=>replacements.get(part.part)??(partPayload(envelope(part.response)).skript as string)).join('\n\n');
+   if(!targets.length||!Array.isArray(parts))throw new GrokInvalid('Die Zitatkorrektur ist unvollständig. Die Originalteile bleiben erhalten.');
+   const saved=readGrokParts(db,id),available=new Set(saved.map(part=>part.part)),wanted=new Set(targets.map(target=>target.teil)),seen=new Set<number>(),replacements=new Map<number,string>();
+   for(const candidate of parts){const item=record(candidate);if(!item||typeof item.teil!=='number'||!Number.isSafeInteger(item.teil)||!available.has(item.teil)||seen.has(item.teil)||typeof item.skript!=='string'||!item.skript.trim())throw new GrokInvalid('Die Zitatkorrektur enthält falsche oder doppelte Teilnummern. Die Originalteile bleiben erhalten.');seen.add(item.teil);if(wanted.has(item.teil))replacements.set(item.teil,item.skript);else ignoredRepairParts.push(item.teil);}
+   if(replacements.size!==wanted.size)throw new GrokInvalid('Die Zitatkorrektur ist unvollständig. Die Originalteile bleiben erhalten.');
+   repaired.skript=saved.map(part=>replacements.get(part.part)??(partPayload(envelope(part.response)).skript as string)).join('\n\n');
   }
   resultEnvelope={text:JSON.stringify(repaired),truncated:false};
  }
@@ -149,6 +150,7 @@ export async function runGrokFlow(db:Database.Database,claim:GenerationClaim,cre
  }
  const correctedParts=run.phase==='repair_ready'&&parseGrokScript(originalEnvelope.text,originalEnvelope.truncated,facts).issues.some(issue=>issue.code==='unverified_quote');
  if(correctedParts&&parsed.project)parsed.project.hinweise_fuer_dennis.push('Einzelne Skriptteile wurden zur Zitatprüfung korrigiert. Der ursprüngliche Entwurf ist im Skript abrufbar.');
+ if(ignoredRepairParts.length&&parsed.project)parsed.project.hinweise_fuer_dennis.push(`Zusätzliche Änderungsvorschläge für unveränderte Teile wurden verworfen: ${ignoredRepairParts.join(', ')}.`);
  const originalScript=correctedParts?record(parseJson(originalEnvelope.text))?.skript:null;
  db.transaction(()=>{const current=readGenerationClaim(db,id);if(current?.state==='pending')saveGenerationResponse(db,id,JSON.stringify({...parsed.project,_grok:true,...(typeof originalScript==='string'?{_originalScript:originalScript}:{})}),new Date().toISOString());}).immediate();
  const latest=readGenerationClaim(db,id);if(!latest)throw new GrokPending('Die Erstellung ist nicht mehr verfügbar.');

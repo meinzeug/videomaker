@@ -233,10 +233,11 @@ test('only source-confirmed named film titles can appear as titles, never as inv
  assert.equal(parseGrokScript(answer(`Der Film „${title}“ stammt von Hubertus Koch.`),false,wrongContext).project,null,'the same words appearing in speech do not verify a film title');
 });
 
-for(const variant of ['valid','missing','foreign','duplicate','unverified']) test(`targeted correction preserves original parts and makes only one repair call: ${variant}`,async()=>{
+for(const variant of ['valid','extra','missing','foreign','extraForeign','duplicate','duplicateExtra','unverified']) test(`targeted correction preserves original parts and makes only one repair call: ${variant}`,async()=>{
  await isolated(['Einleitung','Zitat eins','Zitat zwei'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
   const original=['Unveränderter erster Teil.','Zitat: „Erfundener erster Wortlaut.“','Zitat: „Erfundener zweiter Wortlaut.“'];
-  const corrections={valid:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'},{teil:3,skript:'Zitat: „Eine belegte Aussage.“'}],missing:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'}],foreign:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'},{teil:4,skript:'Zitat: „Eine belegte Aussage.“'}],duplicate:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'},{teil:2,skript:'Zitat: „Eine belegte Aussage.“'}],unverified:[{teil:2,skript:'Zitat: „Eine unbelegte Aussage.“'},{teil:3,skript:'Zitat: „Eine belegte Aussage.“'}]};
+  const item2={teil:2,skript:'Zitat: „Eine belegte Aussage.“'},item3={teil:3,skript:'Zitat: „Eine belegte Aussage.“'},extra={teil:1,skript:'Ungeforderte Änderung darf nicht übernommen werden.'};
+  const corrections={valid:[item2,item3],extra:[item2,item3,extra],missing:[item2],foreign:[item2,{teil:4,skript:'Zitat: „Eine belegte Aussage.“'}],extraForeign:[item2,item3,{teil:99,skript:'Unerwarteter unbekannter Teil.'}],duplicate:[item2,item2],duplicateExtra:[item2,item3,extra,extra],unverified:[{teil:2,skript:'Zitat: „Eine unbelegte Aussage.“'},item3]};
   globalThis.fetch=async(urlArg,init)=>{
    if(calls.length===4){const request=JSON.parse(init.body);calls.push(request);return new Response(JSON.stringify({id:'repair-mock',model:request.model,usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify({teile:corrections[variant]})}}]}),{status:200});}
    const response=await baseFetch(urlArg,init),body=await response.json(),payload=JSON.parse(body.choices[0].message.content);
@@ -244,7 +245,7 @@ for(const variant of ['valid','missing','foreign','duplicate','unverified']) tes
    else payload.skript=original[calls.length-2];
    body.choices[0].message.content=JSON.stringify(payload);return new Response(JSON.stringify(body),{status:200});
   };
-  if(variant==='valid'){
+  if(variant==='valid'||variant==='extra'){
    const result=await runGrokFlow(db,claim,true,()=>{}),project=JSON.parse(result.responseText),text=project.script;
    assert.equal(text,'Unveränderter erster Teil.\n\nZitat: „Eine belegte Aussage.“\n\nZitat: „Eine belegte Aussage.“');
    assert.equal(project._originalScript,original.join('\n\n'),'original script must remain available for the project');
