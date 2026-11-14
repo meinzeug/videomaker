@@ -13,11 +13,14 @@ function fixture(){
 }
 test('both identities prove possession and retry of a completed pairing is idempotent',()=>{
  const f=fixture();try{
-  const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>{});
-  assert.deepEqual(beginRelayPairing(f.db,owner,f.pairId,transcript,time(1001),()=>{}),challenge);
-  const input=f.prepare(challenge);assert.deepEqual(completeRelayPairing(f.db,owner,input,()=>time(1002),()=>{}),{pairId:f.pairId,created:true});
-  assert.deepEqual(completeRelayPairing(f.db,owner,input,()=>time(1003),()=>{}),{pairId:f.pairId,created:false});
-  assert.throws(()=>completeRelayPairing(f.db,other,input,()=>time(1003),()=>{}),/CONFLICT/);
+  const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>true);
+  assert.deepEqual(beginRelayPairing(f.db,owner,f.pairId,transcript,time(1001),()=>true),challenge);
+  const input=f.prepare(challenge);assert.deepEqual(completeRelayPairing(f.db,owner,input,()=>time(1002),()=>true),{pairId:f.pairId,created:true});
+  assert.deepEqual(completeRelayPairing(f.db,owner,input,()=>time(1003),()=>true),{pairId:f.pairId,created:false});
+  assert.throws(()=>completeRelayPairing(f.db,owner,{...input,challengeId:randomUUID()},()=>time(1003),()=>true),/PROOF/);
+  assert.throws(()=>completeRelayPairing(f.db,owner,{...input,camera:{...input.camera,signature:Buffer.alloc(64)}},()=>time(1003),()=>true),/PROOF/);
+  assert.throws(()=>completeRelayPairing(f.db,owner,{...input,prompter:{...input.prompter,signature:Buffer.alloc(64)}},()=>time(1003),()=>true),/PROOF/);
+  assert.throws(()=>completeRelayPairing(f.db,other,input,()=>time(1003),()=>true),/PROOF|CONFLICT/);
   assert.throws(()=>f.db.prepare('DELETE FROM relay_pair_links WHERE pair_id=?').run(f.pairId));
   assert.throws(()=>f.db.prepare('UPDATE relay_pair_devices SET public_key=? WHERE device_id=?').run(f.prompter.publicKey,f.camera.deviceId));
  }finally{f.db.close();}
@@ -25,11 +28,11 @@ test('both identities prove possession and retry of a completed pairing is idemp
 test('wrong proof, different roles, expiry and revoked session never create a pairing',()=>{
  for(const mode of ['bad_signature','role_swap','expiry','restart','logout']){
   const f=fixture();try{
-   const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>{}),input=f.prepare(challenge);
+   const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>true),input=f.prepare(challenge);
    if(mode==='bad_signature')input.camera.signature=Buffer.alloc(64);
    if(mode==='role_swap')[input.camera.signature,input.prompter.signature]=[input.prompter.signature,input.camera.signature];
    let calls=0;const clock=()=>{calls++;return mode==='expiry'?time(61000):mode==='restart'?time(1001,1001,randomUUID()):time(1001);};
-   const auth=()=>{if(mode==='logout'&&calls>0)throw Error('UNAUTHORIZED');};
+   const auth=()=>{if(mode==='logout'&&calls>0)throw Error('UNAUTHORIZED');return true;};
    assert.throws(()=>completeRelayPairing(f.db,owner,input,clock,auth));
    assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_links').get().n,0);
    assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_devices').get().n,0);
@@ -39,15 +42,32 @@ test('wrong proof, different roles, expiry and revoked session never create a pa
 test('revoking a pair or device is permanent, owner-bound and never removes user data',()=>{
  for(const mode of ['pair','device']){
   const f=fixture();try{
-   const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>{}),input=f.prepare(challenge);
-   completeRelayPairing(f.db,owner,input,()=>time(1001),()=>{});
-   assert.throws(()=>revokeRelayPairing(f.db,other,f.pairId,1002,()=>{}),/MISSING/);
-   if(mode==='pair')assert.equal(revokeRelayPairing(f.db,owner,f.pairId,1002,()=>{}),true);
-   else assert.equal(revokeRelayDevice(f.db,owner,f.camera.deviceId,1002,()=>{}),true);
+   const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>true),input=f.prepare(challenge);
+   completeRelayPairing(f.db,owner,input,()=>time(1001),()=>true);
+   assert.throws(()=>revokeRelayPairing(f.db,other,f.pairId,1002,()=>true),/MISSING/);
+   if(mode==='pair')assert.equal(revokeRelayPairing(f.db,owner,f.pairId,1002,()=>true),true);
+   else assert.equal(revokeRelayDevice(f.db,owner,f.camera.deviceId,1002,()=>true),true);
    assert.equal(f.db.prepare('SELECT revoked_at FROM relay_pair_links WHERE pair_id=?').get(f.pairId).revoked_at,1002);
-   assert.throws(()=>completeRelayPairing(f.db,owner,input,()=>time(1003),()=>{}),/CONFLICT/);
-   assert.throws(()=>beginRelayPairing(f.db,owner,f.pairId,transcript,time(1003),()=>{}),/CONFLICT/);
+   assert.throws(()=>completeRelayPairing(f.db,owner,input,()=>time(1003),()=>true),/CONFLICT/);
+   assert.throws(()=>beginRelayPairing(f.db,owner,f.pairId,transcript,time(1003),()=>true),/CONFLICT/);
    assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_devices').get().n,2);
+  }finally{f.db.close();}
+ }
+});
+
+test('authorization must explicitly return true before and after proof verification',()=>{
+ for(const mode of ['false','throw','late_false']){
+  const f=fixture();try{
+   if(mode==='false'||mode==='throw'){
+    const authorization=()=>{if(mode==='throw')throw Error('UNAUTHORIZED');return false;};
+    assert.throws(()=>beginRelayPairing(f.db,owner,f.pairId,transcript,time(),authorization),/UNAUTHORIZED/);
+    assert.equal(f.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='relay_pair_links'").get(),undefined);
+   }else{
+    const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>true),input=f.prepare(challenge);let checks=0;
+    assert.throws(()=>completeRelayPairing(f.db,owner,input,()=>time(1001),()=>++checks===1),/UNAUTHORIZED/);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM relay_pair_links').get().n,0);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM relay_pair_devices').get().n,0);
+   }
   }finally{f.db.close();}
  }
 });
