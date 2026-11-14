@@ -4,13 +4,16 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { mkdtempSync,rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { createServer as createHttpsServer } from 'node:https';
+import { chmodSync,mkdtempSync,readFileSync,rmSync } from 'node:fs';
+import { homedir,tmpdir } from 'node:os';
 import { join,isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import Database from 'better-sqlite3';
 import { createOidcStorageAdapter,initializeOidcStorage } from '../../lib/oidc-storage.ts';
 import { createOidcProviderSessionMap,initializeOidcProviderSessionMap } from '../../lib/oidc-provider-session-map.ts';
+import { createOidcBindingClient } from '../../lib/oidc-binding-client.ts';
 
 const root=process.env.OIDC_BINDING_TEST_SERVER, testDirectory=process.env.OIDC_PROVIDER_TEST_DIR;
 if(root!=='http://127.0.0.1:3337'||!testDirectory||!isAbsolute(testDirectory))throw new Error('Ausschließlich für die isolierte Loopback-Testumgebung.');
@@ -24,6 +27,20 @@ let mapDb=new Database(databaseFile),map=createOidcProviderSessionMap(mapDb);
 const server=createServer();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const issuer=`http://127.0.0.1:${server.address().port}`;
 const references=new Map();
+// Isolated TLS proxy for the real local binding route; no production keys or hosts.
+const tlsDir=mkdtempSync(join(homedir(),'.videomaker-oidc-flow-'));
+const tlsKey=join(tlsDir,'key.pem'),tlsCert=join(tlsDir,'cert.pem');
+execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',tlsKey,'-out',tlsCert,'-days','1','-subj','/CN=videomaker-session.internal','-addext','subjectAltName=DNS:videomaker-session.internal'],{stdio:'ignore'});
+chmodSync(tlsCert,0o600);
+const tlsServer=createHttpsServer({key:readFileSync(tlsKey),cert:readFileSync(tlsCert)},async(req,res)=>{
+ try{
+  if(req.method!=='POST'||req.url!=='/api/internal/oidc/session-binding'){res.writeHead(404).end();return;}
+  const response=await fetch(`${root}/api/internal/oidc/session-binding`,{method:'POST',headers:req.headers});
+  res.writeHead(response.status,{'cache-control':'no-store'}).end(await response.text());
+ }catch{res.writeHead(503).end();}
+});
+await new Promise(resolve=>tlsServer.listen(0,'127.0.0.1',resolve));
+const binding=createOidcBindingClient({endpoint:`https://127.0.0.1:${tlsServer.address().port}/api/internal/oidc/session-binding`,secret,caFile:tlsCert});
 
 async function login(){
  const response=await fetch(`${root}/api/login`,{method:'POST',headers:{origin:root,'content-type':'application/json'},body:JSON.stringify({password})});
@@ -37,14 +54,12 @@ async function issue(cookie){
  if(matches.length!==1)return null;
  const previous=references.get(matches[0]);
  if(previous&&await active(previous))return previous;
- const response=await fetch(`${root}/api/internal/oidc/session-binding`,{method:'POST',headers:{cookie:matches[0],'x-videomaker-internal-secret':secret,'x-oidc-binding-operation':'issue'}});
- if(response.status!==200)return null;
- const reference=(await response.json()).reference;references.set(matches[0],reference);return reference;
+ const reference=await binding.issue(matches[0]);if(!reference)return null;
+ references.set(matches[0],reference);return reference;
 }
 async function active(reference){
  if(!reference)return false;
- const response=await fetch(`${root}/api/internal/oidc/session-binding`,{method:'POST',headers:{'x-videomaker-internal-secret':secret,'x-oidc-binding-operation':'check','x-oidc-session-reference':reference}});
- return response.status===204;
+ return binding.check(reference);
 }
 const provider=new Provider(issuer,{
  adapter:createOidcStorageAdapter(db),
@@ -114,5 +129,5 @@ try {
  const freshJar=jarWithCookie(secondCookie),pendingCode=await authorize(freshJar);assert.ok(pendingCode);
  await logout(secondCookie);
  assert.equal((await exchange(pendingCode)).status,400);
- console.log('OIDC + echte Video-Maker-Testsession: Anmeldung, UserInfo, Logout, alte Provider-Session und ausstehender Code geprüft.');
-} finally {await new Promise(resolve=>server.close(resolve));mapDb.close();db.close();rmSync(directory,{recursive:true,force:true});}
+ console.log('OIDC + echte Video-Maker-Testsession über gepinnten Test-TLS-Endpunkt: Anmeldung, UserInfo, Logout, alte Provider-Session und ausstehender Code geprüft.');
+} finally {await new Promise(resolve=>server.close(resolve));await new Promise(resolve=>tlsServer.close(resolve));mapDb.close();db.close();rmSync(directory,{recursive:true,force:true});rmSync(tlsDir,{recursive:true,force:true});}

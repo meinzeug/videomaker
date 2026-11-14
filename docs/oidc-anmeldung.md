@@ -39,6 +39,15 @@ einer temporären SQLite-Datei, die während des Tests geschlossen und wieder
 geöffnet wird. Der Testprovider verwendet Entwicklungsschlüssel und eine
 Testinteraktion und darf nie als echter Dienst gestartet werden.
 
+Der Fixture verwendet den vorbereiteten HTTPS-Client `lib/oidc-binding-client.ts`:
+Er erlaubt nur den festgelegten internen Pfad auf IPv4-Loopback und authentifiziert
+den Zielserver mit eigener CA und festem TLS-Namen. Die CA muss sich auf einem
+geschützten, symlinkfreien Pfad befinden. Ungültige Sitzung oder Referenz werden
+abgelehnt; bei Konfigurations-, TLS- und Kommunikationsfehlern wird kein Erfolg
+angenommen. Der Test erzeugt dafür nur kurzlebige Testzertifikate und einen
+lokalen Proxy. Dieser Client ist noch nicht in einen produktiven OIDC-Anbieter
+eingebunden; er stellt selbst weder OIDC noch eine gemeinsame Anmeldung bereit.
+
 Ein reproduzierbarer lokaler Test, ohne das Projekt oder einen Server zu
 installieren oder zu verändern:
 
