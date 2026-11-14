@@ -2,6 +2,7 @@ import {authorized,sameOrigin,sessionAuthorized,sessionValue} from '@/lib/auth';
 import db from '@/lib/db';
 import {cameraUploadIdFor} from '@/lib/camera-project-claims';
 import {acquireRecordingUpload} from '@/lib/recording-upload-guard';
+import {acquireAuthorizedLiveLease} from '@/lib/live-recording-lease';
 import {LiveBodyError,readLiveRecordingBody} from '@/lib/live-recording-body';
 import {createLiveStaging,LIVE_CHUNK_BYTES,LiveStagingError} from '@/lib/live-recording-staging';
 import {publishLiveRecording} from '@/lib/live-recording-publish';
@@ -84,7 +85,7 @@ export async function PUT(req:Request,context:Context){
   const part=number(req.headers.get('x-live-part')),revision=number(req.headers.get('x-live-revision'));
   const length=number(req.headers.get('content-length')),sha=req.headers.get('x-live-sha256')||'';
   if(part===null||revision===null||length===null||length<1||length>LIVE_CHUNK_BYTES||!req.body)return response({error:'Ungültiger Aufnahmeteil.'},400);
-  lease=acquireRecordingUpload(input.database);if(!lease)return response({error:'Zu viele Uploads laufen. Bitte später erneut versuchen.'},429);
+  lease=acquireAuthorizedLiveLease(input.database,input.assertAuthorized);if(!lease)return response({error:'Zu viele Uploads laufen. Bitte später erneut versuchen.'},429);
   const reader=req.body.getReader();let bytes:Buffer;
   try{bytes=await readLiveRecordingBody(reader,length,lease.check);}finally{reader.releaseLock();}
   return response(input.store.put(input.upload,input.project,input.recording,part,revision,bytes,sha));

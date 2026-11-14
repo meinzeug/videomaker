@@ -4,7 +4,7 @@ import {existsSync,lstatSync} from 'node:fs';
 import {mkdir,rm} from 'node:fs/promises';
 import path from 'node:path';
 import {CAMERA_PROJECT_CLAIMS_SCHEMA,ensureCameraClaimUploadMappings,lockAndValidateCameraUpload,releaseCameraUploadLock} from '@/lib/camera-project-claims';
-import {acquireRecordingUpload} from '@/lib/recording-upload-guard';
+import {acquireAuthorizedLiveLease} from '@/lib/live-recording-lease';
 import {commitRecordingIntent,linkRecordingDurably,prepareRecordingIntent,syncDirectory} from '@/lib/recording-upload-intent';
 import {recordingFileReceipt} from '@/lib/recording-receipt';
 import {parseTrimProbe} from '@/lib/video-trim';
@@ -30,12 +30,14 @@ function probe(filename:string,lock:string):Promise<void>{
 export async function publishLiveRecording(options:{database:Database.Database;store:Store;root:string;id:string;project:string;recording:string;size:number;sha256:string;authorize:()=>void}){
  const {database,store,root,id,project,recording,size,sha256,authorize}=options;
  const directory=path.join(root,'recordings'),target=path.join(directory,`${id}.mp4`),marker=path.join(directory,`.upload-intent-${id}.json`);
- const lease=acquireRecordingUpload(database);if(!lease)return fail('CAPACITY');
+ const lease=acquireAuthorizedLiveLease(database,authorize);if(!lease)return fail('CAPACITY');
  let temporary='';
  try{
   await mkdir(directory,{recursive:true,mode:0o700});syncDirectory(path.dirname(directory));
-  database.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);ensureCameraClaimUploadMappings(database);
-  lockAndValidateCameraUpload(database,lease.token,id,null,project,size,sha256,lease.check);
+  database.transaction(()=>{
+   authorize();lease.check();database.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);ensureCameraClaimUploadMappings(database);
+   lockAndValidateCameraUpload(database,lease.token,id,null,project,size,sha256,lease.check);
+  }).immediate();
   const existing=database.prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').all(id) as Item[];
   if(existing.length>1)fail('BINDING_CONFLICT');
   if(existing.length){

@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import {lstatSync} from 'node:fs';
 import path from 'node:path';
 import {recordingFileReceipt} from './recording-receipt.ts';
-import {acquireRecordingUpload} from './recording-upload-guard.ts';
+import {acquireAuthorizedLiveLease} from './live-recording-lease.ts';
 import {LiveStagingError} from './live-recording-staging.ts';
 
 type Saved={id:string;project_id:string;recording_id:string;state:string;final_size:number;final_sha256:string;dev:string;ino:string;created_at:string;mime:string;size:number};
@@ -11,7 +11,7 @@ const fail=(code:string):never=>{throw new LiveStagingError(code);};
 
 /** Read-only confirmation: it cannot publish, recreate or delete an upload. */
 export async function getLiveRecordingReceipt({database,root,id,project,recording,authorize,afterHash}:Options){
- const lease=database.transaction(()=>{authorize();return acquireRecordingUpload(database);}).immediate();
+ const lease=acquireAuthorizedLiveLease(database,authorize);
  if(!lease)return fail('CAPACITY');
  const find=()=>{
   authorize();lease.check();
