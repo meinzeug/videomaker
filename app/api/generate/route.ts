@@ -6,7 +6,7 @@ import {channelGreetingMayMismatch,ensureChannelFraming} from '@/lib/script-form
 import {GenerationChannelNotFound,InvalidGenerationChannel,ResearchChannelMismatch,saveGeneratedProject} from '@/lib/channel-generation';
 import {acquireGenerationClaim,claimSnapshot,completeGenerationClaim,ensureGenerationClaimsSchema,GenerationClaimConflict,GenerationResearchMissing,invalidateGenerationResponse,readGenerationClaim,saveGenerationResponse,type GenerationClaim} from '@/lib/generation-claims';
 import {InvalidScriptOptions,normalizeScriptOptions,usesCustomScript} from '@/lib/script-options';
-import {ensureGrokStateSchema,readGrokRun,startGrokRun} from '@/lib/grok-state';
+import {ensureGrokStateSchema,isMultipart,readGrokFailure,readGrokPlan,readGrokParts,readGrokRun,startGrokRun} from '@/lib/grok-state';
 import {GrokProviderError,grokModels} from '@/lib/grok-provider';
 import {GrokInvalid,GrokPending,runGrokFlow} from '@/lib/grok-flow';
 import {NextResponse} from 'next/server';
@@ -28,6 +28,15 @@ function projectResponse(project:Project) {
  return NextResponse.json({...project,...(warnings.length?{channelWarning:warnings.join(' ')}:{})},{headers});
 }
 
+function pipelineInfo(database:ReturnType<typeof db>,id:string) {
+ const run=readGrokRun(database,id);if(!run)return null;
+ if(!isMultipart(database,id))return {pipelinePhase:run.phase};
+ const plan=readGrokPlan(database,id),parts=readGrokParts(database,id),pending=parts.some(part=>part.state==='pending'),invalid=parts.some(part=>part.state==='invalid')||!!readGrokFailure(database,id);
+ const usage=database.prepare('SELECT count(*) AS attempts, count(cost_usd) AS reportedCosts, sum(cost_usd) AS costUsd, sum(prompt_tokens) AS promptTokens, sum(completion_tokens) AS completionTokens FROM grok_generation_attempts WHERE research_id=?').get(id) as {attempts:number;reportedCosts:number;costUsd:number|null;promptTokens:number|null;completionTokens:number|null};
+ const pipelinePhase=run.phase==='script_pending'?(invalid?'parts_invalid':!pending?'parts_ready':run.phase):run.phase;
+ return {pipelinePhase,partCount:plan?.length??null,completedParts:parts.filter(part=>part.state==='ready').length,maxProviderAttempts:plan?(plan.length+2)*3:null,attemptCount:usage.attempts,reportedCostUsd:usage.costUsd,unknownCostAttempts:usage.attempts-usage.reportedCosts,promptTokens:usage.promptTokens,completionTokens:usage.completionTokens};
+}
+
 /** Read only: no status request ever starts or resumes a paid provider call. */
 export async function GET(req:Request) {
  if(!await authorized())return NextResponse.json({error:'Nicht angemeldet.'},{status:401,headers});
@@ -45,8 +54,8 @@ export async function GET(req:Request) {
     const nextBefore=page.length>20?page[19].researchId:null;
     const claims=page.slice(0,20).map(({reportJson,...row})=>{
      let summary='',scriptOptions=null;try{const report=JSON.parse(reportJson),value=report?.summary;if(typeof value==='string')summary=value.replace(/[\u0000-\u001f\u007f]+/g,' ').replace(/\s+/g,' ').trim().slice(0,180);scriptOptions=normalizeScriptOptions(report?.generation_options);}catch{}
-     const pipeline=readGrokRun(database,row.researchId);
-     return {...row,summary,scriptOptions,...(pipeline?{pipelinePhase:pipeline.phase}: {})};
+     const pipeline=pipelineInfo(database,row.researchId);
+     return {...row,summary,scriptOptions,...(pipeline??{})};
     });
     return {total,claims,nextBefore};
    })();
@@ -66,7 +75,8 @@ export async function GET(req:Request) {
   // processed answer. Keep it accessible to the authenticated user as data.
   const run=readGrokRun(database,researchId);
   const attempts=run?database.prepare('SELECT phase,ordinal,requested_model AS requestedModel,state,status_code AS statusCode,actual_model AS actualModel,generation_id AS generationId,prompt_tokens AS promptTokens,completion_tokens AS completionTokens,reasoning_tokens AS reasoningTokens,total_tokens AS totalTokens,cost_usd AS costUsd FROM grok_generation_attempts WHERE research_id=? ORDER BY started_at,phase,ordinal').all(researchId):undefined;
-  return NextResponse.json({state:claim.state,...(claim.responseText!==null?{responseText:claim.responseText}:{}),...(run?{pipelinePhase:run.phase,factsResponse:run.factsRaw,scriptResponse:run.scriptRaw,repairResponse:run.repairRaw,attempts}: {})},{headers});
+  const pipeline=run?pipelineInfo(database,researchId):null,parts=run&&isMultipart(database,researchId)?readGrokParts(database,researchId):[];
+  return NextResponse.json({state:claim.state,...(claim.responseText!==null?{responseText:claim.responseText}:{}),...(run?{...pipeline,factsResponse:run.factsRaw,scriptResponse:run.scriptRaw,repairResponse:run.repairRaw,parts,attempts}: {})},{headers});
  }catch(error){if(error instanceof GenerationClaimConflict)return NextResponse.json({error:error.message},{status:400,headers});console.error('Generation status unavailable.');return NextResponse.json({error:'Erstellungsstatus nicht verfügbar.'},{status:503,headers});}
 }
 
@@ -89,7 +99,7 @@ export async function POST(req:Request) {
    const now=new Date().toISOString();
    const acquired=acquireGenerationClaim(database,data.researchId,data.imageMode,data.channelId,now,scriptOptions);
    if(acquired.created){
-    const models=grokModels();startGrokRun(database,data.researchId,now,models.primary,models.fallback);
+    const models=grokModels();startGrokRun(database,data.researchId,now,models.primary,models.fallback,true);
    }
    return acquired;
   }).immediate();

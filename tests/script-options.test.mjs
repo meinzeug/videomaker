@@ -16,15 +16,15 @@ test('strict options reject wrong types, unknown values, duplicates and oversize
 test('explicit source mode preserves neutral rewriting and user options',()=>{
  const o=normalizeScriptOptions(options());
  assert.equal(o.mode,'source');assert.deepEqual(o.tones,['alltag','frech']);assert.equal(o.dramaturgy,'Bogen');assert.equal(o.instructions,'Keine Begrüßung');
- assert.match(SOURCE_ONLY_SCRIPT_SYSTEM,/keine eigene Bewertung/);assert.match(SOURCE_ONLY_SCRIPT_SYSTEM,/Stil- und Dramaturgievorgaben/);
+ assert.match(SOURCE_ONLY_SCRIPT_SYSTEM,/keine eigene Bewertung/);assert.match(SOURCE_ONLY_SCRIPT_SYSTEM,/Nutzervorgaben/);
  assert.doesNotMatch(SOURCE_ONLY_SCRIPT_SYSTEM,/Du hast eine klare Meinung/);
 });
 
-test('unchanged default uses Kontrakurs prompt independent of source scope',()=>{
+test('default is autonomous and Kontrakurs commentary is optional',()=>{
  assert.equal(usesCustomScript(null),false);
  for(const scope of ['selected','web'])assert.equal(usesCustomScript(normalizeScriptOptions(options({mode:'standard',scope,tones:[],dramaturgy:'',instructions:''}))),false);
  assert.equal(usesCustomScript(normalizeScriptOptions(options({mode:'standard',tones:['frech'],dramaturgy:'',instructions:''}))),true);
- assert.match(KONTRAKURS_SCRIPT_SYSTEM,/Du hast eine klare Meinung/);
+ assert.match(KONTRAKURS_SCRIPT_SYSTEM,/Kontrakurs.*Orientierung/);assert.doesNotMatch(KONTRAKURS_SCRIPT_SYSTEM,/Du hast eine klare Meinung/);
 });
 
 test('claims bind normalized options and recover the same snapshot after research deletion',()=>{

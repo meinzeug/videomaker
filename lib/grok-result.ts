@@ -1,31 +1,25 @@
 import type {FactSheet} from './fact-sheet.ts';
-import {channelGreetingMayMismatch} from './script-format.ts';
-import {countScriptWords,validateKontrakursScript,type ScriptQualityIssue} from './script-quality.ts';
+
 
 export type GrokScript={titles:string[];script:string;thumbnail:string;broll:string[];pin_kommentar:string;hinweise_fuer_dennis:string[];quellen:string[]};
-export type ParsedGrokScript={project:GrokScript|null;issues:ScriptQualityIssue[]|Array<{code:string;message:string}>};
-const one=(x:unknown,max:number)=>typeof x==='string'?x.trim().slice(0,max):'';
+export type ParsedGrokScript={project:GrokScript|null;issues:Array<{code:string;message:string;pattern?:string}>};
+const one=(x:unknown,_max:number)=>typeof x==='string'?x.trim():'';
 const list=(x:unknown,max=100)=>Array.isArray(x)?x.map(y=>one(y,2000)).filter(Boolean).slice(0,max):null;
 
 /** Validate the exact text that is later saved to content.script; never append framing afterwards. */
-export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,channelName?:string,kontrakurs=true):ParsedGrokScript {
+export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,_channelName?:string,_kontrakurs=true):ParsedGrokScript {
  if(truncated)return {project:null,issues:[{code:'truncated',message:'Die KI-Antwort wurde am Tokenlimit abgeschnitten.'}]};
  let data:Record<string,unknown>;
  try{const value=JSON.parse(text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));if(!value||typeof value!=='object'||Array.isArray(value))throw new Error();data=value;}
  catch{return {project:null,issues:[{code:'json',message:'Die KI-Antwort ist kein gültiges JSON.'}]};}
- const titles=list(data.titel,3),script=one(data.skript,100000),thumbnail=one(data.thumbnail_text,1000),pin=one(data.pin_kommentar,3000),sources=list(data.quellen),notes=list(data.hinweise_fuer_dennis);
+ const titles=list(data.titel,3),script=typeof data.skript==='string'?data.skript:'',thumbnail=one(data.thumbnail_text,1000),pin=one(data.pin_kommentar,3000),sources=list(data.quellen),notes=list(data.hinweise_fuer_dennis);
  const issues:Array<{code:string;message:string;pattern?:string}>=[];
- if(!Array.isArray(data.titel)||data.titel.length!==3||!titles||titles.length!==3||titles.some(title=>title.length>90||!/[!?]/.test(title)))issues.push({code:'titel',message:'Das Feld titel muss ein Array mit genau drei nichtleeren Titeln sein; jeder Titel enthält ? oder ! und hat höchstens 90 Zeichen.'});
- if(!script)issues.push({code:'skript',message:'Das Feld skript muss ein nichtleerer String mit dem vollständigen Telepromptertext sein.'});
- if(!thumbnail||countScriptWords(thumbnail)>4)issues.push({code:'thumbnail_text',message:`Das Feld thumbnail_text muss ein nichtleerer String mit höchstens vier Wörtern sein; erhalten: ${countScriptWords(thumbnail)}.`});
+ if(!Array.isArray(data.titel)||data.titel.length!==3||!titles||titles.length!==3)issues.push({code:'titel',message:'Das Feld titel muss ein Array mit genau drei nichtleeren Strings sein.'});
+ if(!script.trim())issues.push({code:'skript',message:'Das Feld skript muss ein nichtleerer String mit dem vollständigen Telepromptertext sein.'});
+ if(!thumbnail)issues.push({code:'thumbnail_text',message:'Das Feld thumbnail_text muss ein nichtleerer String sein.'});
  if(!pin)issues.push({code:'pin_kommentar',message:'Das Feld pin_kommentar muss ein nichtleerer String mit ein bis zwei Sätzen sein.'});
  if(!Array.isArray(data.quellen)||data.quellen.some(x=>typeof x!=='string'))issues.push({code:'quellen',message:'Das Feld quellen muss ein Array aus Strings im Format Quelle – URL sein.'});
  if(!Array.isArray(data.hinweise_fuer_dennis)||data.hinweise_fuer_dennis.some(x=>typeof x!=='string'))issues.push({code:'hinweise_fuer_dennis',message:'Das Feld hinweise_fuer_dennis muss ein Array aus Strings sein, auch bei nur einem Hinweis; wenn keine Hinweise vorliegen, verwende [].'});
- if(script){
-  const quality=validateKontrakursScript(script);
-  issues.push(...(kontrakurs?quality.issues:quality.issues.filter(issue=>!['missing_outro','missing_subscribe','word_count'].includes(issue.code))));
-  if(channelName&&channelGreetingMayMismatch(script,channelName))issues.push({code:'channel_mismatch',message:'Die Begrüßung nennt einen anderen Kanal; verwende den gewählten Kanal.'});
- }
  // Literal quotation marks and announced quotations are accepted only when the exact words were checked against a retrieved original.
  const pairs:Record<string,string>={'„':'“','“':'”','"':'"','»':'«','«':'»','‚':'‘'},closers=new Set(['”','‘']);
  // A literal source quotation may itself contain the surrounding quote marks.

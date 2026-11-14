@@ -1,4 +1,4 @@
-/** Deterministic checks for the user's Kontrakurs editorial format. */
+/** Historical optional editorial checks; the autonomous generation pipeline does not invoke them. */
 export const KONTRAKURS_SUBSCRIBE_SENTENCE = 'Wenn ihr weiter Klartext wollt, lasst ein Abo da und gebt dem Video einen Daumen nach oben.';
 export const KONTRAKURS_OUTRO = 'Ich bin gespannt, wie ihr das seht, denn dieses Video ist jetzt mit Absicht zu Ende. Ciao, bis bald!';
 export const KONTRAKURS_MIN_WORDS = 900;

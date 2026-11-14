@@ -1,57 +1,25 @@
-# Grok-Skripterstellung
+# KI-gestützte Skripterstellung
 
-Neue Erstellungen nutzen serverseitig OpenRouter mit `OPENROUTER_API_KEY`. Das
-Standardmodell ist `x-ai/grok-4.3`, das Ersatzmodell `x-ai/grok-4.20`. Beide sind
-über `SCRIPT_MODEL` und `SCRIPT_FALLBACK_MODEL` konfigurierbar. Skript und
-einmaliger Korrekturversuch verwenden Temperatur 0,85, das Faktenblatt 0,3;
-beide nutzen `top_p` 0,95, höchstens 4.000 Tokens und 120 Sekunden pro Anfrage.
-Die separate Webrecherche verwendet Temperatur 0,4 und `RESEARCH_MODEL`, falls
-gesetzt, sonst `SCRIPT_MODEL` bzw. Grok 4.3. Für Recherche gilt ebenfalls das
-4.000-Token- und 120-Sekunden-Limit. Reasoning wird für diese Grok-Schritte
-deaktiviert, damit es nicht das kleine Ausgabebudget verbraucht.
+Grok entscheidet passend zu Thema, Kanal, Plattform und gewählten Vorgaben über Länge, Aufbau, Formulierungen und die Anzahl der Skriptteile. Der frühere verpflichtende Kontrakurs-Systemprompt, die feste Wortzahl, Pflichtsätze und redaktionelle Verbotsmuster sind auf ausdrücklichen Wunsch nicht mehr verpflichtend. Kontrakurs bleibt bei zugehörigem Kanal oder ohne Kanal eine unverbindliche Stil-Orientierung; „nur umformulieren“ verlangt weiterhin, keine eigene Bewertung hinzuzufügen. Bestehende gespeicherte Projekte und ältere Aufträge bleiben lesbar.
 
-Im Kontrakurs-Standard ist der vom Nutzer vorgegebene Systemprompt unverändert
-in `lib/grok-prompt.ts` hinterlegt. Die ausdrücklich gewählte Einstellung „nur
-umformulieren“ ist eine bewusste Ausnahme: Sie verwendet einen eigenen Prompt,
-der keine persönliche Bewertung erzwingt. Für Kontrakurs gelten die formalen Pflichtsätze und die Wortzahl auch im Umformuliermodus. Andere Kanäle erhalten eine neutrale kanalgebundene Vorlage und ihre gespeicherten Kanalangaben sowie gewählte Gestaltungsvorgaben. Für andere Kanäle gelten plattformgerechter Umfang und Abschluss statt der Kontrakurs-Pflichtsätze; ein gesondertes redaktionelles Kanal-Preset ist derzeit nicht hinterlegt. Bestehende gespeicherte Projekte bleiben im
-bisherigen Format und alte bereits erhaltene Providerantworten auswertbar.
+## Faktenblatt und Teilplan
 
-Das Faktenblatt ist ein KI-Entwurf und garantiert weder Wahrheit noch eine
-vollständige oder korrekte Artikelinterpretation. Wörtliche Zitate werden nur
-übernommen, wenn derselbe Wortlaut im tatsächlich abgerufenen und gespeicherten
-Seitentext der angegebenen Quelle vorkommt. Dies beweist lediglich das
-Vorkommen im extrahierten Seitentext, nicht die Zuordnung zum Artikel oder die
-Richtigkeit. Umschließt ein einziges passendes Anführungszeichenpaar ein bereits so quellengeprüftes Zitat, wird für den exakten Vergleich ausschließlich dieses äußere Paar entfernt; Inhalt und Satzzeichen bleiben unverändert. Nicht belegte Zitate werden weggelassen und im internen
-Hinweisfeld vermerkt. Bei Webrecherchen ohne gespeicherten Originaltext werden
-keine Zitate als wörtlich belegt übernommen. Recherchehinweise aus dem
-Faktenblatt werden beim Skriptaufruf nicht mitgesendet und bleiben getrennt
-vom Telepromptertext. Die mechanische Zitatprüfung erkennt nicht jede indirekt
-formulierte Behauptung oder sinngemäße Rede; Inhalte müssen geprüft werden. Umgekehrt können auch belegte Werk- oder Filmtitel in Anführungszeichen als wörtliches Zitat abgelehnt werden. Der Prompt verlangt für solche Fälle die Schreibweise ohne Anführungszeichen; die automatische Prüfung ist bewusst konservativ.
+Ein serverseitiger OpenRouter-Aufruf erstellt ein Faktenblatt aus den recherchierten Quellen und legt gleichzeitig selbst einen organisatorischen Plan mit einem oder mehreren Teilen fest. Kanal und Nutzervorgaben sind dabei Kontext, aber keine Tatsachenquelle. Faktenblatt und validierter Plan werden zusammen dauerhaft gespeichert, bevor der erste Teil reserviert wird. Anzahl und rechnerische Höchstzahl technischer Provider-Versuche für Faktenblatt, Teile und gegebenenfalls Metadatenkorrektur werden protokolliert und im Erstellungsstatus gezeigt. Die separate Webrecherche und Bildarbeit sind darin nicht enthalten.
 
-Die Skript- und Korrekturanfragen fordern ein striktes JSON-Schema mit festgelegten Feldtypen und drei Titeln an. Für Kontrakurs fordert ein Schema-Muster zusätzlich den exakten Abo-Satz und Schlusssatz an. Die verwendeten Regex-Bausteine sind von xAI dokumentiert; ihr Verhalten über den jeweils gerouteten Provider ist nicht vorab garantiert. Die Anwendung prüft die Antwort weiterhin selbst, da ein Provider das Schema ablehnen oder ignorieren kann. Unabhängige Feld- und Inhaltsfehler werden gesammelt und dem einzigen Korrekturversuch gemeinsam mitgeteilt.
+Grok erhält für jeden Teil dasselbe eingefrorene Faktenblatt, die Kanal-/Nutzervorgaben und den organisatorischen Plan. Der Plan und vorangegangene generierte Texte sind keine Tatsachenquelle. Die Texte früherer Teile werden bei der Erstellung weiterer Teile nicht als Beleg weitergereicht. Der Plan soll Wiederholungen und Brüche vermeiden; eine perfekte sprachliche Kontinuität ist nicht garantiert. Der letzte Teil enthält zugleich die bestehenden JSON-Metadaten. Nur vollständige, gespeicherte Teile werden in Reihenfolge zusammengefügt. `content.script` bleibt ein String und ist mit KontraPrompter kompatibel.
 
-Die Ergebnisprüfung kontrolliert vor dem Speichern bei Kontrakurs unter anderem Pflichtsätze und Wortzahl; für andere Kanäle gelten diese Vorgaben nicht. Die verbotenen Muster werden bei allen geprüft. Offensichtliche fremde Kanalbegrüßungen lösen eine Korrektur aus, lassen sich aber nicht vollständig automatisch erkennen. Bei Qualitätsfehlern folgt höchstens ein Korrekturdurchlauf. Dieser beginnt mit dem konfigurierten Ersatzmodell; bei technischen Fehlern kann innerhalb der gleichen begrenzten Provider-Versuche das ursprüngliche Modell eingesetzt werden. Ist auch diese Antwort ungültig oder abgeschnitten, wird
-sie nicht als fertiges Skript gespeichert. Gespeicherte Providerantworten und
-der Status bleiben für angemeldete Nutzer abrufbar. `content.script` bleibt
-der Telepromptertext; Titel, Thumbnail, Pinnkommentar und interne Hinweise
-werden separat gespeichert. Da das verlangte JSON keine B-Roll-Ideen enthält,
-ist das vorhandene B-Roll-Array leer.
+Es gibt absichtlich keinen pauschalen Teilzahl- oder Gesamtkostendeckel. Ein sehr großer KI-Plan kann daher viele kostenpflichtige Aufrufe verursachen. Die Anzahl möglicher Aufrufe wird vor Beginn ausgewiesen; separate OpenRouter-Kontolimits können zusätzliche Kosten begrenzen, falls der Betreiber sie dort selbst festlegt. Ungültige oder nicht darstellbare Pläne und Antworten werden sichtbar gestoppt, nicht still gekürzt. Für die technische Verarbeitung sind einzelne Providerantworten und der zusammengefügte Sprechertext auf jeweils 2 MiB begrenzt; die Originalteile bleiben erhalten, falls diese Verarbeitungsgrenze überschritten wird.
 
-Bei Faktenblatt, Skript und Korrektur wird jeder Versuch vor dem Netzwerkaufruf dauerhaft reserviert. Die separate Webrecherche protokolliert Versuche, hat aber keine dauerhaft fortsetzbaren Zwischenstände; ein manueller Neustart kann weitere Kosten auslösen. Zeitüberschreitung
-oder Netzwerkabbruch dürfen nach ausdrücklicher Vorgabe einen Versuch mit dem
-Ersatzmodell auslösen; bei HTTP 429/5xx gibt es insgesamt höchstens zwei Wiederholungen einschließlich des Ersatzmodells mit Backoff. Eine zeitweise unklare Anfrage kann vom Provider trotzdem
-berechnet werden; fehlende Kostenangaben sind **unbekannt**, nicht null. Modell,
-Provider-ID, gelieferte Token-/Kostenangaben und Versuchszustand werden ohne
-Schlüssel, Quelltext oder Prompt protokolliert. Nach einem Prozessabbruch wird
-ein möglicherweise bereits gestarteter Modellaufruf nicht automatisch erneut
-gestartet. Ein sicher gespeicherter Zwischenstand kann ausdrücklich fortgesetzt
-werden; dabei können weitere KI-Kosten entstehen.
-Bei Authentifizierungs-, Berechtigungs- oder Guthabenfehlern (401/402/403)
-wird kein Ersatzmodell aufgerufen, weil derselbe Schlüssel den Fehler nicht
-behebt; diese Fehler müssen zuerst behoben werden.
+## Prüfung, Korrektur und Quellen
 
-Die letzte Sitzungsprüfung und der Beginn eines Netzaufrufs sind nicht über
-mehrere Prozesse atomar. Ein bereits gestarteter Aufruf kann nach einem Logout
-weiterlaufen; das Projekt wird vor dem Speichern erneut unter SQLite-Sperre
-auf die gültige Sitzung geprüft. Bildplanung und Bildgenerierung sind getrennte
-Funktionen und können nach Erstellung des Projekts weitere KI-Kosten auslösen.
+Technische JSON-Felder und die Zuordnung von Quellen/Zitaten werden geprüft; redaktionelle Wortzahl, Pflichtsätze, Tonfall und frühere Musterverbote sind keine Ablehnungsgründe. Bei fehlerhaften Metadaten kann genau ein Korrekturaufruf nur diese Felder ergänzen. Er darf keinen Skriptteil umschreiben. Bei einem unbestätigten oder mehrdeutig abgegrenzten wörtlichen Zitat wird sichtbar gestoppt; die Originalteile bleiben erhalten und sind im Erstellungsstatus herunterladbar.
+
+Ein Faktenblatt ist ein KI-Entwurf und kein Wahrheitsbeweis. Wörtliche Zitate werden nur übernommen, wenn ihr genauer Wortlaut im tatsächlich abgerufenen, gespeicherten Seitentext der angegebenen Quelle vorkommt. Dies beweist das Vorkommen im extrahierten Seitentext, nicht die Zuordnung zum Artikel oder die Richtigkeit. Bei Webrecherche ohne gespeicherten Originaltext werden keine Zitate als wörtlich bestätigt. Die konservative Zitatprüfung kann etwa bei Werktiteln in Anführungszeichen einen Fehlalarm auslösen und erkennt umgekehrt nicht jede indirekt formulierte Behauptung. Inhalte müssen vor Veröffentlichung geprüft werden. Interne Recherchehinweise aus dem Faktenblatt bleiben vom Sprechertext getrennt.
+
+## Modelle, Kosten und Wiederaufnahme
+
+`OPENROUTER_API_KEY` wird ausschließlich serverseitig gelesen. `SCRIPT_MODEL` und `SCRIPT_FALLBACK_MODEL` wählen das Haupt- und Ersatzmodell; Standard sind `x-ai/grok-4.3` und `x-ai/grok-4.20`. Die optionale Umgebungsvariable `SCRIPT_MAX_TOKENS` setzt ein technisches Ausgabelimit pro Skript-, Teil- und Korrekturanfrage. Ohne sie gilt der jeweilige Providerstandard. Das Faktenblatt verwendet weiterhin höchstens 4.000 Ausgabetokens; die separate Webrecherche nutzt `RESEARCH_MODEL` oder das Skriptmodell und eigene Einstellungen.
+
+Jede Teilphase und jeder Provider-Versuch wird vor dem Netzaufruf dauerhaft reserviert. Pro Anfrage gelten das 120-Sekunden-Limit und höchstens zwei technische Wiederholungen einschließlich Fallback. Bei einem Timeout darf der ausdrücklich gewünschte Fallback gestartet werden; die möglicherweise angefallenen Kosten des ersten Aufrufs bleiben unbekannt, wenn der Provider sie nicht meldet. Gemeldete Token-/Kostenangaben werden angezeigt, fehlende Werte nicht als null erfunden. Diese Beschränkung pro Aufruf ist kein Gesamtkostenlimit des geplanten Laufs.
+
+Nach einem Prozessabbruch wird ein möglicherweise bereits gestarteter Aufruf nicht automatisch wiederholt. Ein vollständig gespeicherter Teil oder ein anderes sicheres Zwischenstadium kann ausdrücklich fortgesetzt werden; dabei können weitere KI-Kosten entstehen. Anmeldung und Speichern werden erneut geprüft; ein bereits gestarteter externer Aufruf kann nach Logout dennoch weiterlaufen. Bildplanung und Bildgenerierung können nach Projektanlage zusätzliche eigene Kosten auslösen.

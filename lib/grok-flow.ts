@@ -4,7 +4,7 @@ import {FACT_SHEET_SYSTEM,KONTRAKURS_SCRIPT_SYSTEM,SOURCE_ONLY_SCRIPT_SYSTEM,CHA
 import {validateFactSheet,type FactSheet} from './fact-sheet.ts';
 import {parseGrokScript} from './grok-result.ts';
 import {grokCompletion} from './grok-provider.ts';
-import {markGrokFacts,readGrokRun,reserveGrokPhase,saveGrokAnswer} from './grok-state.ts';
+import {isMultipart,markGrokFacts,markGrokFailure,readGrokFailure,readGrokPlan,readGrokPart,readGrokRun,reserveGrokPart,reserveGrokPhase,saveGrokAnswer,saveGrokPart,saveGrokPlan} from './grok-state.ts';
 import {parseJson} from './openrouter.ts';
 
 export class GrokPending extends Error {}
@@ -15,59 +15,117 @@ function envelope(value:string|null):Envelope {
  const parsed=JSON.parse(value);if(!parsed||typeof parsed.text!=='string'||typeof parsed.truncated!=='boolean')throw new GrokInvalid('Die gespeicherte Antwort ist ungültig.');return parsed;
 }
 const encoded=(reply:Envelope)=>JSON.stringify({text:reply.text,truncated:reply.truncated});
+function record(value:unknown):Record<string,unknown>|null{return value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:null;}
+function extractPlan(value:unknown):string[] {
+ const plan=record(record(value)?.skriptplan),parts=plan?.teile;
+ if(!Array.isArray(parts)||!parts.length||!Number.isSafeInteger((parts.length+2)*3))throw new Error('Der Skriptplan ist ungültig.');
+ const result=parts.map(item=>typeof item==='string'?item.trim():'');
+ if(result.some(item=>!item))throw new Error('Der Skriptplan ist unvollständig.');
+ return result;
+}
+function partPayload(saved:Envelope):Record<string,unknown> {
+ if(saved.truncated)throw new Error('Der Skriptteil wurde abgeschnitten.');
+ const data=record(parseJson(saved.text));
+ if(!data||typeof data.skript!=='string'||!data.skript.trim())throw new Error('Der Skriptteil ist unvollständig.');
+ return data;
+}
 
 /** Continue only from a known durable phase; in-flight or crashed calls never restart automatically. */
 export async function runGrokFlow(db:Database.Database,claim:GenerationClaim,created:boolean,authorize:()=>void):Promise<GenerationClaim> {
  const id=claim.researchId,snapshot=claimSnapshot(claim);let run=readGrokRun(db,id);
  if(!run)throw new GrokPending('Für diese ältere Erstellung ist der Providerstatus ungeklärt.');
- const models={primary:run.primaryModel,fallback:run.fallbackModel};
+ const failure=readGrokFailure(db,id);if(failure)throw new GrokInvalid(failure);
+ const models={primary:run.primaryModel,fallback:run.fallbackModel},planned=isMultipart(db,id);
  if(run.phase==='facts_pending'){
   if(!created)throw new GrokPending('Das Faktenblatt läuft oder sein Ergebnis ist ungeklärt; es wird nicht erneut angefordert.');
-  const input=JSON.stringify({quellen:snapshot.sources,recherche:snapshot.report});
-  const reply=await grokCompletion(db,id,'facts',FACT_SHEET_SYSTEM,`Erstelle das Faktenblatt ausschließlich aus diesen Daten: ${input}`,models,{authorize});
-  let facts:FactSheet;
-  try{if(reply.truncated)throw new Error();facts=validateFactSheet(parseJson(reply.text),snapshot.sources,snapshot.report);}
-  catch{markGrokFacts(db,id,encoded(reply),null,new Date().toISOString());throw new GrokInvalid('Das Faktenblatt ist unvollständig oder ohne belegte Aussagen. Die Antwort wurde zur Prüfung gespeichert.');}
-  markGrokFacts(db,id,encoded(reply),JSON.stringify(facts),new Date().toISOString());
+  const input=JSON.stringify({quellen:snapshot.sources,recherche:snapshot.report,kanal:snapshot.channel,nutzervorgaben:snapshot.options});
+  const planInstruction=planned?' Ergänze ein Feld "skriptplan": {"teile":["organisatorisches Ziel eines Teils"]}. Entscheide selbst anhand von Thema, Kanal und Nutzervorgaben, ob ein Teil genügt oder mehrere sinnvoll sind. Wähle selbst Anzahl, Umfang und Struktur. Jedes Ziel beschreibt nur die Organisation; es ist keine zusätzliche Faktenquelle.':'';
+  const reply=await grokCompletion(db,id,'facts',FACT_SHEET_SYSTEM,`Erstelle das Faktenblatt ausschließlich aus diesen Daten: ${input}${planInstruction}`,models,{authorize});
+  let facts:FactSheet,plan:string[]|null=null;
+  try{if(reply.truncated)throw new Error();const raw=parseJson(reply.text);facts=validateFactSheet(raw,snapshot.sources,snapshot.report);if(planned)plan=extractPlan(raw);}
+  catch{markGrokFacts(db,id,encoded(reply),null,new Date().toISOString());throw new GrokInvalid(planned?'Das Faktenblatt oder der Skriptplan ist unvollständig. Die Antwort wurde zur Prüfung gespeichert.':'Das Faktenblatt ist unvollständig. Die Antwort wurde zur Prüfung gespeichert.');}
+  db.transaction(()=>{markGrokFacts(db,id,encoded(reply),JSON.stringify(facts),new Date().toISOString());if(plan)saveGrokPlan(db,id,plan);}).immediate();
+  if(plan)console.info(JSON.stringify({event:'script_plan_ready',researchId:id,partCount:plan.length,maxProviderAttempts:(plan.length+2)*3}));
   run=readGrokRun(db,id)!;
  }
- if(run.phase==='facts_invalid')throw new GrokInvalid('Das Faktenblatt ist unvollständig. Die gespeicherte Antwort kann geprüft werden.');
+ if(run.phase==='facts_invalid')throw new GrokInvalid('Das Faktenblatt oder der Skriptplan ist unvollständig. Die gespeicherte Antwort kann geprüft werden.');
  if(!run.factsJson)throw new GrokPending('Das Faktenblatt ist noch nicht verfügbar.');
- const facts=JSON.parse(run.factsJson) as FactSheet;
- const options=snapshot.options;
+ const facts=JSON.parse(run.factsJson) as FactSheet,options=snapshot.options;
  const isKontrakurs=!snapshot.channel||snapshot.channel.name.toLocaleLowerCase('de-DE').replace(/[^a-z0-9]/g,'')==='kontrakurs';
- const system=isKontrakurs?(options?.mode==='source'?SOURCE_ONLY_SCRIPT_SYSTEM:KONTRAKURS_SCRIPT_SYSTEM):(options?.mode==='source'?CHANNEL_SOURCE_ONLY_SCRIPT_SYSTEM:CHANNEL_SCRIPT_SYSTEM);
- const platform=snapshot.channel?.platform.toLocaleLowerCase('en-US');
- const lengthGuide=isKontrakurs?null:platform==='tiktok'||platform==='instagram'?'Etwa 45 bis 90 Sekunden, falls die Nutzervorgaben keine andere Länge nennen.':platform==='youtube'?'Etwa 10 bis 12 Minuten, falls die Nutzervorgaben keine andere Länge nennen.':'Eine zu Plattform und Thema passende Länge, falls die Nutzervorgaben keine andere Länge nennen.';
+ const system=options?.mode==='source'?(isKontrakurs?SOURCE_ONLY_SCRIPT_SYSTEM:CHANNEL_SOURCE_ONLY_SCRIPT_SYSTEM):isKontrakurs?KONTRAKURS_SCRIPT_SYSTEM:CHANNEL_SCRIPT_SYSTEM;
  const {hinweise_fuer_dennis:_internalNotes,...scriptFacts}=facts;
- const outputLength=isKontrakurs?`Der reine Sprechertext in skript muss 900 bis 1.400 Wörter enthalten; schreibe etwa 1.100 bis 1.200 Wörter. Plane intern ungefähr sieben aufeinanderfolgende Sprechabschnitte: Einstieg 110–120 Wörter, kurze Begrüßung 30–35, belegte Ausgangslage 285–300, weitere belegte Details 285–300, verständliche Vertiefung 200–220, Zusammenführung und Fazit 150–170 sowie Zuschauerfrage und Verabschiedung 50–55 Wörter. Diese Aufteilung ist nur eine interne Längenhilfe: Gib ausschließlich den fließenden Sprechertext aus, ohne Abschnittsnamen oder Zwischenüberschriften. Berücksichtige gewählte Dramaturgie und den gewählten Bewertungsmodus. Erläutere ausschließlich Informationen aus dem Faktenblatt; erfinde auch bei dünnem Material keine Fakten, Zahlen, Zitate, Beispiele, Quellen oder konkreten Folgen. Wenn das Faktenblatt etwas nicht hergibt, füge es nicht hinzu.`:'Der Sprechertext soll dem angegebenen Plattformumfang und den gewählten Vorgaben entsprechen.';
- const quoteGuide=facts.zitate.length?(isKontrakurs&&options?.mode!=='source'?'Wörtliche Zitate nur vollständig und exakt wie im Faktenblatt kopieren, einschließlich aller Satzzeichen. Wenn du ein Zitat mit Zitat: oder wörtlich: ankündigst, setze seinen vollständigen bestätigten Wortlaut in ein passendes Paar Anführungszeichen. Enthält das bestätigte Zitat bereits ein äußeres Anführungszeichenpaar, übernimm es nur einmal. Schreibe Ankündigung und Zitat allein in eine eigene Zeile; der folgende Satz beginnt in einer neuen Zeile. Ergänze oder entferne keine Zeichen innerhalb des Zitats. Bei Unsicherheit lieber sinngemäß und ohne Anführungszeichen wiedergeben. Alle anderen Aussagen sinngemäß und ohne Anführungszeichen wiedergeben.':'Wörtliche Zitate nur vollständig und exakt wie im Faktenblatt kopieren, einschließlich aller Satzzeichen. Keine Zeichen davor oder danach ergänzen und den Wortlaut nicht abwandeln. Bei Unsicherheit lieber sinngemäß und ohne Anführungszeichen wiedergeben. Alle anderen Aussagen sinngemäß und ohne Anführungszeichen wiedergeben.'):'Das Faktenblatt enthält keine bestätigten wörtlichen Zitate. Verwende im Sprechertext keine Anführungszeichen, keine als wörtlich ausgegebene Rede und keine Einleitung Zitat: oder wörtlich:. Formuliere ausschließlich sinngemäß.';
- const instruction=`${outputLength}\nSchreibe ausschließlich auf Grundlage dieses Faktenblatts: ${JSON.stringify(scriptFacts)}\nKanalangaben (nur Gestaltung, keine Fakten): ${JSON.stringify(snapshot.channel?{name:snapshot.channel.name,platform:snapshot.channel.platform,handle:snapshot.channel.handle,laenge:lengthGuide}:null)}\nOptionale Gestaltungsvorgaben (keine Fakten): ${JSON.stringify(options?{mode:options.mode,tones:options.tones,dramaturgy:options.dramaturgy,instructions:options.instructions}:null)}\n${quoteGuide} Schreibe ironische Begriffe ohne Anführungszeichen. Antworte ausschließlich als JSON: {"titel":["...","...","..."],"skript":"...","thumbnail_text":"...","pin_kommentar":"...","quellen":["Quelle – URL"],"hinweise_fuer_dennis":["..."]}. titel ist ein Array mit genau drei Strings; thumbnail_text enthält höchstens vier Wörter; pin_kommentar ist ein String mit ein bis zwei Sätzen. quellen und hinweise_fuer_dennis sind jeweils Arrays aus Strings, auch bei nur einem Eintrag; wenn keine Hinweise vorliegen, verwende []. Recherchehinweise gehören ausschließlich in hinweise_fuer_dennis.`;
- if(run.phase==='facts_ready'){
+ const quoteGuide=facts.zitate.length?'Wörtliche Zitate nur vollständig und exakt wie im Faktenblatt kopieren, einschließlich aller Satzzeichen. Bei angekündigten Zitaten verwende passende Anführungszeichen und setze den Folgesatz in eine neue Zeile. Bei Unsicherheit sinngemäß wiedergeben.':'Das Faktenblatt enthält keine bestätigten wörtlichen Zitate. Verwende keine als wörtlich ausgegebene Rede; gib Aussagen sinngemäß wieder.';
+ const instruction=`Schreibe ausschließlich auf Grundlage dieses Faktenblatts: ${JSON.stringify(scriptFacts)}\nKanalangaben (nur Gestaltung, keine Fakten): ${JSON.stringify(snapshot.channel?{name:snapshot.channel.name,platform:snapshot.channel.platform,handle:snapshot.channel.handle}:null)}\nOptionale Nutzervorgaben (keine Fakten): ${JSON.stringify(options?{mode:options.mode,tones:options.tones,dramaturgy:options.dramaturgy,instructions:options.instructions}:null)}\n${quoteGuide} Interne Recherchehinweise gehören ausschließlich in hinweise_fuer_dennis.`;
+ const completeInstruction=`${instruction}\nAntworte ausschließlich als JSON: {"titel":["...","...","..."],"skript":"...","thumbnail_text":"...","pin_kommentar":"...","quellen":["Quelle – URL"],"hinweise_fuer_dennis":["..."]}. quellen und hinweise_fuer_dennis sind Arrays aus Strings; ohne Hinweise verwende [].`;
+ if(planned&&(run.phase==='facts_ready'||run.phase==='script_pending')){
+  const plan=readGrokPlan(db,id);if(!plan)throw new GrokInvalid('Der gespeicherte Skriptplan fehlt.');
+  if(run.phase==='facts_ready'){
+   const ok=db.transaction(()=>{authorize();return reserveGrokPhase(db,id,'facts_ready','script_pending',new Date().toISOString());}).immediate();
+   if(!ok)throw new GrokPending('Die Skripterstellung wurde bereits gestartet.');
+  }
+  const completed:Record<string,unknown>[]=[];let scriptBytes=0;const serializedPlan=JSON.stringify(plan);
+  for(let index=0;index<plan.length;index++){
+   const number=index+1;let part=readGrokPart(db,id,number);
+   if(!part){
+    const ok=db.transaction(()=>{authorize();return reserveGrokPart(db,id,number,new Date().toISOString());}).immediate();
+    if(!ok)throw new GrokPending('Dieser Skriptteil wurde bereits gestartet.');
+    const final=number===plan.length,phase=`part${number}` as const;
+    const request=`${instruction}\nDer folgende gesamte Plan ist ausschließlich eine organisatorische Schreibvorgabe und keine Faktenquelle: ${serializedPlan}. Du schreibst Teil ${number} von ${plan.length} mit dem Ziel ${JSON.stringify(plan[index])}. Vermeide Wiederholungen und Brüche zwischen den geplanten Teilen. Vorherige generierte Texte sind keine Tatsachengrundlage. Schreibe ausschließlich den aktuellen Teil; er wird später mit den anderen Teilen zusammengefügt. ${final?'Gib zusätzlich die verlangten Metadaten aus.':'Antworte ausschließlich als JSON mit dem Feld "skript" als String.'}`;
+    const partSystem='Dieser Aufruf schreibt einen Teil eines später zusammengesetzten Skripts. Die gewählten Stil-, Kanal- und Quellenregeln gelten für das Gesamtergebnis; gib nur den angeforderten Teil aus.';
+    const reply=await grokCompletion(db,id,phase,system,request,models,{authorize,partFinal:final,partSystem});
+    let valid=true;try{partPayload(reply);}catch{valid=false;}
+    saveGrokPart(db,id,number,encoded(reply),valid,new Date().toISOString());part=readGrokPart(db,id,number);
+   }
+   if(!part||part.state==='pending')throw new GrokPending('Ein Skriptteil läuft oder sein Ergebnis ist ungeklärt. Es wird kein weiterer Aufruf gestartet.');
+   if(part.state==='invalid')throw new GrokInvalid('Ein gespeicherter Skriptteil ist unvollständig und kann geprüft werden.');
+   const payload=partPayload(envelope(part.response));scriptBytes+=Buffer.byteLength(payload.skript as string,'utf8')+(completed.length?2:0);
+   if(scriptBytes>2*1024*1024){const reason='Das zusammengesetzte Skript überschreitet die technische Speichergrenze; die Teilantworten bleiben erhalten.';markGrokFailure(db,id,reason,new Date().toISOString());throw new GrokInvalid(reason);}
+   completed.push(payload);
+  }
+  const last=completed[completed.length-1],script=completed.map(item=>item.skript as string).join('\n\n');
+  const assembled={...last,skript:script};
+  try{saveGrokAnswer(db,id,'script',encoded({text:JSON.stringify(assembled),truncated:false}),new Date().toISOString());}
+  catch{const latest=readGrokRun(db,id);if(!latest||!['script_ready','repair_pending','repair_ready'].includes(latest.phase))throw new GrokPending('Die Skripterstellung wurde bereits verarbeitet.');}
+  run=readGrokRun(db,id)!;
+ }
+ if(!planned&&run.phase==='facts_ready'){
   const ok=db.transaction(()=>{authorize();return reserveGrokPhase(db,id,'facts_ready','script_pending',new Date().toISOString());}).immediate();
   if(!ok)throw new GrokPending('Die Skripterstellung wurde bereits gestartet.');
-  const reply=await grokCompletion(db,id,'script',system,instruction,models,{authorize,kontrakurs:isKontrakurs});
+  const reply=await grokCompletion(db,id,'script',system,completeInstruction,models,{authorize});
   saveGrokAnswer(db,id,'script',encoded(reply),new Date().toISOString());run=readGrokRun(db,id)!;
  }
  if(run.phase==='script_ready'){
   const first=envelope(run.scriptRaw),parsed=parseGrokScript(first.text,first.truncated,facts,snapshot.channel?.name,isKontrakurs);
   if(!parsed.project){
+   // The exact boundaries of an unverified quotation cannot always be inferred.
+   // Never ask a model to rewrite a full script or replace an ambiguous span.
+   if(parsed.issues.some(issue=>['unverified_quote','skript','json','truncated'].includes(issue.code))){
+    db.transaction(()=>{const current=readGenerationClaim(db,id);if(current?.state==='pending')saveGenerationResponse(db,id,first.text,new Date().toISOString(),first.truncated);}).immediate();
+    throw new GrokInvalid(`Das ursprüngliche Skript bleibt erhalten; eine sichere Textkorrektur ist nicht bestimmbar: ${parsed.issues.map(issue=>issue.message).join(' ')}`);
+   }
    const ok=db.transaction(()=>{authorize();return reserveGrokPhase(db,id,'script_ready','repair_pending',new Date().toISOString());}).immediate();
    if(!ok)throw new GrokPending('Die einmalige Korrektur wurde bereits gestartet.');
-   const retry=`${instruction}\nDer erste Entwurf erfüllte diese maschinellen Prüfungen nicht: ${JSON.stringify(parsed.issues.map(issue=>issue.message))}. Erzeuge genau einmal einen korrigierten vollständigen Entwurf.`;
-   // A quality failure uses the configured fallback first, within the same single repair phase.
+   const retry=`${instruction}\nErgänze ausschließlich die Metadaten als JSON: {"titel":["...","...","..."],"thumbnail_text":"...","pin_kommentar":"...","quellen":["Quelle – URL"],"hinweise_fuer_dennis":["..."]}. Erzeuge keinen Skripttext. Diese technischen Felder waren fehlerhaft: ${JSON.stringify(parsed.issues.map(issue=>issue.message))}.`;
    const repairModels={primary:models.fallback,fallback:models.primary};
-   const reply=await grokCompletion(db,id,'repair',system,retry,repairModels,{authorize,kontrakurs:isKontrakurs});
+   const reply=await grokCompletion(db,id,'repair',system,retry,repairModels,{authorize,metadataOnly:true});
    saveGrokAnswer(db,id,'repair',encoded(reply),new Date().toISOString());run=readGrokRun(db,id)!;
   }
  }
  if(run.phase==='facts_pending'||run.phase==='script_pending'||run.phase==='repair_pending')throw new GrokPending('Ein Modellaufruf läuft oder sein Ergebnis ist ungeklärt. Es wird kein weiterer Aufruf gestartet.');
- const resultEnvelope=envelope(run.phase==='repair_ready'?run.repairRaw:run.scriptRaw);
+ const originalEnvelope=envelope(run.scriptRaw);let resultEnvelope=originalEnvelope;
+ if(run.phase==='repair_ready'){
+  const repair=envelope(run.repairRaw);let original:Record<string,unknown>|null=null,metadata:Record<string,unknown>|null=null;
+  try{if(repair.truncated)throw new Error();original=record(parseJson(originalEnvelope.text));metadata=record(parseJson(repair.text));if(!original||!metadata)throw new Error();}
+  catch{db.transaction(()=>{const current=readGenerationClaim(db,id);if(current?.state==='pending')saveGenerationResponse(db,id,repair.text,new Date().toISOString(),repair.truncated);}).immediate();throw new GrokInvalid('Die Metadatenkorrektur ist unvollständig. Die Originalteile bleiben erhalten.');}
+  const originalIssues=parseGrokScript(originalEnvelope.text,originalEnvelope.truncated,facts,snapshot.channel?.name,isKontrakurs).issues;
+  if(originalIssues.some(issue=>['unverified_quote','skript','json','truncated'].includes(issue.code)))throw new GrokInvalid('Die Textgrenze ist unklar. Die Originalteile bleiben erhalten.');
+  const repaired={...original};for(const issue of originalIssues)if(['titel','thumbnail_text','pin_kommentar','quellen','hinweise_fuer_dennis'].includes(issue.code))repaired[issue.code]=metadata[issue.code];
+  resultEnvelope={text:JSON.stringify(repaired),truncated:false};
+ }
  const parsed=parseGrokScript(resultEnvelope.text,resultEnvelope.truncated,facts,snapshot.channel?.name,isKontrakurs);
  if(!parsed.project){
-  // Preserve the final provider text, then let the established invalid-answer path expose it.
   db.transaction(()=>{const current=readGenerationClaim(db,id);if(current?.state==='pending')saveGenerationResponse(db,id,resultEnvelope.text,new Date().toISOString(),resultEnvelope.truncated);}).immediate();
-  throw new GrokInvalid(`Auch die Korrektur erfüllt die Vorgaben nicht: ${parsed.issues.map(issue=>issue.message).join(' ')}`);
+  throw new GrokInvalid(`Auch die Korrektur erfüllt die technischen oder Quellenprüfungen nicht: ${parsed.issues.map(issue=>issue.message).join(' ')}`);
  }
  db.transaction(()=>{const current=readGenerationClaim(db,id);if(current?.state==='pending')saveGenerationResponse(db,id,JSON.stringify({...parsed.project,_grok:true}),new Date().toISOString());}).immediate();
  const latest=readGenerationClaim(db,id);if(!latest)throw new GrokPending('Die Erstellung ist nicht mehr verfügbar.');

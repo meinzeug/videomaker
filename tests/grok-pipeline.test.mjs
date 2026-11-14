@@ -1,14 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import Database from 'better-sqlite3';
-import {KONTRAKURS_SCRIPT_SYSTEM,FACT_SHEET_SYSTEM,CHANNEL_SCRIPT_SYSTEM,SOURCE_ONLY_SCRIPT_SYSTEM,CHANNEL_SOURCE_ONLY_SCRIPT_SYSTEM} from '../lib/grok-prompt.ts';
+import {AUTONOMOUS_SCRIPT_SYSTEM,KONTRAKURS_SCRIPT_SYSTEM,FACT_SHEET_SYSTEM,CHANNEL_SCRIPT_SYSTEM,SOURCE_ONLY_SCRIPT_SYSTEM,CHANNEL_SOURCE_ONLY_SCRIPT_SYSTEM} from '../lib/grok-prompt.ts';
 import {validateFactSheet} from '../lib/fact-sheet.ts';
 import {parseGrokScript} from '../lib/grok-result.ts';
 import {ensureGenerationClaimsSchema,acquireGenerationClaim,readGenerationClaim} from '../lib/generation-claims.ts';
 import {ensureGrokStateSchema,readGrokRun,startGrokRun,markGrokFacts} from '../lib/grok-state.ts';
 import {grokCompletion} from '../lib/grok-provider.ts';
-import {GrokPending,runGrokFlow} from '../lib/grok-flow.ts';
+import {GrokPending,GrokInvalid,runGrokFlow} from '../lib/grok-flow.ts';
 
 const id='11111111-1111-4111-8111-111111111111',url='https://example.org/a',now='2026-01-01T00:00:00.000Z';
 const source=[{title:'Quelle',url,source:'Quelle',date:'',description:'Beschreibung'}];
@@ -19,7 +18,14 @@ function answer(s=script){return JSON.stringify({titel:['Titel 1!','Titel 2!','T
 function response(text,more={}){return new Response(JSON.stringify({id:'gen-test',model:'x-ai/grok-4.3',usage:{prompt_tokens:12,completion_tokens:34,total_tokens:46,cost:0.001},choices:[{finish_reason:'stop',message:{content:text}}],...more}),{status:200});}
 function fixture(channel=null,options=null){const db=new Database(':memory:');db.exec(`CREATE TABLE research_reports(id TEXT PRIMARY KEY,created_at TEXT NOT NULL,sources TEXT NOT NULL,report TEXT NOT NULL); CREATE TABLE channels(id TEXT PRIMARY KEY,name TEXT,platform TEXT,handle TEXT);`);ensureGenerationClaimsSchema(db);ensureGrokStateSchema(db);db.prepare('INSERT INTO research_reports VALUES(?,?,?,?)').run(id,now,JSON.stringify(source),JSON.stringify(report));if(channel)db.prepare('INSERT INTO channels VALUES(?,?,?,?)').run(channel.id,channel.name,channel.platform,channel.handle);if(options)db.prepare('UPDATE research_reports SET report=? WHERE id=?').run(JSON.stringify({...report,generation_options:options}),id);const {claim}=db.transaction(()=>{const result=acquireGenerationClaim(db,id,'descriptions',channel?.id||null,now,options);startGrokRun(db,id,now,'x-ai/grok-4.3','x-ai/grok-4.20');return result;}).immediate();return {db,claim};}
 
-test('Kontrakurs system prompt remains verbatim against the saved user fixture',()=>assert.equal(KONTRAKURS_SCRIPT_SYSTEM,readFileSync(new URL('./fixtures/kontrakurs-system-prompt.txt',import.meta.url),'utf8').replace(/\n$/,'')));
+test('autonomous and optional styles do not impose previous editorial limits',()=>{
+ for(const prompt of [AUTONOMOUS_SCRIPT_SYSTEM,KONTRAKURS_SCRIPT_SYSTEM,SOURCE_ONLY_SCRIPT_SYSTEM]){
+  assert.doesNotMatch(prompt,/900–1.400|Wenn ihr weiter Klartext|Ich bin gespannt, wie ihr das seht/);
+ }
+ assert.match(AUTONOMOUS_SCRIPT_SYSTEM,/selbst über Länge, Aufbau und Formulierung/);
+ assert.match(SOURCE_ONLY_SCRIPT_SYSTEM,/keine eigene Bewertung/);
+ assert.match(KONTRAKURS_SCRIPT_SYSTEM,/Kontrakurs.*Orientierung/);
+});
 test('literal quotes require the exact text in a retrieved original, never a fallback description',()=>{
  const facts=validateFactSheet({...rawFacts,zitate:[...rawFacts.zitate,{text:'erfunden',quelle:url},{text:'wiederholt',quelle:'https://evil.example/x'}]},source,report);
  assert.deepEqual(facts.zitate,[rawFacts.zitate[0]]);assert.match(facts.hinweise_fuer_dennis.join(' '),/2 Zitat/);
@@ -53,7 +59,7 @@ test('each announced quote is checked independently and only explicit closing ma
 test('output enforces exact quality, typed fields, verified sources and complete literal quotations',()=>{
  const facts=validateFactSheet(rawFacts,source,report);
  assert.ok(parseGrokScript(answer(),false,facts).project);
- const wrongChannel=parseGrokScript(answer('Willkommen bei Kontrakurs. Das ist ein Test.'),false,facts,'Eigenkanal',false);assert.equal(wrongChannel.project,null);assert.equal(wrongChannel.issues[0].code,'channel_mismatch');
+ const wrongChannel=parseGrokScript(answer('Willkommen bei Kontrakurs. Das ist ein Test.'),false,facts,'Eigenkanal',false);assert.ok(wrongChannel.project); // Channel mismatch is surfaced as a warning at project creation.
  assert.ok(parseGrokScript(answer('Willkommen bei Eigenkanal.\n'+script),false,facts,'Eigenkanal').project);
  assert.equal(parseGrokScript(answer(),true,facts).project,null);
  for(const example of ['Zitat: bestätigte Originalzitat und frei erfundener Zusatz.\n','Hier: „nicht\nbelegtes Zitat“\n','Hier: „unbegrenzt\n']){
@@ -63,13 +69,13 @@ test('output enforces exact quality, typed fields, verified sources and complete
  data.quellen=[];const supplemented=parseGrokScript(JSON.stringify(data),false,facts);assert.deepEqual(supplemented.project.quellen,[`example.org – ${url}`]);assert.match(supplemented.project.hinweise_fuer_dennis.join(' '),/ergänzt/);
  data.hinweise_fuer_dennis=[3];assert.equal(parseGrokScript(JSON.stringify(data),false,facts).project,null);
 });
-test('independent shape, thumbnail and word count errors are reported together',()=>{
+test('technical field errors remain strict while editorial length and thumbnail are free',()=>{
  const facts=validateFactSheet(rawFacts,source,report),data=JSON.parse(answer('Ein kurzer Testtext.'));
- data.hinweise_fuer_dennis='Ein Hinweis als falscher Datentyp';data.thumbnail_text='Eins Zwei Drei Vier Fünf Sechs Sieben Acht Neun Zehn';
+ data.hinweise_fuer_dennis='Ein Hinweis als falscher Datentyp';data.quellen=[3];data.thumbnail_text='Eins Zwei Drei Vier Fünf Sechs Sieben Acht Neun Zehn';
  const result=parseGrokScript(JSON.stringify(data),false,facts);assert.equal(result.project,null);
- for(const code of ['hinweise_fuer_dennis','thumbnail_text','word_count'])assert.ok(result.issues.some(issue=>issue.code===code),code);
- assert.match(result.issues.find(issue=>issue.code==='word_count').message,/900 bis 1.400/);
- assert.match(result.issues.find(issue=>issue.code==='thumbnail_text').message,/10/);
+ for(const code of ['hinweise_fuer_dennis','quellen'])assert.ok(result.issues.some(issue=>issue.code===code),code);
+ assert.ok(!result.issues.some(issue=>['thumbnail_text','word_count'].includes(issue.code)));
+ data.hinweise_fuer_dennis=[];data.quellen=[];assert.ok(parseGrokScript(JSON.stringify(data),false,facts).project);
 });
 test('429 retries are bounded, recorded and use the requested Grok parameters',async()=>{
  const {db}=fixture(),old=process.env.OPENROUTER_API_KEY;process.env.OPENROUTER_API_KEY='test-only';const calls=[],delays=[];
@@ -91,10 +97,12 @@ test('known facts resume after logout; one repair is reserved, hints never enter
   await assert.rejects(runGrokFlow(db,claim,true,()=>{if(!allowed&&messages.length)throw new Error('logged out');}),/logged out/);
   assert.equal(readGrokRun(db,id).phase,'facts_ready');assert.equal(messages.length,1);
   allowed=true;const final=await runGrokFlow(db,claim,false,()=>{});assert.equal(final.state,'received');assert.equal(messages.length,3);assert.equal(readGrokRun(db,id).phase,'repair_ready');assert.deepEqual(requests.map(req=>req.model),['x-ai/grok-4.3','x-ai/grok-4.3','x-ai/grok-4.20']);const repairAttempts=db.prepare("SELECT requested_model FROM grok_generation_attempts WHERE phase='repair' ORDER BY ordinal").all();assert.deepEqual(repairAttempts.map(x=>x.requested_model),['x-ai/grok-4.20']);
-  for(const m of messages.slice(1)){assert.equal(m[0].content,KONTRAKURS_SCRIPT_SYSTEM);assert.doesNotMatch(m[1].content,/NUR-INTERN PDF HINWEIS/);assert.match(m[1].content,/Wenn du ein Zitat mit Zitat: oder wörtlich: ankündigst/);assert.match(m[1].content,/passendes Paar Anführungszeichen/);assert.match(m[1].content,/Ankündigung und Zitat allein in eine eigene Zeile/);}assert.doesNotMatch(messages[2][1].content,/UNTRUSTED-ERFUNDEN/);assert.match(messages[2][1].content,/900 bis 1.400/);assert.match(messages[2][1].content,/erhalten: 10/);assert.match(messages[2][1].content,/auch bei nur einem Hinweis/);assert.match(messages[1][1].content,/1.100 bis 1.200 Wörter/);assert.match(messages[1][1].content,/nur eine interne Längenhilfe/);assert.match(messages[1][1].content,/ohne Abschnittsnamen oder Zwischenüberschriften/);assert.match(messages[1][1].content,/erfinde auch bei dünnem Material keine Fakten/);const budgets=[...messages[1][1].content.matchAll(/(\d+)–(\d+)/g)].map(m=>[Number(m[1]),Number(m[2])]);assert.equal(budgets.length,7);assert.equal(budgets.reduce((sum,b)=>sum+b[0],0),1110);assert.equal(budgets.reduce((sum,b)=>sum+b[1],0),1200);
-  for(const request of requests.slice(1)){const format=request.response_format;assert.equal(format.type,'json_schema');assert.equal(format.json_schema.strict,true);assert.deepEqual(format.json_schema.schema.required,['titel','skript','thumbnail_text','pin_kommentar','quellen','hinweise_fuer_dennis']);assert.equal(format.json_schema.schema.properties.hinweise_fuer_dennis.type,'array');assert.equal(format.json_schema.schema.properties.titel.minItems,3);assert.equal(format.json_schema.schema.properties.titel.items.pattern,'.*[!?].*');assert.equal(request.max_tokens,4000);
-   const pattern=format.json_schema.schema.properties.skript.pattern;assert.ok(pattern);assert.doesNotMatch(pattern,/\(\?[=!<]|\\p\{|\\b/);const constraint=new RegExp(`^(?:${pattern})$`,'u');assert.ok(constraint.test(script));assert.ok(!constraint.test(script.replace('Daumen nach oben.','Daumen nach oben')));assert.ok(!constraint.test(script.replace('Ciao, bis bald!','Ciao bis bald!')));assert.ok(!constraint.test(script+' Weiter.'));}
-  const content=JSON.parse(final.responseText);assert.equal(content.script,script);assert.deepEqual(content.broll,[]);assert.equal(content.pin_kommentar,'Was meint ihr?');
+  for(const m of messages.slice(1)){assert.equal(m[0].content,KONTRAKURS_SCRIPT_SYSTEM);assert.doesNotMatch(m[1].content,/NUR-INTERN PDF HINWEIS/);}
+  assert.match(messages[2][1].content,/Erzeuge keinen Skripttext/);assert.match(messages[2][1].content,/auch bei nur einem Hinweis/);
+  assert.equal(requests[1].response_format.json_schema.schema.properties.skript.pattern,undefined);
+  assert.equal(requests[2].response_format.json_schema.schema.properties.skript,undefined);
+  assert.equal(Object.hasOwn(requests[1],'max_tokens'),false);assert.equal(Object.hasOwn(requests[2],'max_tokens'),false);
+  const content=JSON.parse(final.responseText);assert.equal(content.script,'Zu kurz. UNTRUSTED-ERFUNDEN');assert.deepEqual(content.broll,[]);assert.equal(content.pin_kommentar,'Was meint ihr?');
  }finally{globalThis.fetch=oldFetch;if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
 });
 test('unknown in-flight or old pending claims cannot start duplicate paid calls',async()=>{
@@ -145,7 +153,7 @@ test('a hanging error-body cancel cannot block fallback after 503',async()=>{
 test('other channel receives its own metadata without Kontrakurs opinion or name',async()=>{
  const channel={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',name:'Eigenkanal',platform:'tiktok',handle:'@eigen'}, {db,claim}=fixture(channel),old=process.env.OPENROUTER_API_KEY,oldFetch=globalThis.fetch;process.env.OPENROUTER_API_KEY='test-only';const messages=[],requests=[];
  globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);messages.push(request.messages);requests.push(request);return response(request.messages[0].content===FACT_SHEET_SYSTEM?JSON.stringify(rawFacts):answer('Willkommen bei Eigenkanal. Hier ein kurzer Testbeitrag.'));};
- try{const result=await runGrokFlow(db,claim,true,()=>{});assert.equal(result.state,'received');assert.equal(messages[1][0].content,CHANNEL_SCRIPT_SYSTEM);assert.doesNotMatch(messages[1][1].content,/Ankündigung und Zitat allein in eine eigene Zeile/);assert.equal(requests[1].response_format.json_schema.schema.properties.skript.pattern,undefined);assert.doesNotMatch(messages[1][0].content,/Kontrakurs|Du hast eine klare Meinung/);assert.match(messages[1][1].content,/Eigenkanal/);assert.match(messages[1][1].content,/tiktok/);assert.match(messages[1][1].content,/45 bis 90 Sekunden/);assert.doesNotMatch(messages[1][0].content,/900|1.400|Wenn ihr weiter Klartext|Ich bin gespannt/);}
+ try{const result=await runGrokFlow(db,claim,true,()=>{});assert.equal(result.state,'received');assert.equal(messages[1][0].content,CHANNEL_SCRIPT_SYSTEM);assert.doesNotMatch(messages[1][1].content,/Ankündigung und Zitat allein in eine eigene Zeile/);assert.equal(requests[1].response_format.json_schema.schema.properties.skript.pattern,undefined);assert.doesNotMatch(messages[1][0].content,/Kontrakurs|Du hast eine klare Meinung/);assert.match(messages[1][1].content,/Eigenkanal/);assert.match(messages[1][1].content,/tiktok/);assert.doesNotMatch(messages[1][0].content,/900|1.400|Wenn ihr weiter Klartext|Ich bin gespannt/);}
  finally{globalThis.fetch=oldFetch;if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
 });
 
@@ -158,30 +166,42 @@ test('explicit source-only mode avoids imposed opinion for other channels',async
 });
 
 
-test('without verified quotations both script attempts prohibit literal quotation, but only one repair runs',async()=>{
+test('an unverified quote stops without rewriting the script or starting a repair',async()=>{
  const {db,claim}=fixture(),old=process.env.OPENROUTER_API_KEY,oldFetch=globalThis.fetch;process.env.OPENROUTER_API_KEY='test-only';const messages=[];
- globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);messages.push(request.messages);return response(request.messages[0].content===FACT_SHEET_SYSTEM?JSON.stringify({...rawFacts,zitate:[]}):messages.length===2?answer('Zitat: Frei erfunden.\n'+script):answer());};
- try{const final=await runGrokFlow(db,claim,true,()=>{});assert.equal(final.state,'received');assert.equal(messages.length,3);for(const message of messages.slice(1)){assert.match(message[1].content,/keine bestätigten wörtlichen Zitate/);assert.match(message[1].content,/keine Anführungszeichen/);}assert.match(messages[2][1].content,/nicht als wörtliches Zitat im Faktenblatt bestätigt/);assert.doesNotMatch(messages[2][1].content,/Frei erfunden/);}
+ globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);messages.push(request.messages);return response(request.messages[0].content===FACT_SHEET_SYSTEM?JSON.stringify({...rawFacts,zitate:[]}):answer('Zitat: Frei erfunden.\n'+script));};
+ try{await assert.rejects(runGrokFlow(db,claim,true,()=>{}),GrokInvalid);assert.equal(messages.length,2);assert.equal(readGenerationClaim(db,id).state,'received');assert.match(readGenerationClaim(db,id).responseText,/Frei erfunden/);}
  finally{globalThis.fetch=oldFetch;if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
 });
 
-
 test('one quality repair starts with fallback and may use primary only within the same bounded phase',async()=>{
  const {db,claim}=fixture(),old=process.env.OPENROUTER_API_KEY,oldFetch=globalThis.fetch;process.env.OPENROUTER_API_KEY='test-only';const calls=[];
- globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);calls.push(request);if(calls.length===1)return response(JSON.stringify(rawFacts));if(calls.length===2)return response(answer('Zu kurz.'));if(calls.length===3)return new Response('',{status:400});return response(answer());};
+ globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);calls.push(request);if(calls.length===1)return response(JSON.stringify(rawFacts));if(calls.length===2){const broken=JSON.parse(answer('Kurzer Originaltext.'));broken.hinweise_fuer_dennis='kein Array';return response(JSON.stringify(broken));}if(calls.length===3)return new Response('',{status:400});return response(answer());};
  try{const final=await runGrokFlow(db,claim,true,()=>{});assert.equal(final.state,'received');assert.deepEqual(calls.map(req=>req.model),['x-ai/grok-4.3','x-ai/grok-4.3','x-ai/grok-4.20','x-ai/grok-4.3']);const rows=db.prepare("SELECT requested_model,state FROM grok_generation_attempts WHERE phase='repair' ORDER BY ordinal").all();assert.deepEqual(rows,[{requested_model:'x-ai/grok-4.20',state:'failed'},{requested_model:'x-ai/grok-4.3',state:'received'}]);assert.equal(readGrokRun(db,id).phase,'repair_ready');}
  finally{globalThis.fetch=oldFetch;if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
 });
 
 
-test('Kontrakurs and source-only mode both retain forbidden-pattern checks',async()=>{
+test('autonomous and source-only mode both accept editorial wording without prescribed phrases',async()=>{
  const old=process.env.OPENROUTER_API_KEY,oldFetch=globalThis.fetch;process.env.OPENROUTER_API_KEY='test-only';
  try{
   for(const options of [null,{mode:'source',scope:'selected',tones:[],dramaturgy:'',instructions:'',allowIncompleteSources:true}]){
    const {db,claim}=fixture(null,options);const messages=[];
-   globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);messages.push(request.messages);return response(request.messages[0].content===FACT_SHEET_SYSTEM?JSON.stringify(rawFacts):answer('Der Zustand dieser Bewegung ist Thema.\n'+script));};
-   try{const result=await runGrokFlow(db,claim,true,()=>{});assert.equal(result.state,'received');assert.equal(messages.length,2);assert.equal(messages[1][0].content,options?SOURCE_ONLY_SCRIPT_SYSTEM:KONTRAKURS_SCRIPT_SYSTEM);if(options)assert.doesNotMatch(messages[1][1].content,/Ankündigung und Zitat allein in eine eigene Zeile/);else assert.match(messages[1][1].content,/Ankündigung und Zitat allein in eine eigene Zeile/);}
+   globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);messages.push(request.messages);return response(request.messages[0].content===FACT_SHEET_SYSTEM?JSON.stringify(rawFacts):answer('Recherche und Überschrift sind zulässige Wörter. Der Zustand dieser Bewegung ist Thema.'));};
+   try{const result=await runGrokFlow(db,claim,true,()=>{});assert.equal(result.state,'received');assert.equal(messages.length,2);assert.equal(messages[1][0].content,options?SOURCE_ONLY_SCRIPT_SYSTEM:KONTRAKURS_SCRIPT_SYSTEM);assert.doesNotMatch(messages[1][1].content,/900 bis 1.400|Ankündigung und Zitat allein in eine eigene Zeile/);}
    finally{db.close();}
   }
  }finally{globalThis.fetch=oldFetch;if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;}
+});
+
+test('script output budget uses provider default unless explicitly configured',async()=>{
+ const {db}=fixture(),oldKey=process.env.OPENROUTER_API_KEY,oldMax=process.env.SCRIPT_MAX_TOKENS;process.env.OPENROUTER_API_KEY='test-only';const calls=[];
+ db.prepare("UPDATE grok_generation_runs SET phase='script_pending' WHERE research_id=?").run(id);
+ try{
+  delete process.env.SCRIPT_MAX_TOKENS;
+  const deps={fetch:async(_url,init)=>{calls.push(JSON.parse(init.body));return response(answer());}};
+  await grokCompletion(db,id,'script',AUTONOMOUS_SCRIPT_SYSTEM,'test',{primary:'x-ai/grok-4.3',fallback:'x-ai/grok-4.20'},deps);
+  process.env.SCRIPT_MAX_TOKENS='16000';await grokCompletion(db,id,'script',AUTONOMOUS_SCRIPT_SYSTEM,'test',{primary:'x-ai/grok-4.3',fallback:'x-ai/grok-4.20'},deps);
+  process.env.SCRIPT_MAX_TOKENS='-1';await assert.rejects(grokCompletion(db,id,'script',AUTONOMOUS_SCRIPT_SYSTEM,'test',{primary:'x-ai/grok-4.3',fallback:'x-ai/grok-4.20'},deps),/SCRIPT_MAX_TOKENS/);
+  assert.equal(Object.hasOwn(calls[0],'max_tokens'),false);assert.equal(calls[1].max_tokens,16000);assert.equal(calls.length,2);
+ }finally{if(oldKey===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=oldKey;if(oldMax===undefined)delete process.env.SCRIPT_MAX_TOKENS;else process.env.SCRIPT_MAX_TOKENS=oldMax;db.close();}
 });
