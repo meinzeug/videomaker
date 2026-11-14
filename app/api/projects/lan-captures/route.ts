@@ -1,7 +1,7 @@
 import {authorized,sameOrigin,sessionAuthorized,sessionValue} from '@/lib/auth';
 import db from '@/lib/db';
 import {ensureLanCaptureProject,LanCaptureProjectError} from '@/lib/lan-capture-project';
-import {readRecordingChunk} from '@/lib/recording-upload-guard';
+import {BoundedBodyError,readBoundedRequestBody} from '@/lib/bounded-request-body';
 import {NextResponse} from 'next/server';
 
 export const dynamic='force-dynamic';
@@ -16,14 +16,9 @@ export async function POST(req:Request){
  if((req.headers.get('content-type')||'').split(';')[0].trim().toLowerCase()!=='application/json'||!req.body)return reply({error:'Ungültige Aufnahme.'},400);
  const declared=req.headers.get('content-length');
  if(declared!==null&&(!/^\d{1,4}$/.test(declared)||Number(declared)>1024))return reply({error:'Anfrage ist zu groß.'},413);
- const reader=req.body.getReader();let body=Buffer.alloc(0);const deadline=performance.now()+10000;
- try{
-  for(;;){const remaining=deadline-performance.now();if(remaining<=0)throw new Error('REQUEST_TIMEOUT');
-   const {done,value}=await readRecordingChunk(reader,remaining);if(done)break;
-   if(value.byteLength>1024-body.length){await reader.cancel();return reply({error:'Anfrage ist zu groß.'},413);}
-   body=Buffer.concat([body,Buffer.from(value)]);
-  }
- }catch{return reply({error:'Anfrage ist unvollständig.'},400);}finally{try{reader.releaseLock();}catch{}}
+ let body:Buffer;
+ try{body=await readBoundedRequestBody(req.body);}
+ catch(error){return error instanceof BoundedBodyError&&error.code==='TOO_LARGE'?reply({error:'Anfrage ist zu groß.'},413):reply({error:'Anfrage ist unvollständig.'},400);}
  let value:unknown;try{value=JSON.parse(body.toString('utf8'));}catch{return reply({error:'Ungültige Aufnahme.'},400);}
  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==1||typeof (value as Record<string,unknown>).recordingId!=='string')return reply({error:'Ungültige Aufnahme.'},400);
  const database=db();
