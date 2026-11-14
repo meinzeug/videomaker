@@ -74,6 +74,7 @@ export class CameraProjectClaimError extends Error {
 export function listOpenCameraClaims(db:Database.Database,projectId:string){
  const rows=db.prepare(`SELECT c.recording_id AS recordingId,c.device_id AS deviceId,
   d.name AS deviceName,c.opened_at AS openedAt,
+  m.phase AS manifestPhase,m.size AS manifestSize,m.sha256 AS manifestSha256,
   CASE WHEN s.phase='ready' AND f.phase IS NOT NULL THEN 'unknown'
        WHEN s.phase='ready' THEN 'ready' WHEN f.phase IS NOT NULL THEN f.phase
        WHEN s.phase='partial' THEN 'partial' ELSE 'unknown' END AS lastConfirmedPhase
@@ -81,11 +82,15 @@ export function listOpenCameraClaims(db:Database.Database,projectId:string){
   LEFT JOIN camera_remote_devices d ON d.id=c.device_id
   LEFT JOIN camera_project_final_status s ON s.recording_id=c.recording_id AND s.project_id=c.project_id AND s.device_id=c.device_id
   LEFT JOIN camera_project_failures f ON f.recording_id=c.recording_id AND f.project_id=c.project_id AND f.device_id=c.device_id
+  LEFT JOIN camera_project_device_manifests m ON m.recording_id=c.recording_id AND m.project_id=c.project_id AND m.device_id=c.device_id
   WHERE c.project_id=? AND c.closed_at IS NULL
   ORDER BY c.opened_at DESC,c.recording_id DESC LIMIT 101`).all(projectId) as {
-   recordingId:string;deviceId:string;deviceName:string|null;openedAt:number;lastConfirmedPhase:'ready'|'partial'|'error'|'unknown'
+   recordingId:string;deviceId:string;deviceName:string|null;openedAt:number;lastConfirmedPhase:'ready'|'partial'|'error'|'unknown';manifestPhase:string|null;manifestSize:number|null;manifestSha256:string|null
   }[];
- return {claims:rows.slice(0,100),hasMore:rows.length>100};
+ return {claims:rows.slice(0,100).map(({manifestPhase,manifestSize,manifestSha256,...claim})=>({
+  ...claim,recovery:claim.lastConfirmedPhase==='ready'&&manifestPhase==='ready'&&Number.isSafeInteger(manifestSize)&&Number(manifestSize)>0&&Number(manifestSize)<=1024*1024*1024&&typeof manifestSha256==='string'&&/^[0-9a-f]{64}$/.test(manifestSha256)
+   ?{sizeBytes:manifestSize as number,sha256:manifestSha256}:null,
+ })),hasMore:rows.length>100};
 }
 function requireTransaction(db:Database.Database){
  if(!db.inTransaction)throw new Error('Kameraprojektsperre benötigt eine unmittelbare Datenbanktransaktion.');
@@ -120,6 +125,14 @@ export class CameraUploadGateError extends Error {
  constructor(gateCode:CameraUploadGateError['gateCode'],message:string){super(message);this.gateCode=gateCode;}
 }
 
+/** A contradictory device failure always wins over an earlier READY report. */
+export function assertCameraUploadConsistent(db:Database.Database,recordingId:string){
+ if(db.prepare(`SELECT 1 FROM camera_project_failures f
+  JOIN camera_project_device_manifests m ON m.recording_id=f.recording_id AND m.phase='ready'
+  WHERE f.recording_id=?`).get(recordingId))
+  throw new CameraUploadGateError('camera_manifest_mismatch','Für diese Kameraaufnahme liegt eine widersprüchliche Fehlermeldung vor. Bitte den Zustand am Gerät prüfen.');
+}
+
 /** Serialize upload-ID validation against a competing camera START. */
 export function lockAndValidateCameraUpload(db:Database.Database,token:string,uploadId:string,cameraRecordingId:string|null,projectId:string,size:number,sha256:string|null,check:()=>void){
  return db.transaction(()=>{
@@ -135,6 +148,7 @@ export function lockAndValidateCameraUpload(db:Database.Database,token:string,up
   if(reservation&&!cameraRecordingId)throw new CameraUploadGateError('camera_manifest_required','Für diese Kameraaufnahme ist ein Gerätenachweis erforderlich.');
   if(cameraRecordingId){
    if(!reservation||reservation.recordingId!==cameraRecordingId||reservation.projectId!==projectId)throw new CameraUploadGateError('camera_manifest_mismatch','Aufnahme und Projekt passen nicht zur reservierten Kameraaufnahme.');
+   assertCameraUploadConsistent(db,cameraRecordingId);
    const manifest=db.prepare('SELECT phase,size,sha256 FROM camera_project_device_manifests WHERE recording_id=? AND project_id=?').get(cameraRecordingId,projectId) as {phase:string;size:number;sha256:string}|undefined;
    if(!manifest)throw new CameraUploadGateError('camera_manifest_pending','Der Gerätenachweis liegt noch nicht vor. Bitte erneut versuchen.');
    if(manifest.phase!=='ready')throw new CameraUploadGateError('camera_manifest_partial','Eine unvollständige Aufnahme kann nicht als fertiges Video hochgeladen werden.');
@@ -185,6 +199,9 @@ export function recordCameraVerifiedUpload(db:Database.Database,recordingId:stri
  if(cameraUploadIdFor(recordingId,projectId)!==uploadId)throw new CameraProjectClaimError('conflict','Aufnahme und Upload-ID stimmen nicht überein.');
  const claim=db.prepare('SELECT device_id AS deviceId FROM camera_project_claims WHERE recording_id=? AND project_id=? AND closed_at IS NULL').get(recordingId,projectId) as {deviceId:string}|undefined;
  if(!claim)return;
+ // A failure may arrive while the file is being streamed. Recheck inside the
+ // same write transaction as the receipt and claim close.
+ assertCameraUploadConsistent(db,recordingId);
  const prior=db.prepare('SELECT project_id AS projectId,upload_id AS uploadId,sha256,size FROM camera_project_upload_receipts WHERE recording_id=?').get(recordingId) as {projectId:string;uploadId:string;sha256:string;size:number}|undefined;
  if(prior&&(prior.projectId!==projectId||prior.uploadId!==uploadId||prior.sha256!==sha256||prior.size!==size))throw new CameraProjectClaimError('conflict','Der vorhandene Aufnahmebeleg stimmt nicht überein.');
  if(!prior)db.prepare('INSERT INTO camera_project_upload_receipts(recording_id,project_id,upload_id,sha256,size,verified_at) VALUES(?,?,?,?,?,?)').run(recordingId,projectId,uploadId,sha256,size,now);
@@ -199,7 +216,7 @@ export function closeCameraClaimAfterUpload(db:Database.Database,deviceId:string
   JOIN camera_project_upload_receipts u ON u.recording_id=c.recording_id AND u.project_id=c.project_id
   JOIN camera_project_device_manifests d ON d.device_id=c.device_id AND d.recording_id=c.recording_id AND d.project_id=c.project_id AND d.size=u.size AND d.sha256=u.sha256
   WHERE c.recording_id=? AND c.project_id=? AND c.device_id=? AND c.closed_at IS NULL
-  AND d.phase='ready'`).get(recordingId,projectId,deviceId) as {openedAt:number}|undefined;
+  AND d.phase='ready' AND NOT EXISTS(SELECT 1 FROM camera_project_failures f WHERE f.recording_id=c.recording_id)`).get(recordingId,projectId,deviceId) as {openedAt:number}|undefined;
  if(claim)closeCameraProjectClaim(db,recordingId,deviceId,projectId,Math.max(now,claim.openedAt));
 }
 
