@@ -1,0 +1,5 @@
+# KontraPrompter-Download
+
+Angemeldete Nutzer können die aktuell bereitgestellte KontraPrompter-Testversion über das Download-Symbol im Studio-Header herunterladen. Der Hinweis „DEBUG“ kennzeichnet den derzeit vorgesehenen Debug-Build. Der Download ist erst verfügbar, wenn eine APK bereitgestellt wurde; andernfalls erscheint eine Meldung.
+
+Der Server liest ausschließlich die Datei `kontraprompter.apk` im privaten `DATA_DIR` (standardmäßig `./data`). Die Datei gehört nicht ins Git-Repository. Das Hochladen und Aktualisieren geschieht nicht automatisch: Bei jedem neuen Build muss eine geprüfte APK atomar an diesem Pfad bereitgestellt werden, damit der Download aktuell bleibt. Die Route prüft Dateigröße, Dateityp und ZIP-Kennung, aber weder Android-Signatur noch Version oder Vollständigkeit der APK; diese Prüfungen sind vor der Bereitstellung durchzuführen. Ein Debug-Build ist keine signierte Produktionsversion. Beim Umstieg auf eine Produktionsversion müssen die DEBUG-Kennzeichnung und der Download-Dateiname angepasst werden.
