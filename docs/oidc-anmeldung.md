@@ -4,7 +4,10 @@ Die gemeinsame Anmeldung für Video-Maker und Haben ist **noch nicht fertig**.
 Der bisherige Video-Maker-Login verwaltet ein signiertes Admin-Cookie mit
 serverseitigem Widerruf; Haben besitzt eine eigene Anmeldung und einen
 OIDC-only-Modus. Der vorbereitete SQLite-Adapter in `lib/oidc-storage.ts` ist
-nirgends eingebunden und startet keinen Dienst. Er ist keine Produktionsfreigabe.
+nirgends eingebunden und startet keinen Dienst. Zusätzlich sind eine
+standardmäßig abgeschaltete interne Sitzungsreferenz-Schnittstelle und eine
+unveränderliche Provider-Sitzungszuordnung vorbereitet. Sie sind keine
+Produktionsfreigabe und aktivieren selbst keinen OIDC-Anbieter.
 
 Als Protokollimplementierung wurde die OpenID-zertifizierte Bibliothek
 [`oidc-provider`](https://github.com/panva/node-oidc-provider) untersucht. Ihre
@@ -27,6 +30,15 @@ zweiten Code-Tauschs. Er verwendet ausschließlich synthetische Identitäten,
 Entwicklungsinteraktionen und temporäre Entwicklungsschlüssel und eignet sich
 nicht als Authentifizierungsdienst.
 
+Ein weiterer isolierter Fixturelauf `tests/fixtures/oidc-session-flow.mjs`
+verknüpft den echten `oidc-provider` und den echten Video-Maker-Testlogin über
+die interne Referenzroute. Er prüft UserInfo vor und nach Logout, einen erst
+nach Logout eingelösten Code und den Versuch, eine alte Provider-Session nach
+erneuter Video-Maker-Anmeldung wiederzuverwenden. Die Zuordnung liegt dabei in
+einer temporären SQLite-Datei, die während des Tests geschlossen und wieder
+geöffnet wird. Der Testprovider verwendet Entwicklungsschlüssel und eine
+Testinteraktion und darf nie als echter Dienst gestartet werden.
+
 Ein reproduzierbarer lokaler Test, ohne das Projekt oder einen Server zu
 installieren oder zu verändern:
 
@@ -40,6 +52,64 @@ OIDC_PROVIDER_TEST_DIR="$oidc_test_dir" node --experimental-strip-types tests/fi
 Die Bibliotheksversion ist für die Reproduzierbarkeit des Tests gepinnt; vor
 einem Produktiveinsatz sind unterstützte Version und Sicherheitsmeldungen
 erneut zu prüfen. Die Tests sind keine Zertifizierung des eigenen Adapters.
+
+Der HTTP-Fixturetest `tests/oidc-binding-http.test.mjs` läuft nur mit explizit
+freigegebenem lokalen Next-Testserver unter `127.0.0.1:3337`, separatem leeren
+Datenverzeichnis und einer Datei `.oidc-test-fixture` mit dem Inhalt
+`VIDEOMAKER OIDC TEST ONLY` samt Zeilenumbruch. Dafür müssen im isolierten Server
+`OIDC_BINDING_ENABLED=true`, die in den Testdateien genannten synthetischen
+Passwörter/Secrets und `DATA_DIR` auf dieses Verzeichnis gesetzt sein. Mit
+`OIDC_BINDING_TEST_SERVER`, `OIDC_BINDING_TEST_DATA` und
+`OIDC_BINDING_FIXTURE_ALLOW_WRITES=1` wird der Test ausdrücklich aktiviert; er
+erstellt dort das Referenzschema. Die Route ist sonst standardmäßig abgeschaltet,
+initialisiert weder das OIDC-Schema noch die Projekt-Schemas und öffnet nur eine
+bereits vorhandene SQLite-Datei. Sie erwartet ein separates internes Secret
+sowie header-only POST mit `Content-Length: 0`. Ein Betrieb erfordert zusätzlich
+eine authentifizierte lokale TLS-Verbindung und eine abgesicherte Proxyführung.
+
+Die Referenztabelle enthält keinen Browser-Cookie und keine Klartext-Referenz,
+sondern jeweils nur deren Hash, den vorhandenen keyed Widerrufshash und den
+Ablauf der Video-Maker-Sitzung. Ausgabe und Logout werden auf derselben SQLite-
+Datenbank serialisiert. Es gibt maximal 16 aktive Referenzen je Sitzung und
+1.024 insgesamt; abgelaufene oder widerrufene Referenzen werden transaktional
+entfernt. Die Provider-Zuordnung speichert dagegen die Referenz als vertraulichen
+Wert in der getrennten Provider-Datenbank und darf sie nie umhängen oder
+protokollieren. Für beide Datenbanken bleiben Zugriffsschutz und konsistente
+Backups nötig.
+
+Ein interner, authentifizierter `reset` kann bei gültigem Video-Maker-Cookie
+alle Referenzen genau dieser Sitzung widerrufen und so nach verwaisten Provider-
+Neustarts die 16er-Grenze freigeben. Das betrifft auch andere Tabs und bereits
+ausgegebene Tokens dieser Sitzung bei ihrer nächsten Live-Prüfung; andere
+Video-Maker-Sitzungen bleiben bestehen. Der Reset darf nicht unbemerkt bei jeder
+Anmeldung ausgelöst werden. Ein künftiger Provider muss seinen Lebenszyklus
+explizit damit koordinieren und nach dem Reset eine neue Provider-Session erzeugen;
+die alte UID darf nie neu zugeordnet werden. Die Probe und die Route allein
+implementieren diese Orchestrierung noch nicht, daher bleibt die Kapazitätsgrenze
+bis dahin ein Betriebsblocker.
+
+Jede Referenz ist an eine persistente Generation des Video-Maker-`SESSION_SECRET`
+gebunden. Eine beobachtete Änderung erhöht diese Generation transaktional; auch
+eine spätere Rückkehr zum alten Schlüssel aktiviert alte Referenzen nicht erneut.
+Der gespeicherte Fingerprint ist ein domain-separierter HMAC, kein Klartextschlüssel;
+für `SESSION_SECRET` ist dennoch ein starkes zufälliges Geheimnis nötig. Eine
+explizite Initialisierung älterer OIDC-Bindungstabellen erhält ihre Daten, markiert
+alte Referenzen aber als ungültig. Ohne passenden, ausreichend langen Schlüssel
+scheitert die Prüfung geschlossen.
+
+Vor dem Freigeben einer Schlüsselrotation müssen alle Instanzen mit altem Schlüssel
+gestoppt und der neue Schlüssel auf allen neuen Instanzen konsistent gesetzt werden.
+Nach expliziter Schemavorbereitung muss unter den vorgesehenen Dienstvariablen
+`DATA_DIR` und `SESSION_SECRET` der administrative Aufruf
+`OIDC_BINDING_OBSERVE_KEY=1 node --experimental-strip-types scripts/oidc-observe-session-key.mjs`
+erfolgreich beendet sein, bevor Nutzerverkehr zugelassen wird. Der Aufruf legt
+weder Datenbank noch Schema an und gibt den Schlüssel nicht aus. Die Anwendung
+erzwingt diesen Startschritt noch nicht automatisch; seine verlässliche Integration
+und Überwachung sind vor Inbetriebnahme erforderlich. Ein nie beobachteter oder
+nicht erfolgreich in SQLite bestätigter Schlüsselwechsel sowie ein vollständiger
+Datenbank-Rollback lassen sich nicht allein aus dieser Tabelle erkennen. Weiter
+laufende alte Instanzen können zudem neue alte Sitzungen erzeugen; sie müssen
+bei der Rotation ausgeschlossen werden.
 
 Bereits gespeicherte Grant-Zuordnungen dürfen weder geändert noch entfernt werden.
 Eine erstmalige Zuordnung nach dem Speichern erlaubt der Adapter ausschließlich
@@ -61,6 +131,14 @@ selbst benötigt vor einem produktiven Einsatz einen unabhängigen Review.
   keinesfalls eine Identität ausgeben. Eine dauerhafte eindeutige Subject-ID,
   eine gültige E-Mail und die Haben-Gruppenzuordnung müssen serverseitig festgelegt
   werden; keine Rechtevergabe anhand gleichlautender E-Mail-Adressen.
+- Eine produktive Provider-Integration muss sicherstellen, dass eine erstmalige
+  Zuordnung nur für eine nachweislich neu erstellte Provider-Session erfolgt und
+  bei jeder Code-/Token- und UserInfo-Nutzung die unveränderliche Zuordnung live
+  geprüft wird. Der Fixture testet dieses Verhalten, aber keine produktive
+  Provider-Implementierung. Ein vollständiger Rollback einer der getrennten
+  Datenbanken oder ein Logout genau zwischen interner Prüfung und Tokenausgabe
+  erfordert ein gesondertes konsistentes Betriebs- und Transaktionskonzept;
+  der zusätzliche Haben-Wächter prüft geschützte Zugriffe erneut.
 - Getrennte dauerhafte Datenbank mit restriktiven Dateirechten, Sicherungs- und
   Wiederherstellungskonzept sowie Aufbewahrungsregeln. Der Adapter speichert
   vertrauliche Protokolldaten; der Zugriff auf Datenbank und Backups kann Zugang
@@ -79,7 +157,10 @@ selbst benötigt vor einem produktiven Einsatz einen unabhängigen Review.
 ## Aufbewahrung der Widerrufsmarkierungen
 
 Es gibt bewusst **keine automatische Löschung** der Tabellen
-`oidc_consumed_objects` und `oidc_revoked_grants`. `oidc_consumed_objects`
+`oidc_consumed_objects` und `oidc_revoked_grants`. Auch die Tabelle
+`oidc_provider_session_map` wächst dauerhaft, enthält vertrauliche Referenzen und
+besitzt noch keine automatische Kapazitäts- oder Bereinigungsstrategie. Ein blindes
+Löschen würde die einmalige UID-Zuordnung aufheben. `oidc_consumed_objects`
 enthält auch Löschmarkierungen für nie verbrauchte oder bereits abgelaufene
 Objekte sowie beim Widerruf entfernte Einträge, damit verspätete Schreibvorgänge
 sie auch unter einer anderen Freigabe nicht wiederbeleben können. Diese

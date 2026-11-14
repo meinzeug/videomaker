@@ -1,0 +1,52 @@
+// Opt-in only: dedicated loopback server, disposable DB and explicit marker required.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync,readFileSync } from 'node:fs';
+import { isAbsolute,join } from 'node:path';
+import Database from 'better-sqlite3';
+import { sessionRevoked } from '../lib/session-revocations.ts';
+import { initializeOidcSessionBindings } from '../lib/oidc-session-bindings.ts';
+
+const origin=process.env.OIDC_BINDING_TEST_SERVER,dir=process.env.OIDC_BINDING_TEST_DATA;
+const marker=dir&&isAbsolute(dir)?join(dir,'.oidc-test-fixture'):'';
+const enabled=origin==='http://127.0.0.1:3337'&&process.env.OIDC_BINDING_FIXTURE_ALLOW_WRITES==='1'&&marker&&existsSync(marker)&&readFileSync(marker,'utf8')==='VIDEOMAKER OIDC TEST ONLY\n';
+const secret='isolated-oidc-bridge-test-secret-123456789';
+
+test('interne Sitzungsreferenz prüft echten Login und sofortigen Logout-Widerruf',{skip:!enabled,timeout:30000},async()=>{
+ const internal=(operation,more={})=>fetch(`${origin}/api/internal/oidc/session-binding`,{method:'POST',headers:{'x-videomaker-internal-secret':secret,'x-oidc-binding-operation':operation,...more}});
+ const login=await fetch(`${origin}/api/login`,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({password:'isolated-oidc-test-password'})});
+ assert.equal(login.status,200);
+ const cookie=login.headers.get('set-cookie').split(';')[0];
+ const databaseFile=join(dir,'videomaker.sqlite'),existed=existsSync(databaseFile);
+ const schema=()=>{if(!existsSync(databaseFile))return null;const check=new Database(databaseFile,{readonly:true,fileMustExist:true});try{return check.prepare("SELECT type,name,sql FROM sqlite_master ORDER BY type,name").all();}finally{check.close();}};
+ const before=schema();
+ assert.equal((await internal('issue',{cookie})).status,503,'fehlende Migration scheitert geschlossen');
+ assert.equal(existsSync(databaseFile),existed,'Route legt keine Datenbank an');
+ assert.deepEqual(schema(),before,'Route verändert keine Datenbankschemas');
+ const db=new Database(databaseFile);
+ try{sessionRevoked(db,'isolated-oidc-test-secret-not-for-production-123456','test-seed');initializeOidcSessionBindings(db);}finally{db.close();}
+ assert.equal((await internal('issue',{cookie,'x-videomaker-internal-secret':'wrong'})).status,401);
+ assert.equal((await internal('issue',{cookie:`${cookie}; ${cookie}`})).status,401);
+ assert.equal((await internal('issue',{cookie:'kontrakurs_session=gefaelscht'})).status,401);
+ const issued=await internal('issue',{cookie});assert.equal(issued.status,200);
+ assert.match(issued.headers.get('cache-control'),/no-store/);
+ const {reference}=await issued.json();assert.match(reference,/^[A-Za-z0-9_-]{43}$/);
+ assert.equal((await internal('check',{'x-oidc-session-reference':reference})).status,204);
+ assert.equal((await internal('reset',{cookie:'kontrakurs_session=gefaelscht'})).status,401);
+ assert.equal((await internal('reset',{cookie})).status,204);
+ assert.equal((await internal('check',{'x-oidc-session-reference':reference})).status,401);
+ const replacement=await internal('issue',{cookie});assert.equal(replacement.status,200);
+ const replacementReference=(await replacement.json()).reference;
+ const otherLogin=await fetch(`${origin}/api/login`,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({password:'isolated-oidc-test-password'})});
+ assert.equal(otherLogin.status,200);
+ const otherCookie=otherLogin.headers.get('set-cookie').split(';')[0];
+ const otherIssued=await internal('issue',{cookie:otherCookie});assert.equal(otherIssued.status,200);
+ const otherReference=(await otherIssued.json()).reference;
+ assert.equal((await internal('reset',{cookie})).status,204);
+ assert.equal((await internal('check',{'x-oidc-session-reference':replacementReference})).status,401);
+ assert.equal((await internal('check',{'x-oidc-session-reference':otherReference})).status,204);
+ assert.equal((await fetch(`${origin}/api/logout`,{method:'POST',headers:{origin,cookie}})).status,200);
+ assert.equal((await fetch(`${origin}/api/logout`,{method:'POST',headers:{origin,cookie:otherCookie}})).status,200);
+ assert.equal((await internal('check',{'x-oidc-session-reference':otherReference})).status,401);
+ assert.equal((await internal('issue',{cookie})).status,401);
+});
