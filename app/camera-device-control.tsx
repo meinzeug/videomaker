@@ -5,15 +5,17 @@ import CameraPreview from './camera-preview';
 
 type Camera={id:string;name:string;phase:'idle'|'preparing'|'recording'|'finalizing'|'ready'|'partial'|'error';recordingId:string|null;projectId:string|null;pendingStart:boolean;lastCommand:{id:string;result:string;neverDelivered?:number|boolean}|null;recoverableClaim:{recordingId:string;projectId:string;phase:'partial'|'error'}|null;stopIntent:{id:string;recordingId:string;observed:boolean}|null};
 type Command={id:string;type:'record_start'|'record_stop';recordingId:string;projectId?:string;deviceId:string};
+type OpenClaim={recordingId:string;deviceId:string;deviceName:string|null;openedAt:number;lastConfirmedPhase:'ready'|'partial'|'error'|'unknown'};
 const labels:Record<Camera['phase'],string>={idle:'Aufnahmebereit',preparing:'Aufnahme wird vorbereitet',recording:'Aufnahme läuft',finalizing:'Aufnahme wird abgeschlossen',ready:'Lokal gespeichert',partial:'Lokal unvollständig gespeichert',error:'Kamera meldet einen Fehler'};
 
 /** Appears only when the internal camera API is enabled; production remains 404. */
 export default function CameraDeviceControl({projectId}:{projectId:string}){
  const [available,setAvailable]=useState(false),[cameras,setCameras]=useState<Camera[]>([]),[selected,setSelected]=useState(''),[loading,setLoading]=useState(false),[pending,setPending]=useState<Command|null>(null),[message,setMessage]=useState(''),[connectionError,setConnectionError]=useState(false);
  const [preview,setPreview]=useState<{generation:string;creationToken:string;devices:{deviceId:string;available:boolean}[]}|null>(null);
+ const [openClaims,setOpenClaims]=useState<{projectId:string;claims:OpenClaim[];hasMore:boolean}|null>(null),[claimsError,setClaimsError]=useState(false);
  const refreshSequence=useRef(0);
  const refresh=useCallback(async()=>{const revision=++refreshSequence.current,controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),1800);try{
-  const response=await fetch('/api/camera-devices',{cache:'no-store',signal:controller.signal});if(revision!==refreshSequence.current)return;if(response.status===404){setAvailable(false);return;}if(!response.ok)throw Error();
+  const response=await fetch('/api/camera-devices',{cache:'no-store',signal:controller.signal});if(revision!==refreshSequence.current)return;if(response.status===404){setAvailable(false);setConnectionError(false);return;}if(!response.ok)throw Error();
   const data=await response.json();if(revision!==refreshSequence.current)return;setAvailable(true);setCameras(data.devices);setConnectionError(false);
   setPending(previous=>{if(!previous)return null;const camera=(data.devices as Camera[]).find(item=>item.id===previous.deviceId);if(!camera)return previous;
    if(previous.type==='record_start'&&camera.recordingId===previous.recordingId&&camera.phase!=='idle')return null;
@@ -24,6 +26,18 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
  useEffect(()=>{void refresh();const timer=setInterval(()=>void refresh(),2000);return()=>{clearInterval(timer);refreshSequence.current++;};},[refresh]);
  useEffect(()=>{if(!pending)setMessage(previous=>previous.startsWith('Start angefragt.')||previous.startsWith('Stopp angefragt.')?'':previous);},[pending]);
  const camera=cameras.find(item=>item.id===selected);
+ useEffect(()=>{
+  setOpenClaims(null);setClaimsError(false);
+  if(!available)return;
+  let active=true,revision=0;
+  const load=async()=>{const current=++revision,controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),1800);try{
+   const response=await fetch(`/api/camera-devices/claims?projectId=${encodeURIComponent(projectId)}`,{cache:'no-store',signal:controller.signal});
+   if(!response.ok)throw Error();const data=await response.json();
+   if(!data||!Array.isArray(data.claims)||typeof data.hasMore!=='boolean')throw Error();
+   if(active&&current===revision){setOpenClaims({projectId,claims:data.claims,hasMore:data.hasMore});setClaimsError(false);}
+  }catch{if(active&&current===revision){setOpenClaims(null);setClaimsError(true);}}finally{clearTimeout(timeout);}};
+  void load();const timer=setInterval(()=>void load(),5000);return()=>{active=false;clearInterval(timer);};
+ },[available,projectId]);
  useEffect(()=>{
   if(!available||!camera){setPreview(null);return;}
   let active=true,revision=0;const load=async()=>{const current=++revision,controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),1800);try{const response=await fetch('/api/camera-preview/devices',{cache:'no-store',signal:controller.signal});if(!response.ok)throw Error();const data=await response.json();if(!data||typeof data.generation!=='string'||typeof data.creationToken!=='string'||!Array.isArray(data.devices))throw Error();if(active&&current===revision)setPreview(data);}catch{if(active&&current===revision)setPreview(null);}finally{clearTimeout(timeout);}};
@@ -44,12 +58,14 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
   if(!window.confirm('Die Aufnahme ist fehlgeschlagen oder unvollständig. Bitte sichere eine eventuell vorhandene Datei zuerst am Smartphone. Die lokale Datei bleibt erhalten. Danach darf dieses Skript gelöscht werden. Möchtest du die Sperre auflösen?'))return;
   setLoading(true);try{const response=await fetch(`/api/camera-devices/${encodeURIComponent(camera.id)}/resolve`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recordingId:claim.recordingId,projectId:claim.projectId,confirm:'retain-local-file'})});const data=await response.json();if(!response.ok)throw Error(data.error||'Die Sperre konnte nicht aufgelöst werden.');setMessage('Die Sperre wurde nach deiner Bestätigung aufgelöst. Die lokale Datei wurde nicht gelöscht.');await refresh();}catch(error){setMessage(error instanceof Error?error.message:'Die Sperre konnte nicht aufgelöst werden.');}finally{setLoading(false);}
  }
- if(!available)return null;
+ if(!available)return connectionError?<section className="panel device-control" aria-label="Smartphone-Kamera"><p role="alert">Die Kamerasteuerung ist nicht erreichbar. Den Aufnahmezustand bitte am Smartphone prüfen.</p></section>:null;
  return <section className="panel device-control" aria-label="Smartphone-Kamera">
   <p className="eyebrow">SMARTPHONE-KAMERA</p><h2>Kamera steuern</h2>
   <p>Die Aufnahme entsteht auf dem Smartphone. Eine Cloud-Speicherung ist erst nach überprüftem Upload bestätigt.</p>
   <label>Kamera <select value={camera?selected:''} disabled={!!pending} onChange={event=>setSelected(event.target.value)}><option value="">Gerät auswählen</option>{cameras.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
   {!cameras.length&&<p>Keine Kamera erreichbar.</p>}{connectionError&&<p role="alert">Verbindung unterbrochen. Den Aufnahmezustand bitte am Smartphone prüfen.</p>}
+  {claimsError&&<p role="alert">Offene Kameravorgänge konnten nicht geladen werden.</p>}
+  {openClaims?.projectId===projectId&&openClaims.claims.length>0&&<div role="status"><p><strong>Offene Kameravorgänge für dieses Skript</strong></p><p>Diese Vorgänge bleiben auch sichtbar, wenn das Smartphone nicht erreichbar ist. Prüfe eine mögliche Aufnahme am Gerät; ein Cloud-Upload ist hier noch nicht bestätigt.</p><ul>{openClaims.claims.map(claim=><li key={claim.recordingId}>{claim.deviceName||'Unbekanntes Gerät'} · Aufnahme {claim.recordingId.slice(0,8)} · {claim.lastConfirmedPhase==='ready'?'lokal gespeichert':claim.lastConfirmedPhase==='partial'?'unvollständig':claim.lastConfirmedPhase==='error'?'Fehler gemeldet':'Status ungeklärt'}</li>)}</ul>{openClaims.hasMore&&<p>Weitere offene Vorgänge werden nicht angezeigt.</p>}</div>}
   {camera&&<p role="status"><strong>{labels[camera.phase]}</strong>{camera.phase==='ready'&&' – der Upload ist damit noch nicht bestätigt.'}{camera.projectId&&camera.projectId!==projectId&&' · Anderes Skript'}</p>}
   {camera?.lastCommand&&cameraStartWasRefused(camera.lastCommand,camera.lastCommand.id)&&<p role="alert">Die letzte Startanfrage wurde nicht ausgeführt. Bitte den Kamerastatus prüfen.</p>}
   {camera?.recoverableClaim?.projectId===projectId&&<p>Für dieses Skript liegt eine fehlgeschlagene oder unvollständige Aufnahme vor. Eine lokale Datei kann am Smartphone gesichert werden.</p>}

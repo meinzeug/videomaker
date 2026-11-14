@@ -14,6 +14,11 @@ const cameraOwner=(secret:string,value:string)=>digest(secret,'camera-session/v1
 
 export function sessionRevoked(db:Database.Database,secret:string,value:string):boolean {
  db.exec(schema);
+ return sessionRevokedReadOnly(db,secret,value);
+}
+
+/** Read without creating or changing schema. Missing schema must fail closed. */
+export function sessionRevokedReadOnly(db:Database.Database,secret:string,value:string):boolean {
  return !!db.prepare('SELECT 1 FROM auth_session_revocations WHERE session_hash=?').get(sessionHash(secret,value));
 }
 

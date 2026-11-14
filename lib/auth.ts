@@ -32,7 +32,7 @@ export async function authorized() {
 }
 /** Capture the credential after asynchronous request parsing. Do not log it. */
 export async function sessionValue() { return (await cookies()).get(name)?.value || ''; }
-function sessionSignatureValid(value:string) {
+export function sessionSignatureValid(value:string) {
   const secret=process.env.SESSION_SECRET; if (!secret || secret.length < 32) return false;
   const parts=value.split('.');
   return parts.length===3 && Number(parts[0])>Date.now() && validSignature(value);
