@@ -1,13 +1,23 @@
 import {NextResponse} from 'next/server';
 import {CameraPreviewError} from '@/lib/camera-preview-store';
 import {cameraPreviewEnabled} from '@/lib/camera-preview-feature';
+import {protectPreviewTransaction} from '@/lib/camera-preview-transaction';
+import {cameraTransaction,CameraSessionError} from '@/app/api/camera-devices/_shared';
+import type Database from 'better-sqlite3';
 export const noStore={'Cache-Control':'private, no-store'};
 export const disabled=()=>!cameraPreviewEnabled(process.env.NODE_ENV,process.env.CAMERA_REMOTE_TEST_ENABLE,process.env.CAMERA_PREVIEW_TEST_ENABLE,process.env.NEXT_RUNTIME);
 export const notFound=()=>NextResponse.json({error:'Nicht gefunden.'},{status:404,headers:noStore});
 export function previewError(error:unknown){
+ if(error instanceof CameraSessionError)return NextResponse.json({error:'Nicht erlaubt.'},{status:403,headers:noStore});
  if(error instanceof CameraPreviewError)return NextResponse.json({error:error.message},{status:error.code==='invalid'?400:error.code==='notfound'?404:409,headers:noStore});
  // Never log raw errors: they could contain SDP, ICE or credentials.
  return NextResponse.json({error:'Vorschau nicht verfügbar.'},{status:500,headers:noStore});
+}
+/** The preview store is in memory and cannot be rolled back with SQLite.
+ * On unexpected failure, discard its signaling generation. The phone must
+ * still observe its lease deadline; native media does not stop synchronously. */
+export function previewTransaction<T>(database:Database.Database,credential:string,operation:(owner:string)=>T):T {
+ return protectPreviewTransaction(work=>cameraTransaction(database,credential,work),operation);
 }
 /** Strictly bounded body; no SDP, ICE or ticket is ever logged. */
 export async function previewJson(req:Request):Promise<unknown>{

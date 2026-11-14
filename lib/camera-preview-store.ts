@@ -158,3 +158,5 @@ export class CameraPreviewStore {
 }
 declare global {var __cameraPreviewStore:CameraPreviewStore|undefined;}
 export function cameraPreviewStore(){return globalThis.__cameraPreviewStore??=new CameraPreviewStore();}
+/** Fail closed if a surrounding database transaction cannot commit. */
+export function resetCameraPreviewStore(){globalThis.__cameraPreviewStore=new CameraPreviewStore();}
