@@ -4,11 +4,13 @@ export type Finding={claim:string;assessment:'belegt'|'umstritten'|'offen';expla
 export type Hypothesis={question:string;indications:string;alternative:string;limitations:string;source_urls:string[]};
 export type ResearchReport={search_requests:number;summary:string;sources:ResearchSource[];findings:Finding[];hypotheses:Hypothesis[];open_questions:string[];source_mode?:'selected'|'web';source_access?:Array<{url:string;status:'retrieved'|'unavailable';truncated:boolean}>};
 const text=(value:unknown,max:number)=>typeof value==='string'?value.trim().slice(0,max):'';
-function url(value:unknown){try{const u=new URL(String(value));return u.protocol==='https:'&&u.hostname.includes('.')&&u.pathname!=='/'?u.href:'';}catch{return '';}}
+/** Fragments are not sent in HTTP requests; query parameters remain intact. */
+export function canonicalSourceUrl(value:unknown){try{if(typeof value!=='string'||value.length>2000)return '';const u=new URL(value);if(u.protocol!=='https:'||u.username||u.password||!u.hostname)return '';u.hash='';return u.href;}catch{return '';}}
+function url(value:unknown){try{const valueUrl=canonicalSourceUrl(value);if(!valueUrl)return '';const u=new URL(valueUrl);return u.hostname.includes('.')&&u.pathname!=='/'?u.href:'';}catch{return '';}}
 export function normalizeSources(value:unknown,minimum=2):NewsSource[]|null {
  if(!Array.isArray(value)||value.length<minimum||value.length>3)return null;
  const result:NewsSource[]=[];
- for(const s of value){if(!s || typeof s.title!=='string'||!s.title.trim()||s.title.length>500)return null;const link=url(s.url);if(!link)return null;result.push({title:text(s.title,500),url:link.slice(0,1000),source:text(s.source,100),date:text(s.date,100),description:text(s.description,800)});}
+ for(const s of value){if(!s || typeof s.title!=='string'||!s.title.trim()||s.title.length>500)return null;const link=url(s.url);if(!link||link.length>1000)return null;result.push({title:text(s.title,500),url:link,source:text(s.source,100),date:text(s.date,100),description:text(s.description,800)});}
  return result;
 }
 function canonical(value:string){try{const u=new URL(value);return `${u.origin}${u.pathname.replace(/\/$/,'')}${u.search}`;}catch{return '';}}

@@ -1,4 +1,5 @@
 import type {FactSheet} from './fact-sheet.ts';
+import {canonicalSourceUrl} from './research.ts';
 
 
 export type GrokScript={titles:string[];script:string;thumbnail:string;broll:string[];pin_kommentar:string;hinweise_fuer_dennis:string[];quellen:string[];quellenbelege?:Array<{aussage:string;belege:Array<{text:string;quelle:string;ungeprueft?:boolean}>;ungeprueft:boolean}>};
@@ -58,7 +59,7 @@ export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,_c
  const accepted:string[]=[];let rejected=0;
  for(const source of sources){
   const urls=source.match(/https?:\/\/[^\s<>"']+/g)||[];
-  const url=urls.length===1?urls[0].replace(/[),.;]+$/,''):'';
+  const url=urls.length===1?canonicalSourceUrl(urls[0].replace(/[),.;]+$/,'')):'';
   if(allowed.has(url)){try{const entry=`${new URL(url).hostname} – ${url}`;if(!accepted.includes(entry))accepted.push(entry);}catch{rejected++;}}else rejected++;
  }
  const notices=[...facts.hinweise_fuer_dennis,...facts.unklar.map(note=>`Unklar: ${note}`),...notes];

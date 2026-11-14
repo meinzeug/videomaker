@@ -85,3 +85,16 @@ test('quoted material inside an otherwise sourced fact must itself appear in the
  const facts=validateFactSheet(raw,sources,selected(),true);
  assert.deepEqual(facts.fakten.map(x=>x.text),['Eine Aussage aus der Quelle.']);
 });
+
+test('fragment variants refer to one source while different query parameters stay distinct',async()=>{
+ const {normalizeSources}=await import('../lib/research.ts');
+ const baseUrl='https://example.org/a?edition=one',same=baseUrl+'#auszug',other='https://example.org/a?edition=two';
+ const normalized=normalizeSources([{title:'Auswahl',url:same,source:'Beispiel',date:'',description:''}],1);
+ assert.equal(normalized[0].url,baseUrl);
+ const exact='Hier steht ein zusammenhängender, belegbarer Originalausschnitt.';
+ const report={generation_options:{scope:'selected'},sources:[{url:baseUrl}],source_excerpts:[{url:baseUrl,status:'retrieved',text:exact}]};
+ const raw={fakten:[{text:'Diese Aussage verweist auf den ausgewählten Artikel.',quellen:[same],belege:[{text:exact,quelle:baseUrl+'#anderer-anker'}]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[]};
+ const fact=validateFactSheet(raw,normalized,report,true).fakten[0];assert.deepEqual(fact.quellen,[baseUrl]);assert.equal(fact.belege[0].quelle,baseUrl);
+ const wrong={...raw,fakten:[{...raw.fakten[0],quellen:[other],belege:[{text:exact,quelle:other}]}]};
+ assert.throws(()=>validateFactSheet(wrong,normalized,report,true),'a different query must not borrow evidence');
+});

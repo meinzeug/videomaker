@@ -1,3 +1,4 @@
+import {canonicalSourceUrl} from './research.ts';
 /** An AI-produced fact sheet is a draft, not a guarantee that sources are true. */
 type Evidence={text:string;quelle:string;ungeprueft?:boolean};
 type Fact={text:string;quellen:string[];belege?:Evidence[];ungeprueft?:boolean};
@@ -12,16 +13,16 @@ export function validateFactSheet(raw:unknown,sources:unknown,report:unknown,req
  if(!data||!Array.isArray(data.fakten)||!Array.isArray(data.meinungen_dritter)||!Array.isArray(data.zitate)||!Array.isArray(data.unklar)||!Array.isArray(data.hinweise_fuer_dennis))throw new Error('Das Faktenblatt ist unvollständig.');
  const options=obj(rep?.generation_options),fallbackAllowed=options?.scope==='selected'&&options.allowIncompleteSources===true;
  const known=new Set<string>();
- for(const candidate of options?.scope==='selected'?[sources]:[sources,rep?.sources])if(Array.isArray(candidate))for(const entry of candidate){const url=str(obj(entry)?.url,2000);try{const parsed=new URL(url);if(parsed.protocol==='https:'&&!parsed.username&&!parsed.password&&parsed.hostname)known.add(url);}catch{}}
+ for(const candidate of options?.scope==='selected'?[sources]:[sources,rep?.sources])if(Array.isArray(candidate))for(const entry of candidate){const url=canonicalSourceUrl(obj(entry)?.url);if(url)known.add(url);}
  const originals=new Map<string,string[]>(),fallbacks=new Map<string,string[]>();
- if(Array.isArray(rep?.source_excerpts))for(const entry of rep.source_excerpts){const e=obj(entry),url=str(e?.url,2000),text=str(e?.text,40000);if(!known.has(url)||!text)continue;if(e?.status==='retrieved')originals.set(url,[...(originals.get(url)||[]),text]);else if(e?.status==='unavailable'&&fallbackAllowed)fallbacks.set(url,[...(fallbacks.get(url)||[]),text]);}
+ if(Array.isArray(rep?.source_excerpts))for(const entry of rep.source_excerpts){const e=obj(entry),url=canonicalSourceUrl(e?.url),text=str(e?.text,40000);if(!known.has(url)||!text)continue;if(e?.status==='retrieved')originals.set(url,[...(originals.get(url)||[]),text]);else if(e?.status==='unavailable'&&fallbackAllowed)fallbacks.set(url,[...(fallbacks.get(url)||[]),text]);}
  let omittedFacts=0,fallbackFacts=0;const rejectedFacts:string[]=[];
  const readFacts=(items:unknown[]):Fact[]=>items.slice(0,100).map(item=>{
-  const f=obj(item),text=typeof f?.text==='string'?f.text.trim():'',refs=Array.isArray(f?.quellen)?[...new Set(f.quellen.map(x=>typeof x==='string'?x.trim():'').filter(x=>known.has(x)))].slice(0,6):[];
+  const f=obj(item),text=typeof f?.text==='string'?f.text.trim():'',refs=Array.isArray(f?.quellen)?[...new Set(f.quellen.map(canonicalSourceUrl).filter(x=>known.has(x)))].slice(0,6):[];
   if(!requireEvidence)return {text,quellen:refs};
   const evidence:Evidence[]=[];
   for(const entry of Array.isArray(f?.belege)?f.belege.slice(0,12):[]){
-   const candidate=obj(entry),quote=typeof candidate?.text==='string'?candidate.text.trim():'',url=str(candidate?.quelle,2000);
+   const candidate=obj(entry),quote=typeof candidate?.text==='string'?candidate.text.trim():'',url=canonicalSourceUrl(candidate?.quelle);
    if(quote.length<12||!refs.includes(url))continue;
    if(originals.get(url)?.some(source=>source.includes(quote)))evidence.push({text:quote,quelle:url});
    else if(fallbacks.get(url)?.some(source=>source.includes(quote)))evidence.push({text:quote,quelle:url,ungeprueft:true});
@@ -50,7 +51,7 @@ export function validateFactSheet(raw:unknown,sources:unknown,report:unknown,req
  }
  let omitted=0;const quotes:Quote[]=[];
  for(const item of data.zitate.slice(0,100)){
-  const q=obj(item),text=typeof q?.text==='string'?q.text.trim():'',quelle=str(q?.quelle,2000);
+  const q=obj(item),text=typeof q?.text==='string'?q.text.trim():'',quelle=canonicalSourceUrl(q?.quelle);
   if(text&&known.has(quelle)&&originals.get(quelle)?.some(source=>source.includes(text)))quotes.push({text,quelle});else omitted++;
  }
  const strings=(items:unknown[])=>items.map(x=>str(x,1200)).filter(Boolean).slice(0,100);
