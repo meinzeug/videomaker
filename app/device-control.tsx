@@ -1,22 +1,22 @@
 'use client';
 import {useEffect,useState} from 'react';
+import {settingConfirmed,type PendingSetting} from './device-control-ack';
 
-type Device={id:string;name:string;role:string;status:string;last_seen:number;speed:number|null;fontSize:number|null};
+type Device={id:string;name:string;role:string;status:string;last_seen:number;speed:number|null;fontSize:number|null;acknowledged:string[]};
 type Command='load'|'play'|'pause'|'reset'|'set_speed'|'set_font_size';
-type Pending={deviceId:string;field:'speed'|'fontSize';value:number};
 export default function DeviceControl({projectId}:{projectId:string}){
  const [devices,setDevices]=useState<Device[]>([]),[selected,setSelected]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
- const [speed,setSpeed]=useState('35'),[fontSize,setFontSize]=useState('44'),[pending,setPending]=useState<Pending|null>(null);
+ const [speed,setSpeed]=useState('35'),[fontSize,setFontSize]=useState('44'),[pending,setPending]=useState<PendingSetting|null>(null);
  useEffect(()=>{let mounted=true;const load=async()=>{try{const r=await fetch('/api/devices',{cache:'no-store'});if(!r.ok)throw new Error();const data=await r.json();if(mounted)setDevices(data.devices);}catch{if(mounted)setNotice('Geräteliste konnte nicht geladen werden.');}};void load();const timer=setInterval(load,2000);return()=>{mounted=false;clearInterval(timer);};},[]);
  const prompters=devices.filter(d=>d.role==='prompter'),device=prompters.find(d=>d.id===selected),active=!!device;
- useEffect(()=>{if(pending&&device?.id===pending.deviceId&&typeof device[pending.field]==='number'&&Math.abs(device[pending.field]!-pending.value)<0.001){setNotice('Einstellung vom Smartphone bestätigt.');setPending(null);}},[pending,device]);
+ useEffect(()=>{if(pending&&settingConfirmed(pending,device)){setNotice('Einstellung vom Smartphone bestätigt.');setPending(null);}},[pending,device]);
  useEffect(()=>{if(!pending)return;const timer=setTimeout(()=>{setPending(null);setNotice('Smartphone hat die Einstellung nicht rechtzeitig bestätigt. Bitte Verbindung prüfen.');},13000);return()=>clearTimeout(timer);},[pending]);
  async function send(type:Command,value?:number){
   const deviceId=selected;
   setBusy(true);setNotice('');try{
    const r=await fetch(`/api/devices/${encodeURIComponent(deviceId)}/commands`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type,projectId:type==='load'?projectId:undefined,value})});
    const data=await r.json();if(!r.ok)throw new Error(data.error||'Befehl fehlgeschlagen.');
-   if((type==='set_speed'||type==='set_font_size')&&value!==undefined){setPending({deviceId,field:type==='set_speed'?'speed':'fontSize',value});setNotice('Gesendet. Warte auf den Gerätestatus.');}
+   if((type==='set_speed'||type==='set_font_size')&&value!==undefined){if(typeof data.commandId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(data.commandId))throw new Error('Keine eindeutige Befehlsbestätigung; Gerätestatus prüfen.');setPending({deviceId,commandId:data.commandId,field:type==='set_speed'?'speed':'fontSize',value});setNotice('Gesendet. Warte auf den Gerätestatus.');}
    else setNotice('Befehl gesendet. Den Zustand zeigt das Gerät an.');
   }catch(e){setNotice(e instanceof Error?e.message:'Befehl fehlgeschlagen.');}finally{setBusy(false);}
  }

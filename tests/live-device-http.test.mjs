@@ -40,11 +40,12 @@ test('real HTTP framing drives phone setting queue and acknowledged device state
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const port=server.address().port,base=`http://127.0.0.1:${port}`;
  const post=(path,body,origin='http://fixture.local')=>fetch(base+path,{method:'POST',headers:{'content-type':'application/json',origin},body:JSON.stringify(body)});
  try{
-  assert.equal((await post('/api/devices/poll',payload())).status,200);
-  assert.equal((await post(`/api/devices/${id}/commands`,{type:'set_speed',value:76})).status,200);
-  const reply=await (await post('/api/devices/poll',payload())).json();assert.equal(reply.commands.length,1);assert.equal(reply.commands[0].type,'set_speed');assert.equal(reply.commands[0].value,76);
+  assert.equal((await post('/api/devices/poll',payload({controls:{speed:76,fontSize:44}}))).status,200);
+  const sentResponse=await post(`/api/devices/${id}/commands`,{type:'set_speed',value:76});assert.equal(sentResponse.status,200);const sent=await sentResponse.json();assert.match(sent.commandId,/^[0-9a-f-]{36}$/);
+  const before=await (await fetch(base+'/api/devices')).json();assert.equal(before.devices[0].speed,76);assert.ok(!before.devices[0].acknowledged.includes(sent.commandId));
+  const reply=await (await post('/api/devices/poll',payload())).json();assert.equal(reply.commands.length,1);assert.equal(reply.commands[0].type,'set_speed');assert.equal(reply.commands[0].value,76);assert.equal(reply.commands[0].id,sent.commandId);
   assert.equal((await post('/api/devices/poll',payload({ack:[reply.commands[0].id],controls:{speed:76,fontSize:44}}))).status,200);
-  const devices=await (await fetch(base+'/api/devices')).json();assert.equal(devices.devices[0].speed,76);assert.equal(db.prepare('SELECT count(*) AS n FROM live_commands').get().n,0);
+  const devices=await (await fetch(base+'/api/devices')).json();assert.equal(devices.devices[0].speed,76);assert.ok(devices.devices[0].acknowledged.includes(sent.commandId));assert.equal(db.prepare('SELECT count(*) AS n FROM live_commands').get().n,0);
   assert.equal((await post(`/api/devices/${id}/commands`,{type:'set_font_size',value:64})).status,200);
   const font=await (await post('/api/devices/poll',payload({controls:{speed:76,fontSize:44}}))).json();assert.equal(font.commands[0].type,'set_font_size');assert.equal(font.commands[0].value,64);
   assert.equal((await post('/api/devices/poll',payload({ack:[font.commands[0].id],controls:{speed:76,fontSize:64}}))).status,200);

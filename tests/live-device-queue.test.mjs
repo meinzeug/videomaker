@@ -18,6 +18,7 @@ test('old phones cannot receive setting commands; updated phones get bounded val
   const update=parseHeartbeat({id,name:'Handy',role:'prompter',status:'bereit',ack:[pending[0].id],controls:{speed:35,fontSize:44}});
   const commands=processDeviceHeartbeat(db,update,104,()=>true);assert.equal(commands[0].type,'set_speed');assert.equal(commands[0].value,60);
   assert.equal(db.prepare('SELECT count(*) AS n FROM live_commands').get().n,1);
+  assert.deepEqual(db.prepare('SELECT id,device_id FROM live_command_receipts').all(),[{id:pending[0].id,device_id:id}]);
   assert.equal(enqueueDeviceCommand(db,id,parseCommand({type:'set_font_size',value:55}),10_105,()=>true),'offline');
  }finally{db.close();}
 });
@@ -42,6 +43,7 @@ test('acknowledgements cannot delete another device command and expired commands
   const foreign=parseHeartbeat({id:other,name:'Anderes Gerät',role:'prompter',status:'bereit',ack:[command],controls:{speed:35,fontSize:44}});
   assert.deepEqual(processDeviceHeartbeat(db,foreign,102,()=>true),[]);
   assert.equal(db.prepare('SELECT count(*) AS n FROM live_commands').get().n,1);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM live_command_receipts').get().n,0);
   assert.deepEqual(processDeviceHeartbeat(db,heartbeat({speed:35,fontSize:44}),10_101,()=>true),[]);
   assert.equal(db.prepare('SELECT count(*) AS n FROM live_commands').get().n,0);
  }finally{db.close();}
