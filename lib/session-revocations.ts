@@ -10,6 +10,7 @@ const schema = `CREATE TABLE IF NOT EXISTS auth_session_revocations (
 )`;
 const digest=(secret:string,domain:string,value:string)=>createHmac('sha256',secret).update(domain).update(value).digest('hex');
 const sessionHash=(secret:string,value:string)=>digest(secret,'auth-session-revocation/v1\0',value);
+export const sessionRevocationId=(secret:string,value:string)=>sessionHash(secret,value);
 const cameraOwner=(secret:string,value:string)=>digest(secret,'camera-session/v1\0',value);
 /** Domain-separated identifier: never store the session cookie as a relay key. */
 export const relaySessionId=(secret:string,value:string)=>digest(secret,'relay-session/v1\0',value);

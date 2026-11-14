@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
-import {generateKeyPairSync,randomUUID,randomBytes,sign,createHash} from 'node:crypto';
+import {generateKeyPairSync,randomUUID,randomBytes,sign,createHash,createHmac} from 'node:crypto';
 import {beginRelayPairing,completeRelayPairing,relayPairingMessage,revokeRelayPairing,revokeRelayDevice} from '../lib/relay-pairing-registry.ts';
 import {beginRelaySession,completeRelaySession,relaySessionMessage,verifyRelaySession,revokeRelayOwnerSession,verifyRelaySessionPair,verifyRelayPeerBinding} from '../lib/relay-session-authorization.ts';
+import {registerRelayBrowserSession,resolveRelayBrowserSession} from '../lib/relay-browser-sessions.ts';
+import {sessionRevoked,revokeSession} from '../lib/session-revocations.ts';
 const owner='a'.repeat(64),session='b'.repeat(64),otherSession='c'.repeat(64),transcript='d'.repeat(64),runtime=randomUUID();
 const clock=(wall=1000,tick=wall,runtimeId=runtime)=>({runtimeId,wall,tick});
 function fixture(){
@@ -147,6 +149,25 @@ test('single bearer check discards an expired grant even when the peer is absent
   const self={session,request:f.request,credential:f.credential,authorize:()=>true};
   assert.equal(verifyRelayPeerBinding(f.db,owner,self,()=>clock(301011,1021),()=>true),false);
   assert.equal(verifyRelaySession(f.db,owner,session,f.request,f.credential,()=>clock(1022,1022),()=>true),false);
+ }finally{f.db.close();}
+});
+
+test('single bearer check uses a real revocable peer-session index without sharing peer credentials',()=>{
+ const f=fixture();try{
+  const secret='fixture-session-secret-at-least-32-characters',body=`10000.${randomBytes(18).toString('base64url')}`;
+  const cookie=`${body}.${createHmac('sha256',secret).update(body).digest('base64url')}`;
+  sessionRevoked(f.db,secret,'initialize-fixture');
+  const peerSession=registerRelayBrowserSession(f.db,secret,cookie,owner,()=>1000);assert.ok(peerSession);
+  const {challenge,signature}=f.make();completeRelaySession(f.db,owner,session,f.request,challenge.challengeId,signature,()=>clock(1020),()=>true);
+  const peerCredential=randomBytes(32).toString('base64url'),peerRequest={...f.request,deviceId:f.prompter.deviceId,role:'prompter',tokenHash:createHash('sha256').update(peerCredential).digest('hex')};
+  const pc=beginRelaySession(f.db,owner,peerSession,peerRequest,()=>clock(1021),()=>true);
+  const proof=sign('sha256',relaySessionMessage(owner,peerSession,peerRequest,pc.challengeId,pc.nonce),f.prompter.keys.privateKey);
+  completeRelaySession(f.db,owner,peerSession,peerRequest,pc.challengeId,proof,()=>clock(1022),()=>true);
+  const self={session,request:f.request,credential:f.credential,authorize:()=>true};
+  const peerAuth=id=>resolveRelayBrowserSession(f.db,secret,owner,id,()=>1023);
+  assert.equal(verifyRelayPeerBinding(f.db,owner,self,()=>clock(1023),peerAuth),true);
+  revokeSession(f.db,secret,cookie,1024);
+  assert.equal(verifyRelayPeerBinding(f.db,owner,self,()=>clock(1025),peerAuth),false);
  }finally{f.db.close();}
 });
 
