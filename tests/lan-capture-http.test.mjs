@@ -54,3 +54,19 @@ test('neutraler LAN-Projektfallback prüft Session und Origin und bleibt bei Ret
   for(const project of createdProjects)await fetch(`${origin}/api/projects/${project}`,{method:'DELETE',headers:{origin,cookie}}).catch(()=>{});
  }
 });
+
+test('ein langsamer gestückelter Body überschreitet eine Gesamtfrist',{skip:!enabled,timeout:20000},async()=>{
+ const login=await fetch(`${origin}/api/login`,{method:'POST',headers:baseHeaders,body:JSON.stringify({password:'isolated-lan-capture-test-password'})});
+ assert.equal(login.status,200);const cookie=login.headers.get('set-cookie').split(';')[0];
+ const before=performance.now();let timer;
+ const result=await new Promise(resolve=>{
+  const request=httpRequest(`${origin}${endpoint}`,{method:'POST',headers:{...baseHeaders,cookie,'content-length':'500'}},response=>{
+   response.resume();response.on('end',()=>{clearInterval(timer);request.destroy();resolve({status:response.statusCode});});
+  });
+  request.on('error',()=>{clearInterval(timer);resolve({status:0});});
+  request.write('{');timer=setInterval(()=>request.write(' '),1000);
+ });
+ assert.ok([0,400].includes(result.status),'Request wird ohne Projektanlage beendet');
+ assert.ok(performance.now()-before<14000,'regelmäßige Mini-Chunks verlängern die Gesamtfrist nicht');
+ const projects=await fetch(`${origin}/api/projects`,{headers:{cookie}});assert.equal(projects.status,200);assert.equal((await projects.json()).length,0);
+});

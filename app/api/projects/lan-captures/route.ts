@@ -16,9 +16,10 @@ export async function POST(req:Request){
  if((req.headers.get('content-type')||'').split(';')[0].trim().toLowerCase()!=='application/json'||!req.body)return reply({error:'Ungültige Aufnahme.'},400);
  const declared=req.headers.get('content-length');
  if(declared!==null&&(!/^\d{1,4}$/.test(declared)||Number(declared)>1024))return reply({error:'Anfrage ist zu groß.'},413);
- const reader=req.body.getReader();let body=Buffer.alloc(0);
+ const reader=req.body.getReader();let body=Buffer.alloc(0);const deadline=performance.now()+10000;
  try{
-  for(;;){const {done,value}=await readRecordingChunk(reader);if(done)break;
+  for(;;){const remaining=deadline-performance.now();if(remaining<=0)throw new Error('REQUEST_TIMEOUT');
+   const {done,value}=await readRecordingChunk(reader,remaining);if(done)break;
    if(value.byteLength>1024-body.length){await reader.cancel();return reply({error:'Anfrage ist zu groß.'},413);}
    body=Buffer.concat([body,Buffer.from(value)]);
   }
