@@ -29,7 +29,7 @@ const closeServer=async server=>{if(server.listening)await new Promise((resolve,
 
 /** The production app never calls this test-only bridge. */
 function bridge(ws,tcp,stats,idleMs=5000,signal,lifetimeMs=15000){
- const handle=bridgeTestOnly({websocket:ws,upstream:tcp,createWebSocketStream,idleMs,lifetimeMs,maxBytes:MAX_TOTAL,signal,
+ const handle=bridgeTestOnly({websocket:ws,upstream:tcp,createWebSocketStream,authorize:()=>true,idleMs,lifetimeMs,maxBytes:MAX_TOTAL,signal,
   onEvent(type){if(type==='websocket-backpressure')stats.inboundPauses++;if(type==='websocket-resumed')stats.inboundResumes++;if(type==='tcp-backpressure')stats.outboundPauses++;if(type==='tcp-resumed')stats.outboundResumes++;}});
  void handle.closed.then(reason=>{if(reason.endsWith('-limit'))stats.byteLimit++;});return handle;
 }
@@ -130,8 +130,8 @@ test('prototype is disabled in production or without the explicit fixture flag',
 test('already closed or failed endpoints are rejected before a bridge is returned',()=>{
  const healthyWs={readyState:1},closedWs={readyState:3};
  const openTcp={connecting:false,destroyed:false,remoteAddress:'127.0.0.1'},closedTcp={...openTcp,destroyed:true};
- assert.throws(()=>bridgeTestOnly({websocket:closedWs,upstream:openTcp,createWebSocketStream}),/INVALID_FIXTURE_ENDPOINT/);
- assert.throws(()=>bridgeTestOnly({websocket:healthyWs,upstream:closedTcp,createWebSocketStream}),/INVALID_FIXTURE_ENDPOINT/);
+ assert.throws(()=>bridgeTestOnly({websocket:closedWs,upstream:openTcp,createWebSocketStream,authorize:()=>true}),/INVALID_FIXTURE_ENDPOINT/);
+ assert.throws(()=>bridgeTestOnly({websocket:healthyWs,upstream:closedTcp,createWebSocketStream,authorize:()=>true}),/INVALID_FIXTURE_ENDPOINT/);
 });
 
 test('already aborted signal closes both newly connected endpoints', {timeout:5000},async()=>{

@@ -20,11 +20,11 @@ export function createBoundedFixtureServer(WebSocketServer){
  * the WebSocket server/client with maxPayload <= FRAME_BYTES and compression disabled BEFORE
  * receiving any frames. This function deliberately refuses to run outside an explicit test.
  */
-export function bridgeTestOnly({websocket,upstream,createWebSocketStream,signal,
+export function bridgeTestOnly({websocket,upstream,createWebSocketStream,authorize,signal,
  maxBytes=8*1024*1024,idleMs=5000,lifetimeMs=15000,highWaterMark=16*1024,onEvent=()=>{}}){
  requireFixture();
  if(!websocket||websocket.readyState!==1||!upstream||upstream.connecting||upstream.destroyed||
-    !['127.0.0.1','::1','::ffff:127.0.0.1'].includes(upstream.remoteAddress)||typeof createWebSocketStream!=='function')throw Error('INVALID_FIXTURE_ENDPOINT');
+    !['127.0.0.1','::1','::ffff:127.0.0.1'].includes(upstream.remoteAddress)||typeof createWebSocketStream!=='function'||typeof authorize!=='function')throw Error('INVALID_FIXTURE_ENDPOINT');
  if(!Number.isSafeInteger(maxBytes)||maxBytes<1||maxBytes>ABSOLUTE_BYTES||
     !Number.isSafeInteger(idleMs)||idleMs<10||idleMs>ABSOLUTE_LIFETIME_MS||
     !Number.isSafeInteger(lifetimeMs)||lifetimeMs<idleMs||lifetimeMs>ABSOLUTE_LIFETIME_MS||
@@ -52,6 +52,8 @@ export function bridgeTestOnly({websocket,upstream,createWebSocketStream,signal,
    if(chunk.length>FRAME_BYTES){callback();finish(direction+'-frame-limit');return;}
    total+=chunk.length;
    if(total>maxBytes){callback();finish(direction+'-limit');return;}
+   let allowed=false;try{allowed=authorize(direction)===true;}catch{/* Authorization errors fail closed. */}
+   if(!allowed){callback();finish('unauthorized');return;}
    touch();callback(null,chunk);
   }});
  }

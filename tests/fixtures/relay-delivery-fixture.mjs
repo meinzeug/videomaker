@@ -7,8 +7,8 @@ import {beginRelaySession,completeRelaySession,relaySessionMessage} from '../../
 import {registerRelayBrowserSession,resolveRelayBrowserSession} from '../../lib/relay-browser-sessions.ts';
 import {sessionRevoked} from '../../lib/session-revocations.ts';
 
-export function fixture(){
- const db=new Database(':memory:');db.pragma('foreign_keys=ON');
+export function fixture(db=new Database(':memory:')){
+ db.pragma('foreign_keys=ON');
  const owner='a'.repeat(64),secret='fixture-session-secret-at-least-32-characters',runtimeId=randomUUID();
  const clock=()=>({runtimeId,wall:1023,tick:1023}),wall=()=>1023;
  const relay=new OpaqueRendezvous(()=>1023),room=relay.create(owner),guestCredential=randomBytes(32).toString('base64url');
