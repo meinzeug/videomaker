@@ -51,6 +51,15 @@ test('Widerruf vor Commit legt auch das Mapping-Schema nicht an',()=>{
   assert.equal(database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lan_capture_projects'").get(),undefined);
  }finally{database.close();}
 });
+test('ein Fehler beim Speichern der Zuordnung rollt auch das neue Projekt zurück',()=>{
+ const f=fixture();
+ try{
+  f.db.exec("CREATE TRIGGER lan_capture_mapping_failure BEFORE INSERT ON lan_capture_projects BEGIN SELECT RAISE(ABORT,'test mapping failure'); END");
+  assert.throws(()=>ensureLanCaptureProject(f.db,randomUUID(),()=>{}),/test mapping failure/);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM projects').get().n,0);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM lan_capture_projects').get().n,0);
+ }finally{f.close();}
+});
 test('zwei Prozesse legen für dieselbe Aufnahme transaktional genau ein Projekt an',async()=>{
  const f=fixture(),recording=randomUUID(),workers=[];
  try{
