@@ -29,6 +29,7 @@ test('Beleg ist idempotent nach verlorener Abschlussantwort; Abruf veröffentlic
  const f=fixture();try{
   const expected={id:f.id,projectId:f.project,recordingId:f.recording,sizeBytes:f.data.length,sha256:f.sha,published:true};
   assert.deepEqual(await f.request(),expected);assert.deepEqual(await f.request(),expected);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM recording_upload_owners').get().n,0,'wiederholte Belegabrufe dürfen keine dauerhaften Eigentümereinträge ansammeln');
   assert.equal(f.store.status(f.id,f.project,f.recording).state,'sealed');assert.deepEqual(readFileSync(f.file),f.data);
   f.store.markPublished(f.id,f.project,f.recording);assert.deepEqual(await f.request(),expected);
   assert.equal(f.store.status(f.id,f.project,f.recording).state,'published');

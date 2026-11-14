@@ -38,5 +38,9 @@ export async function getLiveRecordingReceipt({database,root,id,project,recordin
   const candidate=error as NodeJS.ErrnoException;
   if(candidate.code==='ENOENT'||candidate.code==='ENOTDIR'||candidate.code==='ELOOP'||candidate.message==='STORED_FILE_INVALID'||candidate.message==='STORED_FILE_CHANGED')return fail('RECEIPT_MISSING');
   throw error;
- }finally{try{lease.release();}catch{/* An expired lease cannot authorize a receipt. */}}
+ }finally{try{database.transaction(()=>{
+  lease.release();
+  // A receipt only reads an existing file and owns no upload intent or lock.
+  database.prepare('DELETE FROM recording_upload_owners WHERE token=? AND completed=1 AND NOT EXISTS (SELECT 1 FROM recording_upload_slots WHERE token=?)').run(lease.token,lease.token);
+ }).immediate();}catch{/* An expired lease cannot authorize a receipt. */}}
 }
