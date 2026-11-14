@@ -127,3 +127,12 @@ test('a foreign runtime cannot consume an otherwise valid pairing challenge',()=
   assert.equal(completeRelayPairing(f.db,owner,input,()=>time(1002),()=>true).created,true);
  }finally{f.db.close();}
 });
+
+test('a foreign runtime cannot replace an existing challenge for the same pairing',()=>{
+ const f=fixture();try{
+  const original=beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(),()=>true),foreign=randomUUID();
+  assert.throws(()=>beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(1001,1001,foreign),()=>true),/FOREIGN_RUNTIME/);
+  assert.equal(f.db.prepare('SELECT challenge_id FROM relay_pair_challenges WHERE pair_id=?').get(f.pairId).challenge_id,original.challengeId);
+  assert.equal(completeRelayPairing(f.db,owner,f.prepare(original),()=>time(1002),()=>true).created,true);
+ }finally{f.db.close();}
+});

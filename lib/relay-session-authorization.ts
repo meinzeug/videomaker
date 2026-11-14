@@ -30,7 +30,8 @@ export function beginRelaySession(db:Database.Database,owner:string,session:stri
  return relayExpiringTransaction(db,()=>{
   if(authorize()!==true)fail('UNAUTHORIZED');let c=clock();validate(owner,session,r,c);paired(db,owner,r);db.exec(schema);
   const old=db.prepare('SELECT * FROM relay_session_challenges WHERE pair_id=? AND role=?').get(r.pairId,r.role) as (ClockRow&{owner_hash:string;session_hash:string;device_id:string;room_id:string;token_hash:string;challenge_id:string;nonce:string})|undefined;
-  if(old&&old.runtime_id===c.runtimeId&&!fresh(old,c,CHALLENGE_MS))expiredChallengeId=old.challenge_id;
+  if(old&&old.runtime_id!==c.runtimeId)fail('FOREIGN_RUNTIME');
+  if(old&&!fresh(old,c,CHALLENGE_MS))expiredChallengeId=old.challenge_id;
   if(old&&fresh(old,c,CHALLENGE_MS)&&old.owner_hash===owner&&old.session_hash===session&&old.device_id===r.deviceId&&old.room_id===r.roomId&&old.token_hash===r.tokenHash){
    if(authorize()!==true)fail('UNAUTHORIZED');paired(db,owner,r);c=clock();validate(owner,session,r,c);
    if(fresh(old,c,CHALLENGE_MS))return {challengeId:old.challenge_id,nonce:old.nonce,created:false};

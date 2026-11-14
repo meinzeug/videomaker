@@ -179,3 +179,12 @@ test('a different runtime cannot consume or delete a valid challenge or grant',(
   assert.equal(verifyRelaySession(f.db,owner,session,f.request,f.credential,()=>clock(1022),()=>true),true);
  }finally{f.db.close();}
 });
+
+test('a foreign runtime cannot replace the same pair and role challenge',()=>{
+ const f=fixture();try{
+  const original=f.make(),foreign=randomUUID();
+  assert.throws(()=>beginRelaySession(f.db,owner,session,f.request,()=>clock(1011,1011,foreign),()=>true),/FOREIGN_RUNTIME/);
+  assert.equal(f.db.prepare('SELECT challenge_id FROM relay_session_challenges WHERE pair_id=? AND role=?').get(f.pairId,'camera').challenge_id,original.challenge.challengeId);
+  assert.equal(completeRelaySession(f.db,owner,session,f.request,original.challenge.challengeId,original.signature,()=>clock(1020),()=>true).created,true);
+ }finally{f.db.close();}
+});

@@ -43,6 +43,7 @@ export function beginRelayPairing(db:Database.Database,owner:string,pairId:strin
   if(existing){if(existing.owner_hash!==owner||existing.transcript_hash!==transcriptHash||existing.revoked_at!==null)fail('CONFLICT');requireAuthorization(db,owner,authorize);return {paired:true as const};}
   const old=db.prepare('SELECT * FROM relay_pair_challenges WHERE pair_id=?').get(pairId) as {owner_hash:string;transcript_hash:string;challenge_id:string;nonce:string;runtime_id:string;created_wall:number;created_tick:number}|undefined;
   if(old&&old.owner_hash!==owner||old&&old.transcript_hash!==transcriptHash)fail('CONFLICT');
+  if(old&&old.runtime_id!==clock.runtimeId)fail('FOREIGN_RUNTIME');
   if(old&&old.runtime_id===clock.runtimeId&&!fresh(old,clock))expiredChallengeId=old.challenge_id;
   if(old&&fresh(old,clock)){requireAuthorization(db,owner,authorize);clock=clockSource();checkClock(clock);if(fresh(old,clock))return {paired:false as const,challengeId:old.challenge_id,nonce:old.nonce};if(old.runtime_id===clock.runtimeId)expiredChallengeId=old.challenge_id;}
   if(old)db.prepare('DELETE FROM relay_pair_challenges WHERE pair_id=?').run(pairId);
