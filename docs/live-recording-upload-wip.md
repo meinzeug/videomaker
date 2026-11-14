@@ -26,6 +26,19 @@ werden nicht automatisch gelöscht. Ein ausdrücklicher Abbruch ist vorgesehen.
 Die vorhandene 512-MiB-Speicherreserve und laufende Uploadreservierungen werden
 vor jedem Teil geprüft. Bei Platzmangel bleibt das Original auf dem Smartphone.
 
+Der optionale Test `tests/live-recording-real-video.test.mjs` prüft das Staging
+mit einem echten H.264/AAC-Kameravideo (1 bis 64 MiB), wiederholtem Teil nach
+verlorener Antwort und einem vor Abschluss geänderten MP4-Anfang:
+
+```sh
+LIVE_RECORDING_REAL_MP4=/pfad/zur/testaufnahme.mp4 \
+  node --experimental-strip-types --test tests/live-recording-real-video.test.mjs
+```
+
+Er liest das Original nur und verwendet eine temporäre Datenbank und Datei.
+Ohne angegebene Testaufnahme wird er übersprungen. Das ist kein Nachweis eines
+Uploads von einem laufenden Smartphone oder einer produktiven Veröffentlichung.
+
 **Noch offen:** abschließender unabhängiger Sicherheitsreview, Tests mit echtem
 Prozessabbruch an allen Festplatten-/SQLite-Grenzen, vollständige HTTP- und
 Gerätetests, MP4-/Tonprüfung, Ende-zu-Ende-Test für atomare Veröffentlichung,

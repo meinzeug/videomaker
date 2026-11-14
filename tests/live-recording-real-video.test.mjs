@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync,statSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import Database from 'better-sqlite3';
@@ -13,8 +13,10 @@ const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 
 // Opt in with a disposable test recording; never modify the supplied original.
 test('echtes Kameravideo übersteht verlorenes ACK und erneuerten MP4-Header bytegenau', {skip:!source,timeout:120000},()=>{
+ const info=statSync(source);
+ assert.ok(info.isFile()&&info.size>LIVE_CHUNK_BYTES&&info.size<=64*LIVE_CHUNK_BYTES,'Testaufnahme muss zwischen 1 und 64 MiB groß sein');
  const bytes=readFileSync(source);
- assert.ok(bytes.length>LIVE_CHUNK_BYTES&&bytes.length<=64*LIVE_CHUNK_BYTES,'Testaufnahme muss zwischen 1 und 64 MiB groß sein');
+ assert.equal(bytes.length,info.size,'Testaufnahme hat sich während des Lesens geändert');
  const dir=mkdtempSync(join(tmpdir(),'videomaker-real-video-'));
  const db=new Database(join(dir,'test.sqlite'));
  try{
