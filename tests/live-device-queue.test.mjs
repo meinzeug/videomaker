@@ -33,3 +33,16 @@ test('a revoked session changes neither registration nor queue nor ACK',()=>{
   assert.equal(db.prepare('SELECT count(*) AS n FROM live_commands').get().n,1);
  }finally{db.close();}
 });
+test('acknowledgements cannot delete another device command and expired commands are not delivered',()=>{
+ const db=fixture();try{
+  const other='730212a9-a5df-413a-8c88-6f4de6867f97';
+  processDeviceHeartbeat(db,heartbeat({speed:35,fontSize:44}),100,()=>true);
+  assert.equal(enqueueDeviceCommand(db,id,parseCommand({type:'set_speed',value:80}),101,()=>true),'ok');
+  const command=db.prepare('SELECT id FROM live_commands').get().id;
+  const foreign=parseHeartbeat({id:other,name:'Anderes Gerät',role:'prompter',status:'bereit',ack:[command],controls:{speed:35,fontSize:44}});
+  assert.deepEqual(processDeviceHeartbeat(db,foreign,102,()=>true),[]);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM live_commands').get().n,1);
+  assert.deepEqual(processDeviceHeartbeat(db,heartbeat({speed:35,fontSize:44}),10_101,()=>true),[]);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM live_commands').get().n,0);
+ }finally{db.close();}
+});
