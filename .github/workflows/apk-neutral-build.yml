@@ -1,0 +1,44 @@
+name: Isolated APK download production build
+on:
+  push:
+    branches: [wip/apk-neutral-ci-20261115]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 32f61b5cbe0332249789ee7fc038eac9add1904f
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - run: node --experimental-strip-types --test tests/apk-download-http.test.mjs tests/apk-download.test.mjs tests/kontraprompter-apk-publish.test.mjs
+      - run: npm run build
+        env:
+          SESSION_SECRET: isolated-build-only-secret-0123456789
+          ADMIN_PASSWORD: isolated-build-only-password
+          DATA_DIR: /tmp/videomaker-isolated-build-data
+          NEXT_TELEMETRY_DISABLED: '1'
+      - name: Record build identity and file hashes
+        run: |
+          set -eu
+          rm -rf .next/cache
+          git diff --exit-code
+          git rev-parse HEAD > BUILD-SOURCE-COMMIT.txt
+          node --version > BUILD-NODE-VERSION.txt
+          sha256sum package-lock.json > BUILD-LOCK-SHA256.txt
+          cat .next/BUILD_ID > BUILD-ID.txt
+          find .next -type f -print0 | sort -z | xargs -0 sha256sum > BUILD-FILES-SHA256.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: apk-neutral-next-32f61b5
+          path: |
+            .next/
+            BUILD-*.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
