@@ -121,3 +121,35 @@ export function verifyRelaySessionPair(db:Database.Database,owner:string,camera:
   return clockValid(final)&&fresh(cameraToken,final,TICKET_MS)&&fresh(prompterToken,final,TICKET_MS)?true:discardExpired(final);
  }).immediate();
 }
+
+/**
+ * Checks one device's bearer and revalidates the other previously proven grant
+ * without disclosing its bearer. The caller must derive `owner` and `session`
+ * from authentication and resolve each peer session hash authoritatively; a
+ * callback that merely trusts the hash is not a production authorization.
+ * This check alone does not fence delivery against concurrent revocation.
+ */
+export function verifyRelayPeerBinding(db:Database.Database,owner:string,participant:Participant,clock:()=>Clock,authorizeSessionHash:(sessionHash:string)=>boolean){
+ if(db.inTransaction)fail('NESTED_RELAY_TRANSACTION_UNSUPPORTED');
+ const r=participant.request;
+ if(!secret(participant.credential)||!hash(r.tokenHash)||!timingSafeEqual(Buffer.from(sha(participant.credential),'hex'),Buffer.from(r.tokenHash,'hex')))return false;
+ return db.transaction(()=>{
+  if(participant.authorize()!==true)return false;
+  const initial=clock();validate(owner,participant.session,r,initial);paired(db,owner,r);
+  const own=db.prepare('SELECT * FROM relay_session_tokens WHERE pair_id=? AND role=? AND owner_hash=? AND session_hash=? AND device_id=? AND room_id=? AND token_hash=?').get(r.pairId,r.role,owner,participant.session,r.deviceId,r.roomId,r.tokenHash) as ClockRow|undefined;
+  const peerRole=r.role==='camera'?'prompter':'camera';
+  const peer=db.prepare('SELECT * FROM relay_session_tokens WHERE pair_id=? AND role=? AND owner_hash=? AND room_id=?').get(r.pairId,peerRole,owner,r.roomId) as (ClockRow&{session_hash:string;device_id:string;token_hash:string})|undefined;
+  const discard=(at:Clock)=>{
+   for(const [role,token] of [[r.role,own],[peerRole,peer]] as const)if(token&&clockValid(at)&&token.runtime_id===at.runtimeId&&!fresh(token,at,TICKET_MS))db.prepare('DELETE FROM relay_session_tokens WHERE pair_id=? AND role=? AND owner_hash=? AND room_id=?').run(r.pairId,role,owner,r.roomId);
+   return false;
+  };
+  if(!own||!peer)return discard(initial);
+  if(peer.device_id===r.deviceId||!hash(peer.session_hash))return false;
+  const peerRequest:Request={pairId:r.pairId,role:peerRole,deviceId:peer.device_id,roomId:r.roomId,tokenHash:peer.token_hash};
+  validate(owner,peer.session_hash,peerRequest,initial);paired(db,owner,peerRequest);
+  if(!fresh(own,initial,TICKET_MS)||!fresh(peer,initial,TICKET_MS))return discard(initial);
+  if(authorizeSessionHash(peer.session_hash)!==true||participant.authorize()!==true||authorizeSessionHash(peer.session_hash)!==true)return false;
+  paired(db,owner,r);paired(db,owner,peerRequest);const final=clock();
+  return clockValid(final)&&fresh(own,final,TICKET_MS)&&fresh(peer,final,TICKET_MS)?true:discard(final);
+ }).immediate();
+}

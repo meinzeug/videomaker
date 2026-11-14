@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import {generateKeyPairSync,randomUUID,randomBytes,sign,createHash} from 'node:crypto';
 import {beginRelayPairing,completeRelayPairing,relayPairingMessage,revokeRelayPairing,revokeRelayDevice} from '../lib/relay-pairing-registry.ts';
-import {beginRelaySession,completeRelaySession,relaySessionMessage,verifyRelaySession,revokeRelayOwnerSession,verifyRelaySessionPair} from '../lib/relay-session-authorization.ts';
+import {beginRelaySession,completeRelaySession,relaySessionMessage,verifyRelaySession,revokeRelayOwnerSession,verifyRelaySessionPair,verifyRelayPeerBinding} from '../lib/relay-session-authorization.ts';
 const owner='a'.repeat(64),session='b'.repeat(64),otherSession='c'.repeat(64),transcript='d'.repeat(64),runtime=randomUUID();
 const clock=(wall=1000,tick=wall,runtimeId=runtime)=>({runtimeId,wall,tick});
 function fixture(){
@@ -93,11 +93,20 @@ test('both different devices must prove fresh authorization for the same room',(
   const proof=sign('sha256',relaySessionMessage(owner,otherSession,request,pc.challengeId,pc.nonce),f.prompter.keys.privateKey);
   completeRelaySession(f.db,owner,otherSession,request,pc.challengeId,proof,()=>clock(1023),()=>true);
   assert.equal(verifyRelaySessionPair(f.db,owner,camera,guest,()=>clock(1024)),true);
+  const authorizedPeer=hash=>hash===otherSession;
+  assert.equal(verifyRelayPeerBinding(f.db,owner,camera,()=>clock(1024),authorizedPeer),true);
+  assert.equal(verifyRelayPeerBinding(f.db,owner,{...camera,credential:randomBytes(32).toString('base64url')},()=>clock(1024),authorizedPeer),false);
+  assert.equal(verifyRelayPeerBinding(f.db,owner,camera,()=>clock(1024),()=>false),false);
+  let checks=0;assert.equal(verifyRelayPeerBinding(f.db,owner,camera,()=>clock(1024),()=>++checks===1),false);
+  assert.equal(verifyRelayPeerBinding(f.db,owner,{...camera,authorize:()=>false},()=>clock(1024),authorizedPeer),false);
+  assert.equal(verifyRelayPeerBinding(f.db,owner,{...camera,request:{...camera.request,roomId:randomBytes(16).toString('base64url')}},()=>clock(1024),authorizedPeer),false);
+  assert.throws(()=>verifyRelayPeerBinding(f.db,owner,camera,()=>clock(1024),()=>{throw Error('session lookup failed');}),/session lookup failed/);
   let reads=0;assert.equal(verifyRelaySessionPair(f.db,owner,camera,guest,()=>clock(++reads===1?1024:301011)),false);
   assert.equal(verifyRelaySessionPair(f.db,owner,camera,{...guest,request:{...request,roomId:randomBytes(16).toString('base64url')}},()=>clock(1024)),false);
   assert.equal(verifyRelaySessionPair(f.db,owner,camera,{...guest,authorize:()=>false},()=>clock(1024)),false);
   assert.equal(verifyRelaySessionPair(f.db,owner,camera,guest,()=>clock(301011)),false);
   revokeRelayPairing(f.db,owner,f.pairId,1025,()=>true);
+  assert.throws(()=>verifyRelayPeerBinding(f.db,owner,camera,()=>clock(1026),authorizedPeer),/PAIR_REVOKED/);
   assert.throws(()=>verifyRelaySessionPair(f.db,owner,camera,guest,()=>clock(1026)),/PAIR_REVOKED/);
  }finally{f.db.close();}
 });
@@ -109,6 +118,35 @@ test('a foreign runtime cannot delete another pending device challenge',()=>{
   const otherRuntime=randomUUID();beginRelaySession(f.db,owner,otherSession,request,()=>clock(1011,1011,otherRuntime),()=>true);
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_session_challenges').get().n,2);
   assert.equal(completeRelaySession(f.db,owner,session,f.request,original.challenge.challengeId,original.signature,()=>clock(1020),()=>true).created,true);
+ }finally{f.db.close();}
+});
+
+test('single bearer peer check expires permanently and observes peer logout',()=>{
+ for(const mode of ['expired','logout']){
+  const f=fixture();try{
+   const {challenge,signature}=f.make();completeRelaySession(f.db,owner,session,f.request,challenge.challengeId,signature,()=>clock(1020),()=>true);
+   const peerCredential=randomBytes(32).toString('base64url'),peerRequest={...f.request,deviceId:f.prompter.deviceId,role:'prompter',tokenHash:createHash('sha256').update(peerCredential).digest('hex')};
+   const pc=beginRelaySession(f.db,owner,otherSession,peerRequest,()=>clock(1021),()=>true);
+   const proof=sign('sha256',relaySessionMessage(owner,otherSession,peerRequest,pc.challengeId,pc.nonce),f.prompter.keys.privateKey);
+   completeRelaySession(f.db,owner,otherSession,peerRequest,pc.challengeId,proof,()=>clock(1022),()=>true);
+   const self={session,request:f.request,credential:f.credential,authorize:()=>true},peerAuth=value=>value===otherSession;
+   if(mode==='expired'){
+    assert.equal(verifyRelayPeerBinding(f.db,owner,self,()=>clock(301013,1030),peerAuth),false);
+    assert.equal(verifyRelayPeerBinding(f.db,owner,self,()=>clock(1031,1031),peerAuth),false);
+   }else{
+    f.db.transaction(()=>revokeRelayOwnerSession(f.db,otherSession)).immediate();
+    assert.equal(verifyRelayPeerBinding(f.db,owner,self,()=>clock(1023),peerAuth),false);
+   }
+  }finally{f.db.close();}
+ }
+});
+
+test('single bearer check discards an expired grant even when the peer is absent',()=>{
+ const f=fixture();try{
+  const {challenge,signature}=f.make();completeRelaySession(f.db,owner,session,f.request,challenge.challengeId,signature,()=>clock(1020),()=>true);
+  const self={session,request:f.request,credential:f.credential,authorize:()=>true};
+  assert.equal(verifyRelayPeerBinding(f.db,owner,self,()=>clock(301011,1021),()=>true),false);
+  assert.equal(verifyRelaySession(f.db,owner,session,f.request,f.credential,()=>clock(1022,1022),()=>true),false);
  }finally{f.db.close();}
 });
 
