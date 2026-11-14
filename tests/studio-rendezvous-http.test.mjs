@@ -31,6 +31,9 @@ test('real localhost HTTP: paired sessions exchange HMAC-authenticated binary da
   assert.equal((await f.request(f.camera,base+'/send',send)).value.created,true);assert.equal((await f.request(f.camera,base+'/send',send)).value.created,false);
   const recv=(await f.request(f.prompter,base+'/peek',member(f.prompter))).value,bytes=Buffer.from(recv.data,'base64');assert.equal(recv.sequence,1);assert.deepEqual(bytes.subarray(payload.length),createHmac('sha256',Buffer.from(prompterKey,'hex')).update(bytes.subarray(0,payload.length)).digest());
   assert.equal((await f.request(f.prompter,base+'/ack',{...member(f.prompter),sequence:1})).status,200);
+  assert.equal((await f.request(f.prompter,base+'/send',{...member(f.prompter),sequence:1,data:Buffer.from('return').toString('base64')})).status,200);
+  assert.equal(Buffer.from((await f.request(f.camera,base+'/peek',member(f.camera))).value.data,'base64').toString(),'return');
+  assert.equal((await f.request(f.camera,base+'/ack',{...member(f.camera),sequence:1})).status,200);
   f.active.delete(f.camera.sessionHash);assert.equal((await f.request(f.prompter,base+'/peek',member(f.prompter))).status,403);f.active.add(f.camera.sessionHash);assert.equal((await f.request(f.camera,base+'/key',member(f.camera))).status,403);
  }finally{await f.close();}
 });
