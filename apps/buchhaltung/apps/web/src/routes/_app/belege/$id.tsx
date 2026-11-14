@@ -38,6 +38,7 @@ import { useAction } from "../../../lib/use-action.ts";
 import { bookDocumentFn, deleteDocumentFn, getDocumentDetail, reextractDocument, saveDocument } from "../../../server/functions/documents.ts";
 import { ConfirmDialog, isDialogOpen } from "../../../components/ConfirmDialog.tsx";
 import { Field } from "../../../components/Field.tsx";
+import { VideomakerAgencyLinks } from "../../../components/VideomakerAgencyLinks.tsx";
 
 /** Bezahlung früherer Belege desselben Lieferanten, für den Hinweis unter „Bezahlung“ (#295) */
 function paymentHintText(payment: "bank" | "privat" | "kasse", gesellschaft: boolean): string {
@@ -268,6 +269,7 @@ function DocumentPage() {
           {/* Außerhalb des Formulars: Enter im Feld „Grund“ speichert nicht */}
           {inhaber && <DocumentCancellation key={`storno-${doc.id}`} data={data} />}
           <BelegVerrechnung key={`verrechnung-${doc.id}`} documentId={doc.id} supplier={doc.supplierName} readOnly={!inhaber} />
+          <VideomakerAgencyLinks key={`agency-${doc.id}`} subject={{kind:"document",id:doc.id}} editable={inhaber} />
         </div>
       </div>
     </>

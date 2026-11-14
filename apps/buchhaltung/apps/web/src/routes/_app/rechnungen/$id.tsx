@@ -31,6 +31,7 @@ import { cancelFinalInvoice, correctFinalInvoice, getInvoiceDetail } from "../..
 import { ConfirmDialog } from "../../../components/ConfirmDialog.tsx";
 import { Field } from "../../../components/Field.tsx";
 import { OutcomeStatus, Status } from "../../../components/Status.tsx";
+import { VideomakerAgencyLinks } from "../../../components/VideomakerAgencyLinks.tsx";
 
 export const Route = createFileRoute("/_app/rechnungen/$id")({
   loader: ({ params }) => getInvoiceDetail({ data: params.id }),
@@ -47,6 +48,7 @@ const titleOf = (invoice: Detail["invoice"]) => invoiceTitle(invoice.kind, invoi
 function InvoicePage() {
   const data = Route.useLoaderData();
   const { invoice } = data;
+  const inhaber = Route.useRouteContext().user.role === "inhaber";
   const draftAction = useAction();
   // Nachweis der Leistungen, aus denen die Rechnung entstanden ist (#417)
   const nachweis = <InvoiceServiceEntries entries={data.serviceEntries} />;
@@ -153,6 +155,7 @@ function InvoicePage() {
           }
         />
         {nachweis}
+        <VideomakerAgencyLinks subject={{kind:"invoice",id:invoice.id}} editable={inhaber} />
       </>
     );
   }
@@ -160,6 +163,7 @@ function InvoicePage() {
     <>
       <FinalInvoice data={data} />
       {nachweis}
+      <VideomakerAgencyLinks subject={{kind:"invoice",id:invoice.id}} editable={inhaber} />
     </>
   );
 }

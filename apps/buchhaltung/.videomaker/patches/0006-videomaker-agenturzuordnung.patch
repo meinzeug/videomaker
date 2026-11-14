@@ -1,0 +1,393 @@
+diff --git a/apps/web/drizzle/0230_videomaker_agency_links.sql b/apps/web/drizzle/0230_videomaker_agency_links.sql
+new file mode 100644
+index 0000000..52a13bc
+--- /dev/null
++++ b/apps/web/drizzle/0230_videomaker_agency_links.sql
+@@ -0,0 +1,30 @@
++-- Agenturzuordnung ist Zusatzmetadatum; Buchungssätze und Belegdateien bleiben unverändert.
++CREATE TABLE videomaker_agency_links (
++  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
++  document_id uuid REFERENCES documents(id) ON DELETE CASCADE,
++  invoice_id uuid REFERENCES invoices(id) ON DELETE CASCADE,
++  journal_entry_id uuid REFERENCES journal_entries(id) ON DELETE CASCADE,
++  target_kind text NOT NULL CHECK (target_kind IN ('channel', 'project', 'platform')),
++  target_id text NOT NULL CHECK (length(target_id) BETWEEN 1 AND 80),
++  target_name text NOT NULL CHECK (length(target_name) BETWEEN 1 AND 160),
++  target_platform text,
++  created_at timestamptz NOT NULL DEFAULT now(),
++  CONSTRAINT videomaker_agency_exact_subject CHECK (
++    num_nonnulls(document_id, invoice_id, journal_entry_id) = 1
++  ),
++  CONSTRAINT videomaker_agency_target_platform CHECK (
++    (target_kind = 'project' AND target_platform IS NULL) OR
++    (target_kind IN ('channel', 'platform') AND target_platform IS NOT NULL AND length(target_platform) BETWEEN 1 AND 80)
++  ),
++  CONSTRAINT videomaker_agency_unique_target UNIQUE NULLS NOT DISTINCT
++    (document_id, invoice_id, journal_entry_id, target_kind, target_id)
++);
++--> statement-breakpoint
++CREATE INDEX videomaker_agency_document ON videomaker_agency_links(document_id) WHERE document_id IS NOT NULL;
++--> statement-breakpoint
++CREATE INDEX videomaker_agency_invoice ON videomaker_agency_links(invoice_id) WHERE invoice_id IS NOT NULL;
++--> statement-breakpoint
++CREATE INDEX videomaker_agency_journal ON videomaker_agency_links(journal_entry_id) WHERE journal_entry_id IS NOT NULL;
++--> statement-breakpoint
++CREATE TRIGGER videomaker_agency_links_audit AFTER INSERT OR UPDATE OR DELETE ON videomaker_agency_links
++  FOR EACH ROW EXECUTE FUNCTION haben_audit();
+diff --git a/apps/web/drizzle/meta/_journal.json b/apps/web/drizzle/meta/_journal.json
+index a55d25a..9f87b33 100644
+--- a/apps/web/drizzle/meta/_journal.json
++++ b/apps/web/drizzle/meta/_journal.json
+@@ -1611,6 +1611,13 @@
+       "when": 1794605361768,
+       "tag": "0229_videomaker_session_binding",
+       "breakpoints": true
++    },
++    {
++      "idx": 230,
++      "version": "7",
++      "when": 1794605361769,
++      "tag": "0230_videomaker_agency_links",
++      "breakpoints": true
+     }
+   ]
+ }
+diff --git a/apps/web/src/components/VideomakerAgencyLinks.tsx b/apps/web/src/components/VideomakerAgencyLinks.tsx
+new file mode 100644
+index 0000000..b2b747d
+--- /dev/null
++++ b/apps/web/src/components/VideomakerAgencyLinks.tsx
+@@ -0,0 +1,71 @@
++import { useServerFn } from "@tanstack/react-start";
++import { useEffect, useState } from "react";
++import { getVideomakerAgencyLinks, saveVideomakerAgencyLinks } from "../server/functions/videomaker-agency.ts";
++
++type Item={kind:"channel"|"project"|"platform";id:string;name:string;platform:string|null};
++type Choice=Item&{ticket:string};
++type Subject={kind:"document"|"invoice"|"journal";id:string};
++const key=(item:Item)=>JSON.stringify([item.kind,item.id]);
++const labels={channel:"Kanal",project:"Videomaker-Projekt",platform:"Plattform"} as const;
++
++/** Zusatzinformation für die Agentur; die Buchung selbst wird nicht verändert. */
++export function VideomakerAgencyLinks({subject,editable}:{subject:Subject;editable:boolean}) {
++  const read=useServerFn(getVideomakerAgencyLinks),save=useServerFn(saveVideomakerAgencyLinks);
++  const [existing,setExisting]=useState<Item[]>([]),[choices,setChoices]=useState<Choice[]>([]),[selected,setSelected]=useState<string[]>([]);
++  const [version,setVersion]=useState<string|null>(null);
++  const [enabled,setEnabled]=useState(false),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false);
++  const [message,setMessage]=useState<string|null>(null),[error,setError]=useState<string|null>(null);
++  const [refresh,setRefresh]=useState(0);
++  useEffect(()=>{
++    let active=true;const controller=new AbortController();
++    async function load(){
++      setLoading(true);setError(null);setMessage(null);
++      try{
++        const state=await read({data:{kind:subject.kind,id:subject.id}});if(!active)return;
++        setEnabled(state.enabled);setExisting(state.items);setSelected(state.items.map(key));setVersion(state.version);
++        if(!state.enabled||!editable){setChoices([]);return;}
++        const response=await fetch("/api/agency/catalog",{cache:"no-store",signal:controller.signal});
++        if(!response.ok)throw new Error("Der Videomaker-Katalog ist momentan nicht verfügbar.");
++        const body:unknown=await response.json();
++        if(!body||typeof body!=="object"||!("items" in body)||!Array.isArray(body.items))throw new Error("Der Videomaker-Katalog ist ungültig.");
++        const list=body.items as Choice[];
++        if(list.length>6005||list.some(item=>!item||typeof item.id!=="string"||typeof item.name!=="string"||typeof item.ticket!=="string"||!(["channel","project","platform"] as string[]).includes(item.kind)))throw new Error("Der Videomaker-Katalog ist ungültig.");
++        if(active){setChoices(list);if("omitted" in body&&typeof body.omitted==="number"&&body.omitted>0)setMessage(`${body.omitted} Katalogeinträge konnten nicht angezeigt werden.`);}
++      }catch(cause){if(active&&!controller.signal.aborted)setError(cause instanceof Error?cause.message:"Die Agenturzuordnung ist momentan nicht verfügbar.");}
++      finally{if(active)setLoading(false);}
++    }
++    void load();return()=>{active=false;controller.abort();};
++  },[subject.kind,subject.id,editable,refresh,read]);
++  const lookup=new Map(choices.map(choice=>[key(choice),choice]));
++  const missing=existing.filter(item=>!lookup.has(key(item))),selectedMissing=missing.some(item=>selected.includes(key(item)));
++  const toggle=(id:string)=>setSelected(current=>current.includes(id)?current.filter(value=>value!==id):[...current,id]);
++  async function submit(){
++    if(busy||selectedMissing||!version)return;
++    setBusy(true);setError(null);setMessage(null);
++    try{
++      const tickets=selected.map(id=>lookup.get(id)?.ticket);
++      if(tickets.some(ticket=>!ticket))throw new Error("Bitte den Katalog erneut laden.");
++      const result=await save({data:{subject,version,tickets:tickets.filter((ticket):ticket is string=>!!ticket)}});setVersion(result.version);
++      setExisting(selected.map(id=>lookup.get(id)!).filter(Boolean));setMessage("Agenturzuordnung gespeichert.");
++    }catch(cause){setError(cause instanceof Error?cause.message:"Die Zuordnung konnte nicht gespeichert werden.");}
++    finally{setBusy(false);}
++  }
++  if(!enabled&&!loading&&!error)return <section className="card" aria-label="Videomaker-Agenturzuordnung"><h2>Agenturzuordnung</h2><p className="muted">Die Verbindung zum Videomaker-Katalog ist noch nicht freigegeben.</p></section>;
++  return <section className="card" aria-label="Videomaker-Agenturzuordnung">
++    <h2>Agenturzuordnung</h2>
++    <p className="muted">Kanäle, Plattformen und Projekte zuordnen. Buchungsbeträge bleiben unverändert.</p>
++    {loading&&<p role="status">Zuordnung wird geladen …</p>}
++    {error&&<><p role="alert">{error}</p>{editable&&<button className="btn" type="button" onClick={()=>setRefresh(value=>value+1)}>Zuordnung neu laden</button>}</>}{message&&<p role="status">{message}</p>}
++    {!loading&&!editable&&<p>{existing.length?existing.map(item=>`${labels[item.kind]}: ${item.name}`).join(" · "):"Keine Agenturzuordnung."}</p>}
++    {!loading&&editable&&!error&&<>
++      {missing.length>0&&<fieldset><legend>Nicht mehr im Videomaker-Katalog</legend><p className="muted">Vor dem Speichern bitte nicht mehr verfügbare Zuordnungen ausdrücklich abwählen.</p>{missing.map(item=><label key={key(item)} style={{display:"block"}}><input type="checkbox" checked={selected.includes(key(item))} onChange={()=>toggle(key(item))}/> {labels[item.kind]}: {item.name}</label>)}</fieldset>}
++      {(["platform","channel","project"] as const).map(kind=>{
++        const options=choices.filter(item=>item.kind===kind);if(!options.length)return null;
++        return <fieldset key={kind}><legend>{kind==="platform"?"Plattformen":kind==="channel"?"Kanäle":"Projekte"}</legend>{options.map(item=><label key={key(item)} style={{display:"block"}}><input type="checkbox" checked={selected.includes(key(item))} onChange={()=>toggle(key(item))}/> {item.name}{kind==="channel"&&item.platform?` · ${item.platform}`:""}</label>)}</fieldset>;
++      })}
++      {!choices.length&&<p>Keine Einträge im Videomaker-Katalog.</p>}
++      <div className="actions"><button className="btn btn-primary" type="button" disabled={busy||!version||selectedMissing||selected.length>100} onClick={()=>void submit()}>{busy?"Speichere …":"Zuordnung speichern"}</button><button className="btn" type="button" disabled={busy} onClick={()=>setRefresh(value=>value+1)}>Katalog neu laden</button></div>
++      {selected.length>100&&<p role="alert">Höchstens 100 Zuordnungen sind möglich.</p>}
++    </>}
++  </section>;
++}
+diff --git a/apps/web/src/routes/_app/belege/$id.tsx b/apps/web/src/routes/_app/belege/$id.tsx
+index 9f8e8da..179cad7 100644
+--- a/apps/web/src/routes/_app/belege/$id.tsx
++++ b/apps/web/src/routes/_app/belege/$id.tsx
+@@ -38,6 +38,7 @@ import { useAction } from "../../../lib/use-action.ts";
+ import { bookDocumentFn, deleteDocumentFn, getDocumentDetail, reextractDocument, saveDocument } from "../../../server/functions/documents.ts";
+ import { ConfirmDialog, isDialogOpen } from "../../../components/ConfirmDialog.tsx";
+ import { Field } from "../../../components/Field.tsx";
++import { VideomakerAgencyLinks } from "../../../components/VideomakerAgencyLinks.tsx";
+ 
+ /** Bezahlung früherer Belege desselben Lieferanten, für den Hinweis unter „Bezahlung“ (#295) */
+ function paymentHintText(payment: "bank" | "privat" | "kasse", gesellschaft: boolean): string {
+@@ -268,6 +269,7 @@ function DocumentPage() {
+           {/* Außerhalb des Formulars: Enter im Feld „Grund“ speichert nicht */}
+           {inhaber && <DocumentCancellation key={`storno-${doc.id}`} data={data} />}
+           <BelegVerrechnung key={`verrechnung-${doc.id}`} documentId={doc.id} supplier={doc.supplierName} readOnly={!inhaber} />
++          <VideomakerAgencyLinks key={`agency-${doc.id}`} subject={{kind:"document",id:doc.id}} editable={inhaber} />
+         </div>
+       </div>
+     </>
+diff --git a/apps/web/src/routes/_app/buchungen/index.tsx b/apps/web/src/routes/_app/buchungen/index.tsx
+index 7c1108d..a4c1e7f 100644
+--- a/apps/web/src/routes/_app/buchungen/index.tsx
++++ b/apps/web/src/routes/_app/buchungen/index.tsx
+@@ -13,6 +13,7 @@ import styles from "../../../styles/auswertungen.css?url";
+ import { ERSTES_JAHR, LETZTES_JAHR } from "../../../lib/jahre.ts";
+ import { ConfirmDialog } from "../../../components/ConfirmDialog.tsx";
+ import { Field } from "../../../components/Field.tsx";
++import { VideomakerAgencyLinks } from "../../../components/VideomakerAgencyLinks.tsx";
+ 
+ export const Route = createFileRoute("/_app/buchungen/")({
+   validateSearch: z.object({ jahr: z.optional(z.int()), monat: z.optional(z.int().check(z.minimum(1), z.maximum(12))) }),
+@@ -314,6 +315,7 @@ function JournalPage() {
+                           </td>
+                         </tr>
+                       ))}
++                    {isOpen && <tr className="lines-row"><td colSpan={8}><VideomakerAgencyLinks subject={{kind:"journal",id:e.id}} editable={inhaber} /></td></tr>}
+                     {inhaber && isOpen && (e.sourceType === "manuell" || e.sourceType === "eroeffnung") && !e.reversal && !e.reversed && (
+                       <tr className="lines-row">
+                         <td colSpan={8} style={{ textAlign: "right" }}>
+diff --git a/apps/web/src/routes/_app/rechnungen/$id.tsx b/apps/web/src/routes/_app/rechnungen/$id.tsx
+index 7f1a7b4..16c75ad 100644
+--- a/apps/web/src/routes/_app/rechnungen/$id.tsx
++++ b/apps/web/src/routes/_app/rechnungen/$id.tsx
+@@ -31,6 +31,7 @@ import { cancelFinalInvoice, correctFinalInvoice, getInvoiceDetail } from "../..
+ import { ConfirmDialog } from "../../../components/ConfirmDialog.tsx";
+ import { Field } from "../../../components/Field.tsx";
+ import { OutcomeStatus, Status } from "../../../components/Status.tsx";
++import { VideomakerAgencyLinks } from "../../../components/VideomakerAgencyLinks.tsx";
+ 
+ export const Route = createFileRoute("/_app/rechnungen/$id")({
+   loader: ({ params }) => getInvoiceDetail({ data: params.id }),
+@@ -47,6 +48,7 @@ const titleOf = (invoice: Detail["invoice"]) => invoiceTitle(invoice.kind, invoi
+ function InvoicePage() {
+   const data = Route.useLoaderData();
+   const { invoice } = data;
++  const inhaber = Route.useRouteContext().user.role === "inhaber";
+   const draftAction = useAction();
+   // Nachweis der Leistungen, aus denen die Rechnung entstanden ist (#417)
+   const nachweis = <InvoiceServiceEntries entries={data.serviceEntries} />;
+@@ -153,6 +155,7 @@ function InvoicePage() {
+           }
+         />
+         {nachweis}
++        <VideomakerAgencyLinks subject={{kind:"invoice",id:invoice.id}} editable={inhaber} />
+       </>
+     );
+   }
+@@ -160,6 +163,7 @@ function InvoicePage() {
+     <>
+       <FinalInvoice data={data} />
+       {nachweis}
++      <VideomakerAgencyLinks subject={{kind:"invoice",id:invoice.id}} editable={inhaber} />
+     </>
+   );
+ }
+diff --git a/apps/web/src/server/functions/videomaker-agency.ts b/apps/web/src/server/functions/videomaker-agency.ts
+new file mode 100644
+index 0000000..02bac64
+--- /dev/null
++++ b/apps/web/src/server/functions/videomaker-agency.ts
+@@ -0,0 +1,42 @@
++import { createServerFn } from "@tanstack/react-start";
++import { getRequestHeaders } from "@tanstack/react-start/server";
++import { z } from "zod";
++import { authMiddleware, readMiddleware } from "../middleware.ts";
++import { UserError } from "../errors.ts";
++import { guardVideomakerSession } from "../videomaker-session.ts";
++import { agencyLinksVersion, listAgencyLinks, replaceAgencyLinks } from "../videomaker-agency-links.ts";
++import { verifyAgencyTicket } from "../videomaker-catalog-tickets.ts";
++
++const subject=z.object({kind:z.enum(["document","invoice","journal"]),id:z.uuid().transform(value=>value.toLowerCase())});
++// Disabled until cross-database logout fencing and an end-to-end security review are complete.
++const released=false;
++const configured=()=>released && process.env.HABEN_VIDEOMAKER_SESSION_GUARD==="required" && (process.env.HABEN_AGENCY_CATALOG_SECRET?.length??0)>=32;
++
++function videomakerCookie(headers: Headers): string | null {
++  const values=(headers.get("cookie")??"").split(";").map(value=>value.trim()).filter(value=>value.startsWith("kontrakurs_session="));
++  if(values.length!==1||!/^kontrakurs_session=[A-Za-z0-9_.-]{1,512}$/.test(values[0]!))return null;
++  return values[0]!.slice("kontrakurs_session=".length);
++}
++
++export const getVideomakerAgencyLinks = createServerFn({method:"GET"})
++  .middleware([readMiddleware]).validator(subject)
++  .handler(async ({data}) => {
++    if(!configured())return {enabled:false,items:[],version:null};
++    const items=await listAgencyLinks(data);return {enabled:true,items,version:agencyLinksVersion(items)};
++  });
++
++export const saveVideomakerAgencyLinks = createServerFn({method:"POST"})
++  .middleware([authMiddleware]).validator(z.object({subject,version:z.string().regex(/^[a-f0-9]{64}$/),tickets:z.array(z.string().max(2048)).max(100)}))
++  .handler(async ({data,context}) => {
++    if(!configured())throw new UserError("Die Videomaker-Agenturzuordnung ist noch nicht eingerichtet.");
++    const secret=process.env.HABEN_AGENCY_CATALOG_SECRET!,headers=getRequestHeaders(),cookie=videomakerCookie(headers);
++    if(!cookie)throw new UserError("Bitte erneut bei Videomaker anmelden.");
++    const selected=data.tickets.map(ticket=>verifyAgencyTicket(secret,cookie,ticket,Date.now()));
++    if(selected.some(item=>item===null))throw new UserError("Die Katalogauswahl ist abgelaufen. Bitte erneut laden.");
++    const version=await replaceAgencyLinks(context.user.id,data.subject,selected.filter(item=>item!==null),data.version,async()=>{
++      if(data.tickets.some(ticket=>verifyAgencyTicket(secret,cookie,ticket,Date.now())===null))return false;
++      const request=new Request("http://127.0.0.1/videomaker-agency-recheck",{method:"POST",headers});
++      return await guardVideomakerSession(request)===null;
++    });
++    return {ok:true,version};
++  });
+diff --git a/apps/web/src/server/videomaker-agency-links.ts b/apps/web/src/server/videomaker-agency-links.ts
+new file mode 100644
+index 0000000..989880f
+--- /dev/null
++++ b/apps/web/src/server/videomaker-agency-links.ts
+@@ -0,0 +1,61 @@
++import { sql } from "drizzle-orm";
++import { createHash } from "node:crypto";
++import { db, type Tx } from "./db/index.ts";
++import { withActor } from "./db/actor.ts";
++import { UserError } from "./errors.ts";
++import { validAgencyCatalogItem, type AgencyCatalogItem } from "./videomaker-catalog-tickets.ts";
++
++export type AgencySubject = { kind: "document" | "invoice" | "journal"; id: string };
++const subjectSchema = {
++  document: { table: "documents", column: "document_id" },
++  invoice: { table: "invoices", column: "invoice_id" },
++  journal: { table: "journal_entries", column: "journal_entry_id" },
++} as const;
++type LinkRow = { id: string; target_kind: AgencyCatalogItem["kind"]; target_id: string; target_name: string; target_platform: string | null };
++const itemKey = (item: AgencyCatalogItem) => `${item.kind}\0${item.id}`;
++/** Stable version prevents a stale tab from silently overwriting a newer assignment. */
++export function agencyLinksVersion(items: AgencyCatalogItem[]): string {
++  const values=items.map(item=>[item.kind,item.id,item.name,item.platform] as const).sort((a,b)=>{
++    const left=JSON.stringify(a),right=JSON.stringify(b);return left<right?-1:left>right?1:0;
++  });
++  return createHash("sha256").update(JSON.stringify(values)).digest("hex");
++}
++function subjectParts(subject: AgencySubject) {
++  const part = subjectSchema[subject.kind];
++  if (!part || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(subject.id)) throw new UserError("Ungültige Buchhaltungszuordnung.");
++  return part;
++}
++
++/** Returns only metadata; it never reads or alters accounting amounts or documents. */
++export async function listAgencyLinks(subject: AgencySubject): Promise<AgencyCatalogItem[]> {
++  const part=subjectParts(subject);
++  const rows = await db.execute(sql`select target_kind, target_id, target_name, target_platform from videomaker_agency_links where ${sql.identifier(part.column)} = ${subject.id}::uuid order by target_kind, target_name, target_id`);
++  return (rows as unknown as LinkRow[]).map(row => ({ kind: row.target_kind, id: row.target_id, name: row.target_name, platform: row.target_platform }));
++}
++
++/** Caller validates session-bound catalog tickets; the transaction records each change in Haben's audit log. */
++export async function replaceAgencyLinks(actor: string, subject: AgencySubject, items: AgencyCatalogItem[], expectedVersion: string, recheck: () => Promise<boolean>): Promise<string> {
++  const part=subjectParts(subject);
++  if (!actor || !/^[a-f0-9]{64}$/.test(expectedVersion) || items.length > 100 || items.some(item => !validAgencyCatalogItem(item)) || new Set(items.map(itemKey)).size !== items.length)
++    throw new UserError("Ungültige Agenturzuordnung.");
++  return withActor(actor, async (tx: Tx) => {
++    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`videomaker.agency:${subject.kind}:${subject.id}`}, 0))`);
++    const subjectRows=await tx.execute(sql`select id from ${sql.identifier(part.table)} where id=${subject.id}::uuid for key share`);
++    if (!subjectRows.length) throw new UserError("Der Buchhaltungseintrag wurde nicht gefunden.");
++    const existing=await tx.execute(sql`select id,target_kind,target_id,target_name,target_platform from videomaker_agency_links where ${sql.identifier(part.column)}=${subject.id}::uuid`);
++    const old=new Map((existing as unknown as LinkRow[]).map(row => [`${row.target_kind}\0${row.target_id}`,row]));
++    const before=(existing as unknown as LinkRow[]).map(row=>({kind:row.target_kind,id:row.target_id,name:row.target_name,platform:row.target_platform}));
++    if(agencyLinksVersion(before)!==expectedVersion)throw new UserError("Die Zuordnung wurde zwischenzeitlich geändert. Bitte neu laden.");
++    const selected=new Set(items.map(itemKey));
++    for (const [key,row] of old) if (!selected.has(key)) await tx.execute(sql`delete from videomaker_agency_links where id=${row.id}::uuid`);
++    for (const item of items) {
++      const row=old.get(itemKey(item));
++      if (!row) await tx.execute(sql`insert into videomaker_agency_links (${sql.identifier(part.column)},target_kind,target_id,target_name,target_platform) values (${subject.id}::uuid,${item.kind},${item.id},${item.name},${item.platform})`);
++      else if (row.target_name !== item.name || row.target_platform !== item.platform)
++        await tx.execute(sql`update videomaker_agency_links set target_name=${item.name},target_platform=${item.platform} where id=${row.id}::uuid`);
++    }
++    // A cancelled/expired login or stale ticket aborts all writes and audit rows.
++    if (!await recheck()) throw new UserError("Sitzung oder Katalogauswahl abgelaufen. Bitte erneut laden.");
++    return agencyLinksVersion(items);
++  });
++}
+diff --git a/apps/web/src/server/videomaker-catalog-tickets.ts b/apps/web/src/server/videomaker-catalog-tickets.ts
+new file mode 100644
+index 0000000..89419c9
+--- /dev/null
++++ b/apps/web/src/server/videomaker-catalog-tickets.ts
+@@ -0,0 +1,53 @@
++import { createHmac, timingSafeEqual } from "node:crypto";
++
++/** Public display metadata only; the signed ticket is not a login credential. */
++export type AgencyCatalogItem = { kind: "channel" | "project" | "platform"; id: string; name: string; platform: string | null };
++const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
++const unsafe = /[\u0000-\u001f\u007f]/;
++const ttl = 120_000;
++const digest = (secret: string, data: string) => createHmac("sha256", secret).update(data).digest("base64url");
++const safeEqual = (left: string, right: string) => {
++  const a = Buffer.from(left), b = Buffer.from(right);
++  return a.length === b.length && timingSafeEqual(a, b);
++};
++const text = (value: unknown, limit: number): value is string =>
++  typeof value === "string" && value.length > 0 && value.length <= limit && value.trim() === value && !unsafe.test(value);
++
++export function validAgencyCatalogItem(item: unknown): item is AgencyCatalogItem {
++  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
++  const x = item as Record<string, unknown>;
++  if (!text(x.name, 160) || !text(x.id, 80) || !["channel", "project", "platform"].includes(x.kind as string)) return false;
++  if ((x.kind === "channel" || x.kind === "project") && !uuid.test(x.id)) return false;
++  if (x.kind === "project") return x.platform === null;
++  if (!text(x.platform, 80)) return false;
++  return x.kind !== "platform" || x.id === x.platform;
++}
++
++/** The caller must have verified this exact Videomaker session before issuing. */
++export function issueAgencyTicket(secret: string, session: string, item: AgencyCatalogItem, now: number): string {
++  if (secret.length < 32 || !text(session, 512) || !validAgencyCatalogItem(item) || !Number.isSafeInteger(now) || now < 0 || now > Number.MAX_SAFE_INTEGER - ttl)
++    throw new Error("Katalognachweis nicht verfügbar.");
++  const binding = digest(secret, `videomaker-agency-session/v1\0${session}`);
++  const safeItem={kind:item.kind,id:item.id,name:item.name,platform:item.platform};
++  const payload = Buffer.from(JSON.stringify({ v: 1, item:safeItem, binding, expires: now + ttl })).toString("base64url");
++  return `${payload}.${digest(secret, `videomaker-agency-ticket/v1\0${payload}`)}`;
++}
++
++/** A valid ticket never replaces a fresh authentication/session-guard check. */
++export function verifyAgencyTicket(secret: string, session: string, ticket: string, now: number): AgencyCatalogItem | null {
++  if (secret.length < 32 || !text(session, 512) || typeof ticket !== "string" || ticket.length > 2048 || !Number.isSafeInteger(now) || now < 0) return null;
++  const parts = ticket.split(".");
++  if (parts.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(parts[0]!) || !/^[A-Za-z0-9_-]{43}$/.test(parts[1]!)) return null;
++  if (!safeEqual(parts[1]!, digest(secret, `videomaker-agency-ticket/v1\0${parts[0]}`))) return null;
++  try {
++    const bytes = Buffer.from(parts[0]!, "base64url");
++    if (bytes.toString("base64url") !== parts[0]) return null;
++    const value: unknown = JSON.parse(bytes.toString("utf8"));
++    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
++    const payload = value as Record<string, unknown>;
++    if (payload.v !== 1 || !validAgencyCatalogItem(payload.item) || typeof payload.binding !== "string" ||
++        !safeEqual(payload.binding, digest(secret, `videomaker-agency-session/v1\0${session}`)) ||
++        typeof payload.expires !== "number" || !Number.isSafeInteger(payload.expires) || payload.expires <= now || payload.expires - now > ttl) return null;
++    return payload.item;
++  } catch { return null; }
++}
+diff --git a/deploy/haben.env.example b/deploy/haben.env.example
+index 57ba90f..0157cfd 100644
+--- a/deploy/haben.env.example
++++ b/deploy/haben.env.example
+@@ -38,3 +38,7 @@ ENABLE_BANKING_KEY_FILE=/run/secrets/enablebanking.pem
+ # OIDC_GROUPS_CLAIM=groups
+ # OIDC_GROUP_INHABER=haben-inhaber
+ # OIDC_GROUP_STEUERBERATUNG=haben-steuerberatung
++
++# Videomaker-Agenturzuordnung: vorbereitet, derzeit im Code fest deaktiviert.
++# Erst nach geprüfter Freigabe dasselbe separate Secret wie im Videomaker-Dienst setzen.
++# HABEN_AGENCY_CATALOG_SECRET=

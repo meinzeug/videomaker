@@ -13,6 +13,7 @@ import styles from "../../../styles/auswertungen.css?url";
 import { ERSTES_JAHR, LETZTES_JAHR } from "../../../lib/jahre.ts";
 import { ConfirmDialog } from "../../../components/ConfirmDialog.tsx";
 import { Field } from "../../../components/Field.tsx";
+import { VideomakerAgencyLinks } from "../../../components/VideomakerAgencyLinks.tsx";
 
 export const Route = createFileRoute("/_app/buchungen/")({
   validateSearch: z.object({ jahr: z.optional(z.int()), monat: z.optional(z.int().check(z.minimum(1), z.maximum(12))) }),
@@ -314,6 +315,7 @@ function JournalPage() {
                           </td>
                         </tr>
                       ))}
+                    {isOpen && <tr className="lines-row"><td colSpan={8}><VideomakerAgencyLinks subject={{kind:"journal",id:e.id}} editable={inhaber} /></td></tr>}
                     {inhaber && isOpen && (e.sourceType === "manuell" || e.sourceType === "eroeffnung") && !e.reversal && !e.reversed && (
                       <tr className="lines-row">
                         <td colSpan={8} style={{ textAlign: "right" }}>
