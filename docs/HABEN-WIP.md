@@ -18,3 +18,18 @@ Das Entfernen alter Datenbanktabellen ist ein separater, ausdrücklich geprüfte
 Schritt. Vorher müssen die Browser-Warteschlangen geprüft und Daten gesichert
 werden. Siehe `docs/remove-legacy-finance.md` und
 `apps/buchhaltung/.videomaker/ANMELDUNG.md`.
+
+## Lokaler Browser-Build, 14.11.2026
+
+Der Versuch, den aktuellen Haben-Webstand für einen isolierten Browsertest zu
+bauen, wurde bei vollem Swap und nur noch rund 531 MiB verfügbarem RAM
+kontrolliert beendet. Die unvollständige Ausgabe unter
+`/tmp/videomaker-haben-next/apps/buchhaltung/apps/web/.output` darf nicht als
+fertiger Build verwendet werden. Der Testbuild erzeugte außerdem den
+Compiler-Cache `/home/dennis/.videomaker-guard-pg18.Fc066Q/node-compile-cache`
+(rund 25 MiB). Die automatische Freigabeprüfung lehnte den gezielten
+Löschbefehl ab; beide Ausgaben bleiben unverändert liegen. Ein weiterer
+vollständiger Build braucht ausreichend Speicher und einen abgesprochenen
+Buildslot. Der echte OIDC-Dienst-/Haben-Callback-Test mit isoliertem
+PostgreSQL 18 ist unabhängig davon bestanden; ein echter Browser-/Proxytest
+steht aus.
