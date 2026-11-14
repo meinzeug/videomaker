@@ -23,10 +23,10 @@ test('isolated paired camera v2 HTTP controls and telemetry',{skip:!enabled,time
  const path=`/api/camera-devices/${id}/commands`;
  assert.equal((await poll('idle',null,null,null,false,true)).status,200);
  const unauthorized=await post('/api/camera-devices/poll',phone,{id,sequence:++sequence,name:'Fake',capability:'remote-record-v2',phase:'idle',paused:null,cameraFront:false,cameraCanSwitch:true,recordingId:null,projectId:null,ack:[]});assert.equal(unauthorized.status,403);
- const switchId=randomUUID(),switchCommand={id:switchId,type:'camera_switch',recordingId:switchId,projectId:null};
+ const switchId=randomUUID(),switchCommand={id:switchId,type:'camera_switch',recordingId:switchId,projectId:null,cameraFrom:false};
  assert.equal((await post(path,browser,switchCommand,{origin:'https://wrong.invalid'})).status,403);
  assert.equal((await post(path,browser,switchCommand)).status,201);
- let r=await poll('idle',null,null,null,false,true);assert.equal(r.status,200);assert.equal((await r.json()).commands[0].type,'camera_switch');
+ let r=await poll('idle',null,null,null,false,true);assert.equal(r.status,200);const switchDelivery=(await r.json()).commands[0];assert.equal(switchDelivery.type,'camera_switch');assert.equal(switchDelivery.cameraFrom,false);
  assert.equal((await poll('idle',null,null,null,true,true,[{id:switchId,result:'accepted'}])).status,200);
  r=await fetch(base+'/api/camera-devices',{headers:{cookie:browser}});assert.equal((await r.json()).devices[0].cameraFront,true);
  r=await post('/api/projects',browser,{title:'Synthetic camera test',script:'fixture',sources:[],titles:[],thumbnail:'',broll:[]});assert.equal(r.status,201);const project=(await r.json()).id,recording=randomUUID(),startId=randomUUID();

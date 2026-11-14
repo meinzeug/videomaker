@@ -8,7 +8,7 @@ const isUuid=(value:unknown):value is string=>typeof value==='string'&&/^[0-9a-f
 export type CameraPhase='idle'|'preparing'|'recording'|'finalizing'|'ready'|'partial'|'error';
 export type CameraReceipt='accepted'|'duplicate'|'rejected'|'expired';
 export type CameraHeartbeat={id:string;sequence:number;name:string;capability:'remote-record-v1'|'remote-record-v2';phase:CameraPhase;paused:boolean|null;cameraFront:boolean|null;cameraCanSwitch:boolean;recordingId:string|null;projectId:string|null;sizeBytes:number|null;sha256:string|null;ack:{id:string;result:CameraReceipt}[]};
-export type CameraRequest={id:string;type:'record_start'|'record_stop'|'record_pause'|'record_resume'|'camera_switch';recordingId:string;projectId:string|null};
+export type CameraRequest={id:string;type:'record_start'|'record_stop'|'record_pause'|'record_resume'|'camera_switch';recordingId:string;projectId:string|null;cameraFrom:boolean|null};
 export type CameraClock={runtimeId:string;wall:number;tick:number};
 export type CameraLimits={devicesPerOwner:number;devicesTotal:number;commandsPerDevice:number;commandsTotal:number;visible:number};
 export const CAMERA_LIMITS:Readonly<CameraLimits>=Object.freeze({devicesPerOwner:256,devicesTotal:10000,commandsPerDevice:1000,commandsTotal:100000,visible:100});
@@ -36,9 +36,9 @@ export function parseCameraHeartbeat(input:unknown):CameraHeartbeat {
 }
 export function parseCameraRequest(input:unknown):CameraRequest {
  if(!record(input)||!isUuid(input.id)||!isUuid(input.recordingId)||!['record_start','record_stop','record_pause','record_resume','camera_switch'].includes(String(input.type)))throw new CameraRemoteError('invalid','Ungültiger Kamerabefehl.');
- if(input.type==='camera_switch'&&canonical(input.id)!==canonical(input.recordingId))throw new CameraRemoteError('invalid','Ungültige Kameraauswahl.');
+ if(input.type==='camera_switch'&&(canonical(input.id)!==canonical(input.recordingId)||typeof input.cameraFrom!=='boolean')||input.type!=='camera_switch'&&input.cameraFrom!==undefined&&input.cameraFrom!==null)throw new CameraRemoteError('invalid','Ungültige Kameraauswahl.');
  if(input.type==='record_start'?!isUuid(input.projectId):input.projectId!==undefined&&input.projectId!==null)throw new CameraRemoteError('invalid','Ungültige Projektzuordnung.');
- return {id:canonical(input.id),type:input.type as CameraRequest['type'],recordingId:canonical(input.recordingId),projectId:typeof input.projectId==='string'?canonical(input.projectId):null};
+ return {id:canonical(input.id),type:input.type as CameraRequest['type'],recordingId:canonical(input.recordingId),projectId:typeof input.projectId==='string'?canonical(input.projectId):null,cameraFrom:input.type==='camera_switch'?input.cameraFrom as boolean:null};
 }
 export const CAMERA_REMOTE_SCHEMA=`
  CREATE TABLE IF NOT EXISTS camera_remote_devices(id TEXT PRIMARY KEY,owner_hash TEXT NOT NULL CHECK(length(owner_hash)=64 AND owner_hash NOT GLOB '*[^0-9a-f]*'),sequence INTEGER NOT NULL CHECK(typeof(sequence)='integer' AND sequence>0 AND sequence<=9007199254740991),name TEXT NOT NULL,phase TEXT NOT NULL CHECK(phase IN ('idle','preparing','recording','finalizing','ready','partial','error')),recording_id TEXT,project_id TEXT,updated_at INTEGER NOT NULL,runtime_id TEXT NOT NULL,updated_tick INTEGER NOT NULL);
@@ -64,6 +64,10 @@ export const CAMERA_REMOTE_SCHEMA=`
  CREATE TABLE IF NOT EXISTS camera_remote_v2_state(device_id TEXT PRIMARY KEY,sequence INTEGER NOT NULL,paused INTEGER CHECK(paused IN (0,1) OR paused IS NULL),camera_front INTEGER CHECK(camera_front IN (0,1) OR camera_front IS NULL),can_switch INTEGER NOT NULL CHECK(can_switch IN (0,1)));
  CREATE TABLE IF NOT EXISTS camera_remote_controls(id TEXT PRIMARY KEY,device_id TEXT NOT NULL,recording_id TEXT NOT NULL,type TEXT NOT NULL CHECK(type IN ('record_pause','record_resume','camera_switch')),result TEXT NOT NULL DEFAULT 'queued' CHECK(result IN ('queued','server_expired','accepted','duplicate','rejected','expired')),created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,runtime_id TEXT NOT NULL,created_tick INTEGER NOT NULL,expires_tick INTEGER NOT NULL,delivered_at INTEGER,result_at INTEGER);
  CREATE INDEX IF NOT EXISTS camera_remote_controls_device ON camera_remote_controls(device_id,result,expires_tick);
+ CREATE TABLE IF NOT EXISTS camera_remote_switch_expectations(id TEXT PRIMARY KEY,from_front INTEGER NOT NULL CHECK(from_front IN (0,1)));
+ CREATE TRIGGER IF NOT EXISTS camera_remote_switch_expectations_no_delete BEFORE DELETE ON camera_remote_switch_expectations BEGIN SELECT RAISE(ABORT,'camera switch expectations cannot be deleted'); END;
+ CREATE TRIGGER IF NOT EXISTS camera_remote_switch_expectations_no_update BEFORE UPDATE ON camera_remote_switch_expectations BEGIN SELECT RAISE(ABORT,'camera switch expectations cannot be changed'); END;
+ CREATE TRIGGER IF NOT EXISTS camera_remote_switch_expectations_insert_guard BEFORE INSERT ON camera_remote_switch_expectations BEGIN SELECT CASE WHEN EXISTS(SELECT 1 FROM camera_remote_switch_expectations e WHERE e.id=NEW.id OR e.rowid=NEW.rowid) THEN RAISE(ABORT,'camera switch expectation already exists') END; END;
  CREATE TRIGGER IF NOT EXISTS camera_remote_controls_insert_guard BEFORE INSERT ON camera_remote_controls BEGIN
   SELECT CASE WHEN EXISTS(SELECT 1 FROM camera_remote_controls c WHERE c.id=NEW.id OR c.rowid=NEW.rowid) THEN RAISE(ABORT,'camera control already exists') END;
  END;
@@ -160,9 +164,10 @@ export function receiveCameraHeartbeat(db:Database.Database,input:CameraHeartbea
   if(pending.length){db.prepare('UPDATE camera_remote_commands SET delivered_at=? WHERE id=? AND delivery_known=1 AND delivered_at IS NULL').run(clock.wall,pending[0].id);return pending;}
   if(input.capability!=='remote-record-v2')return [];
   if(input.phase==='idle'&&input.cameraCanSwitch){
-   const switches=db.prepare("SELECT id,type,recording_id AS recordingId,NULL AS projectId,MIN(expires_tick-?,expires_at-?) AS remainingMs FROM camera_remote_controls WHERE device_id=? AND type='camera_switch' AND result='queued' AND runtime_id=? AND created_tick<=? AND expires_tick>? AND created_at<=? AND expires_at>? ORDER BY created_tick,id LIMIT 1").all(clock.tick,clock.wall,input.id,clock.runtimeId,clock.tick,clock.tick,clock.wall,clock.wall) as {id:string}[];
+   db.prepare("UPDATE camera_remote_controls SET result='rejected',result_at=? WHERE device_id=? AND type='camera_switch' AND result='queued' AND delivered_at IS NULL AND id IN (SELECT id FROM camera_remote_switch_expectations WHERE from_front<>?)").run(clock.wall,input.id,input.cameraFront?1:0);
+   const switches=db.prepare("SELECT c.id,c.type,c.recording_id AS recordingId,NULL AS projectId,e.from_front AS cameraFrom,MIN(c.expires_tick-?,c.expires_at-?) AS remainingMs FROM camera_remote_controls c JOIN camera_remote_switch_expectations e ON e.id=c.id WHERE c.device_id=? AND c.type='camera_switch' AND c.result='queued' AND e.from_front=? AND c.runtime_id=? AND c.created_tick<=? AND c.expires_tick>? AND c.created_at<=? AND c.expires_at>? ORDER BY c.created_tick,c.id LIMIT 1").all(clock.tick,clock.wall,input.id,input.cameraFront?1:0,clock.runtimeId,clock.tick,clock.tick,clock.wall,clock.wall) as {id:string;cameraFrom:number}[];
    if(switches.length)db.prepare('UPDATE camera_remote_controls SET delivered_at=? WHERE id=? AND delivered_at IS NULL').run(clock.wall,switches[0].id);
-   if(switches.length)return switches;
+   if(switches.length)return switches.map(item=>({...item,cameraFrom:!!item.cameraFrom}));
   }
   if(input.phase!=='recording')return [];
   const controls=db.prepare("SELECT id,type,recording_id AS recordingId,NULL AS projectId,MIN(expires_tick-?,expires_at-?) AS remainingMs FROM camera_remote_controls WHERE device_id=? AND recording_id=? AND result='queued' AND runtime_id=? AND created_tick<=? AND expires_tick>? AND created_at<=? AND expires_at>? ORDER BY created_tick,id LIMIT 1").all(clock.tick,clock.wall,input.id,input.recordingId,clock.runtimeId,clock.tick,clock.tick,clock.wall,clock.wall) as {id:string}[];
@@ -209,12 +214,12 @@ export function queueCameraRequest(db:Database.Database,deviceId:string,request:
 function queueCameraControl(db:Database.Database,deviceId:string,request:CameraRequest,clock:CameraClock,limits:CameraLimits){
  return db.transaction(()=>{
   const old=db.prepare('SELECT device_id AS deviceId,recording_id AS recordingId,type,result FROM camera_remote_controls WHERE id=?').get(request.id) as {deviceId:string;recordingId:string;type:string;result:string}|undefined;
-  if(old){if(old.deviceId!==deviceId||old.recordingId!==request.recordingId||old.type!==request.type)throw new CameraRemoteError('conflict','Befehls-ID wurde bereits anders verwendet.');return {id:request.id,created:false,result:old.result};}
+  if(old){const expected=old.type==='camera_switch'?db.prepare('SELECT from_front AS value FROM camera_remote_switch_expectations WHERE id=?').get(request.id) as {value:number}|undefined:undefined;if(old.deviceId!==deviceId||old.recordingId!==request.recordingId||old.type!==request.type||(old.type==='camera_switch'&&expected?.value!==(request.cameraFrom?1:0)))throw new CameraRemoteError('conflict','Befehls-ID wurde bereits anders verwendet.');return {id:request.id,created:false,result:old.result};}
   if(request.id===cameraStopIntentId(deviceId,request.recordingId)||db.prepare('SELECT 1 FROM camera_stop_intents WHERE intent_id=?').get(request.id)||db.prepare('SELECT 1 FROM camera_remote_commands WHERE id=?').get(request.id))throw new CameraRemoteError('conflict','Befehls-ID wurde bereits anders verwendet.');
   const device=db.prepare('SELECT d.phase,d.recording_id AS recordingId,d.project_id AS projectId,d.runtime_id AS runtimeId,d.updated_tick AS updatedTick,d.updated_at AS updatedAt,v.sequence,v.paused,v.camera_front AS cameraFront,v.can_switch AS canSwitch FROM camera_remote_devices d JOIN camera_remote_v2_state v ON v.device_id=d.id AND v.sequence=d.sequence WHERE d.id=?').get(deviceId) as {phase:string;recordingId:string|null;projectId:string|null;runtimeId:string;updatedTick:number;updatedAt:number;paused:number|null;cameraFront:number|null;canSwitch:number}|undefined;
   if(!device||device.runtimeId!==clock.runtimeId||device.updatedTick>clock.tick||device.updatedTick<=clock.tick-10000||device.updatedAt>clock.wall||device.updatedAt<=clock.wall-10000)throw new CameraRemoteError('offline','Kamera ist nicht erreichbar.');
   if(request.type==='camera_switch'){
-   if(device.phase!=='idle'||device.canSwitch!==1||device.cameraFront===null||db.prepare("SELECT 1 FROM camera_remote_commands WHERE device_id=? AND type='record_start' AND result IN ('queued','server_expired','accepted','duplicate') AND observed_final_at IS NULL AND NOT (result='server_expired' AND delivery_known=1 AND delivered_at IS NULL) LIMIT 1").get(deviceId))throw new CameraRemoteError('conflict','Die Kamera ist für den Wechsel nicht bereit.');
+   if(device.phase!=='idle'||device.canSwitch!==1||device.cameraFront===null||device.cameraFront!==(request.cameraFrom?1:0)||db.prepare("SELECT 1 FROM camera_remote_commands WHERE device_id=? AND type='record_start' AND result IN ('queued','server_expired','accepted','duplicate') AND observed_final_at IS NULL AND NOT (result='server_expired' AND delivery_known=1 AND delivered_at IS NULL) LIMIT 1").get(deviceId))throw new CameraRemoteError('conflict','Die Kamera ist für den Wechsel nicht bereit.');
   }else{
    if(device.phase!=='recording'||device.recordingId!==request.recordingId||device.paused!==(request.type==='record_pause'?0:1))throw new CameraRemoteError('conflict','Die Kamera bestätigt diesen Aufnahmezustand nicht.');
    if(!device.projectId||!db.prepare('SELECT 1 FROM camera_project_claims c JOIN projects p ON p.id=c.project_id WHERE c.device_id=? AND c.recording_id=? AND c.project_id=? AND c.closed_at IS NULL').get(deviceId,request.recordingId,device.projectId))throw new CameraRemoteError('conflict','Keine passende Webaufnahme.');
@@ -224,6 +229,7 @@ function queueCameraControl(db:Database.Database,deviceId:string,request:CameraR
   const total=(db.prepare('SELECT COUNT(*) AS n FROM camera_remote_controls').get() as {n:number}).n;
   if(owned>=limits.commandsPerDevice||total>=limits.commandsTotal)throw new CameraRemoteError('capacity','Kamerabefehlsgrenze erreicht.');
   db.prepare("INSERT INTO camera_remote_controls(id,device_id,recording_id,type,created_at,expires_at,runtime_id,created_tick,expires_tick) VALUES(?,?,?,?,?,?,?,?,?)").run(request.id,deviceId,request.recordingId,request.type,clock.wall,clock.wall+CAMERA_REMOTE_TTL_MS,clock.runtimeId,clock.tick,clock.tick+CAMERA_REMOTE_TTL_MS);
+  if(request.type==='camera_switch')db.prepare('INSERT INTO camera_remote_switch_expectations(id,from_front) VALUES(?,?)').run(request.id,request.cameraFrom?1:0);
   return {id:request.id,created:true,result:'queued'};
  }).immediate();
 }

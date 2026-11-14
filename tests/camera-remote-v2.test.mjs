@@ -71,7 +71,7 @@ test('camera switch requires an idle, device-confirmed switchable camera and is 
  const db=new Database(':memory:');db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY)');ensureCameraRemoteSchema(db);
  try{
   receiveCameraHeartbeat(db,beat(),clock(1000),owner,undefined,true);
-  const id=randomUUID(),change=cmd('camera_switch',{id,recordingId:id});
+  const id=randomUUID(),change=cmd('camera_switch',{id,recordingId:id,cameraFrom:false});
   assert.equal(queueCameraRequest(db,device,change,clock(1010)).created,true);
   assert.equal(receiveCameraHeartbeat(db,beat(),clock(1020),owner,undefined,true)[0].type,'camera_switch');
   const ack=beat('idle',null,[{id,result:'accepted'}]);
@@ -80,14 +80,14 @@ test('camera switch requires an idle, device-confirmed switchable camera and is 
   assert.equal(queueCameraRequest(db,device,change,clock(1032)).created,false);
   assert.throws(()=>parseCameraRequest({...change,recordingId:randomUUID()}),/Kameraauswahl/);
   receiveCameraHeartbeat(db,{...beat(),cameraCanSwitch:false},clock(1040),owner,undefined,true);
-  const second=randomUUID();assert.throws(()=>queueCameraRequest(db,device,cmd('camera_switch',{id:second,recordingId:second}),clock(1050)),/nicht bereit/);
+  const second=randomUUID();assert.throws(()=>queueCameraRequest(db,device,cmd('camera_switch',{id:second,recordingId:second,cameraFrom:true}),clock(1050)),/nicht bereit/);
  }finally{db.close();}
 });
 test('a queued camera switch prevents a competing recording start',()=>{
  const db=new Database(':memory:');db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY)');ensureCameraRemoteSchema(db);db.prepare('INSERT INTO projects VALUES(?)').run(project);
  try{
   receiveCameraHeartbeat(db,beat(),clock(1000),owner,undefined,true);
-  const id=randomUUID();queueCameraRequest(db,device,cmd('camera_switch',{id,recordingId:id}),clock(1010));
+  const id=randomUUID();queueCameraRequest(db,device,cmd('camera_switch',{id,recordingId:id,cameraFrom:false}),clock(1010));
   assert.throws(()=>queueCameraRequest(db,device,cmd('record_start'),clock(1020)),/verarbeitet bereits/);
  }finally{db.close();}
 });
@@ -107,5 +107,15 @@ test('an incompatible older control schema is refused without rewriting its data
   db.prepare("INSERT INTO camera_remote_controls(id,device_id,recording_id,type,created_at,expires_at,runtime_id,created_tick,expires_tick) VALUES(?,?,?,'record_pause',?,?,?,?,?)").run(randomUUID(),device,recording,1,9991,runtime,1,9991);
   assert.throws(()=>ensureCameraRemoteSchema(db),/sichere Migration/);
   assert.equal(db.prepare('SELECT count(*) AS n FROM camera_remote_controls').get().n,1);
+ }finally{db.close();}
+});
+
+test('a stale switch is rejected before delivery and cannot toggle a locally changed camera back',()=>{
+ const db=new Database(':memory:');db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY)');ensureCameraRemoteSchema(db);
+ try{
+  receiveCameraHeartbeat(db,beat(),clock(1000),owner,undefined,true);
+  const id=randomUUID(),change=cmd('camera_switch',{id,recordingId:id,cameraFrom:false});queueCameraRequest(db,device,change,clock(1010));
+  assert.deepEqual(receiveCameraHeartbeat(db,{...beat(),cameraFront:true},clock(1020),owner,undefined,true),[]);
+  assert.equal(db.prepare('SELECT result FROM camera_remote_controls WHERE id=?').get(id).result,'rejected');
  }finally{db.close();}
 });
