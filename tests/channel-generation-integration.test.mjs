@@ -29,11 +29,14 @@ test('isolated mocked AI generation assigns channel, preserves legacy and handle
   db.prepare('INSERT INTO channels(id,name,platform,handle,created_at) VALUES(?,?,?,?,?)').run(markerId,markerName,'youtube','','2026-01-01');
   assert.ok((await call('/api/channels')).data.channels.some(x=>x.id===markerId&&x.name===markerName),'Server muss die markierte Fixture-Datenbank verwenden');
   const channel=(await call('/api/channels','POST',{name:'Testkanal',platform:'tiktok',handle:'@test'})).data;
-  function seed(value){const id=randomUUID();db.prepare('INSERT INTO research_reports VALUES(?,?,?,?)').run(id,'2026-01-01T00:00:00Z',JSON.stringify([{url:'https://example.org/a'}]),JSON.stringify({marker:value}));return id;}
+  function seed(value){const id=randomUUID(),url='https://example.org/a';db.prepare('INSERT INTO research_reports VALUES(?,?,?,?)').run(id,'2026-01-01T00:00:00Z',JSON.stringify([{url}]),JSON.stringify({marker:value,sources:[{url}],source_excerpts:[{url,status:'retrieved',text:'Synthetischer Originalbeleg für die eindeutig markierte Recherche.'}]}));return id;}
   function callsFor(value){return readFileSync(join(fixture,'ai-requests.log'),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(messages=>messages?.at(-1)?.content?.includes(value)).length;}
   function factCallsFor(value){return readFileSync(join(fixture,'ai-requests.log'),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(messages=>messages?.[0]?.content?.includes('strukturiertes Faktenblatt')&&messages?.at(-1)?.content?.includes(value)).length;}
   let response=await call('/api/research','POST',{topic:'Testthema',sources:[],channelId:channel.id});
   assert.equal(response.status,200);assert.ok(response.data.id);assert.equal(response.data.report.search_requests,2);
+  assert.equal(response.data.report.source_mode,'web');assert.equal(response.data.report.source_access.length,3);
+  assert.ok(response.data.report.source_access.every(item=>item.status==='retrieved'));
+  assert.ok(response.data.report.source_excerpts.every(item=>item.text.includes('Synthetischer Originaltext')));
   const boundResearch=response.data.id;
   assert.equal((await call('/api/generate','POST',{imageMode:'descriptions',researchId:boundResearch,channelId:randomUUID()})).status,400);
   db.prepare('UPDATE channels SET name=? WHERE id=?').run('Zwischenzeitlich geändert',channel.id);

@@ -19,6 +19,13 @@ test('facts require complete contiguous original evidence and retain uncertainty
  assert.match(facts.hinweise_fuer_dennis.join(' '),/beweisen nicht|nicht automatisch/iu);
 });
 
+test('exact occurrence alone is not reported as semantic verification',()=>{
+ const snippet='Sie wurde in einer Küche interviewt und sprach über die geplante Demo.';
+ const raw={...base,fakten:[{text:'Sie selbst nahm an der Demonstration teil.',quellen:[first],belege:[{text:snippet,quelle:first}]}]};
+ let result;try{result=validateFactSheet(raw,sources,selected('retrieved',snippet),true);}catch{return;}
+ if(result.fakten.length)assert.match(result.hinweise_fuer_dennis.join(' '),/beweisen nicht|nicht automatisch/iu,'a mechanical match is not semantic proof');
+});
+
 test('invented, shortened-to-match and overlong source evidence never silently verifies a fact',()=>{
  const evidence=[cited+' frei erfundener Nachsatz',sourceText+' erfundene Fortsetzung','x'.repeat(40001)];
  for(const text of evidence){
