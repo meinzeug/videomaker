@@ -2,8 +2,21 @@
 // docs/channel-generation-tests.md. No OpenRouter request leaves this process.
 const fs=require('node:fs');
 const path=require('node:path');
+const {EventEmitter}=require('node:events');
+const dns=require('node:dns/promises');
+const https=require('node:https');
+const {syncBuiltinESMExports}=require('node:module');
 const directory=process.env.CHANNEL_GENERATION_FIXTURE_DIR;
 if(!directory||fs.readFileSync(path.join(directory,'.channel-fixture'),'utf8')!=='isolated-channel-generation\n')throw new Error('Channel mock requires its own marked fixture.');
+// The source reader uses DNS and node:https directly, not fetch. Mock both at
+// the process boundary so this fixture cannot make *any* remote connection.
+const text='Synthetischer Originaltext für diesen Test. Er enthält eine konkrete überprüfbare Aussage mit ausreichend Kontext für den Quellenleser. Weitere Angaben sind vollständig erfunden und nur für die Testumgebung bestimmt.';
+dns.Resolver=class {async resolve4(host){if(!['example.org','example.net'].includes(host))throw new Error('DNS blocked in fixture');return ['93.184.216.34'];}cancel(){}};
+https.request=(options,callback)=>{
+ if(!options||!['example.org','example.net'].includes(options.servername)||options.hostname!=='93.184.216.34'||options.port!==443)throw new Error('HTTPS blocked in fixture');
+ const req=new EventEmitter();req.end=()=>process.nextTick(()=>{const res=new EventEmitter();res.statusCode=200;res.headers={'content-type':'text/plain; charset=utf-8','content-length':String(Buffer.byteLength(text))};res.destroy=()=>{};callback(res);process.nextTick(()=>{res.emit('data',Buffer.from(text));res.emit('end');});});return req;
+};
+syncBuiltinESMExports();
 globalThis.fetch=async function(input,init){
  const url=typeof input==='string'?input:input.url;
  if(!url.startsWith('https://openrouter.ai/'))throw new Error('All outbound requests are blocked in this synthetic fixture.');
@@ -21,7 +34,12 @@ globalThis.fetch=async function(input,init){
  const isGrokScript=!request.tools&&String(request.model||'').startsWith('x-ai/grok-')&&!isFacts;
  const sourceUrl=prompt.match(/https:\/\/[^"\\\s]+/)?.[0]||urls[0];
  const marker=prompt.match(/TEST_[A-Z_]+/)?.[0]||'Beispiel';
- const facts={fakten:[{text:`Synthetischer Testbefund ${marker}`,quellen:[sourceUrl]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[],...(prompt.includes('skriptplan')?{skriptplan:{teile:['Ein zusammenhängender Sprechertext']}}:{})};
+ let sourceText='';
+ if(isFacts){
+  const prefix='Erstelle das Faktenblatt ausschließlich aus diesen Daten: ',end=prompt.indexOf(' Ergänze ein Feld "skriptplan":');
+  try{const snapshot=JSON.parse(prompt.slice(prefix.length,end<0?undefined:end));sourceText=snapshot.recherche?.source_excerpts?.find(item=>item.url===sourceUrl)?.text||'';}catch{/* Missing evidence remains an invalid fixture answer. */}
+ }
+ const facts={fakten:[{text:`Synthetischer Testbefund ${marker}`,quellen:[sourceUrl],belege:[{text:sourceText,quelle:sourceUrl}]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[],...(prompt.includes('skriptplan')?{skriptplan:{teile:['Ein zusammenhängender Sprechertext']}}:{})};
  const cta='Wenn ihr weiter Klartext wollt, lasst ein Abo da und gebt dem Video einen Daumen nach oben.';
  const outro='Ich bin gespannt, wie ihr das seht, denn dieses Video ist jetzt mit Absicht zu Ende. Ciao, bis bald!';
  let channel='Kontrakurs';
