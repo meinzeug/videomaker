@@ -87,6 +87,15 @@ Sitzungsdaten. Dies ist ein Baustein und noch keine Korrektur des Haben-Wächter
 Der vom Anbieter signierte Referenz-Claim und dessen unveränderliche Bindung an
 die konkrete Haben-Sitzung beim Callback fehlen weiterhin.
 
+Die isolierte Haben-Callback-Gegenprobe stellt außerdem im Testanbieter einen
+Claim `videomaker_session_ref` aus der tatsächlich gebundenen Provider-Session
+aus. Der Test prüft die ID-Token-Signatur mit den Provider-JWKS, Issuer und
+Audience sowie die Übereinstimmung der Referenz mit dem ursprünglichen Cookie.
+Ein nachträglich veränderter Claim und das Cookie einer anderen gültigen
+Sitzung werden abgewiesen. Dieser Test weist nur die Transportmöglichkeit nach:
+Der vorhandene Haben-Callback speichert oder verwendet den Claim noch nicht;
+auch ein produktiver Video-Maker-OIDC-Anbieter ist noch nicht angeschlossen.
+
 Der Lauf benötigt Node 22, installierte Video-Maker- und Haben-Abhängigkeiten,
 die unter `OIDC_PROVIDER_TEST_DIR` separat installierte Testbibliothek
 `oidc-provider` und einen leeren, ausschließlich lokalen PostgreSQL-18-

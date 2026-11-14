@@ -18,6 +18,7 @@ test('Haben-Callback unter Buchhaltung akzeptiert ein gebundenes Videomaker-Test
  if(!testDir||!isAbsolute(testDir))throw new Error('Isolierte OIDC-Provider-Testabhängigkeit fehlt.');
  const require=createRequire(join(testDir,'package.json'));
  const {Provider}=await import(pathToFileURL(require.resolve('oidc-provider')).href);
+ const {createRemoteJWKSet,jwtVerify}=await import(pathToFileURL(require.resolve('jose')).href);
  const vmDb=new Database(':memory:'),providerDb=new Database(':memory:');
  const vmSecret='synthetischer-videomaker-testschluessel-123456789';
  initializeOidcStorage(providerDb);initializeOidcProviderSessionMap(providerDb);
@@ -45,9 +46,10 @@ test('Haben-Callback unter Buchhaltung akzeptiert ein gebundenes Videomaker-Test
   interactions:{url:(_ctx,interaction)=>`/interaction/${interaction.uid}`},
   findAccount:async(ctx,accountId,source)=>{
    const allowed=source?bindings.isActive(sessionMap.find(source.sessionUid)||''):matchesVmCookie(ctx.req.headers.cookie)&&bindings.isActive(issued);
-   return allowed?{accountId,claims:async()=>({sub:accountId,email:'test@example.invalid',email_verified:true,groups:['haben-inhaber']})}:undefined;
+   const reference=source?sessionMap.find(source.sessionUid):issued;
+   return allowed?{accountId,claims:async()=>({sub:accountId,email:'test@example.invalid',email_verified:true,groups:['haben-inhaber'],videomaker_session_ref:reference})}:undefined;
   },
-  claims:{openid:['sub'],profile:['name'],email:['email','email_verified'],groups:['groups']},
+  claims:{openid:['sub','videomaker_session_ref'],profile:['name'],email:['email','email_verified'],groups:['groups']},
   scopes:['openid','profile','email','groups'],pkce:{required:()=>true,methods:['S256']},
  });
  providerServer.on('request',async(req,res)=>{
@@ -64,7 +66,17 @@ test('Haben-Callback unter Buchhaltung akzeptiert ein gebundenes Videomaker-Test
    await provider.interactionFinished(req,res,result,{mergeWithLastSubmission:false});
   }catch{res.writeHead(500).end();}
  });
- let sql;
+ let sql,capturedIdToken;
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async(input,init)=>{
+  const response=await originalFetch(input,init);
+  const url=input instanceof Request?input.url:String(input);
+  if(new URL(url).origin===issuer&&new URL(url).pathname==='/token'&&response.ok){
+   const tokens=await response.clone().json();
+   if(typeof tokens.id_token==='string')capturedIdToken=tokens.id_token;
+  }
+  return response;
+ };
  try{
   sql=await setupTestDb();
   Object.assign(process.env,{BETTER_AUTH_URL:appUrl,OIDC_ONLY:'true',OIDC_ISSUER:issuer,OIDC_CLIENT_ID:'haben',OIDC_CLIENT_SECRET:clientSecret,OIDC_GROUP_INHABER:'haben-inhaber',OIDC_GROUP_STEUERBERATUNG:'haben-steuerberatung'});
@@ -93,6 +105,15 @@ test('Haben-Callback unter Buchhaltung akzeptiert ein gebundenes Videomaker-Test
   const result=await request(`/callback/oidc?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,undefined,habenCookie);
   expect(result.status).toBe(302);
   expect(new URL(result.headers.get('location'),appUrl).searchParams.get('sso')).toBeNull();
+  expect(capturedIdToken).toBeTruthy();
+  const {payload}=await jwtVerify(capturedIdToken,createRemoteJWKSet(new URL(`${issuer}/jwks`)),{issuer,audience:'haben'});
+  expect(payload.videomaker_session_ref).toBe(issued);
+  expect(bindings.matchesCookie(payload.videomaker_session_ref,vmValue)).toBe(true);
+  const [jwtHeader,jwtPayload,jwtSignature]=capturedIdToken.split('.');
+  const alteredClaims=JSON.parse(Buffer.from(jwtPayload,'base64url').toString('utf8'));
+  alteredClaims.videomaker_session_ref='a'.repeat(43);
+  const forgedToken=`${jwtHeader}.${Buffer.from(JSON.stringify(alteredClaims)).toString('base64url')}.${jwtSignature}`;
+  await expect(jwtVerify(forgedToken,createRemoteJWKSet(new URL(`${issuer}/jwks`)),{issuer,audience:'haben'})).rejects.toThrow();
   const habenSession=result.headers.getSetCookie().find(value=>value.includes('session_token='))?.split(';')[0];
   expect(habenSession).toBeTruthy();
   const accounts=await sql`select account_id from account where provider_id='oidc'`;
@@ -111,6 +132,7 @@ test('Haben-Callback unter Buchhaltung akzeptiert ein gebundenes Videomaker-Test
   expect((await guardVideomakerSession(guardedRequest(vmCookie),guardConfig,verifyGuard)).status).toBe(401);
   const otherBody=`${Date.now()+300000}.andere-test-sitzung`;
   const otherCookie=`kontrakurs_session=${otherBody}.${signSessionBody(otherBody,vmSecret)}`;
+  expect(bindings.matchesCookie(payload.videomaker_session_ref,otherCookie.slice('kontrakurs_session='.length))).toBe(false);
   // Known gap: current guard accepts any valid Videomaker cookie, even when
   // the real Haben session was created with another now-revoked session.
   expect(await guardVideomakerSession(guardedRequest(otherCookie),guardConfig,verifyGuard)).toBeNull();
@@ -123,6 +145,7 @@ test('Haben-Callback unter Buchhaltung akzeptiert ein gebundenes Videomaker-Test
   const remaining=await sql`select count(*)::int as n from session`;
   expect(remaining[0].n).toBeGreaterThan(0);
  }finally{
+  globalThis.fetch=originalFetch;
   await new Promise(resolve=>{providerServer.close(resolve);providerServer.closeAllConnections();});
   await sql?.end();
   try{await (await import('../../apps/buchhaltung/apps/web/src/server/db/index.ts')).closeDatabase();}catch{}
