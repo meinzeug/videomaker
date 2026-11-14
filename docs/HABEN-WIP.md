@@ -32,4 +32,6 @@ Löschbefehl ab; beide Ausgaben bleiben unverändert liegen. Ein weiterer
 vollständiger Build braucht ausreichend Speicher und einen abgesprochenen
 Buildslot. Der echte OIDC-Dienst-/Haben-Callback-Test mit isoliertem
 PostgreSQL 18 ist unabhängig davon bestanden; ein echter Browser-/Proxytest
-steht aus.
+des vollständigen Haben-Dashboards steht aus. Ein kleinerer Fixture mit echtem
+Browser, lokalem Testproxy, echtem OIDC-Dienst und Haben-Auth-Handler ist
+inzwischen bestanden; seine Seite und der interne Prüftransport sind simuliert.

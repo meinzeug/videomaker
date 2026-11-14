@@ -80,6 +80,16 @@ Browser, die interne TLS-Strecke und der öffentliche Reverse-Proxy sind durch
 diesen Lauf noch nicht abgedeckt. Das Testcluster verwendet ausschließlich
 synthetische Datensätze; das produktive System wird nicht angesprochen.
 
+`tests/fixtures/haben-oidc-browser-proxy.test.mjs` ergänzt einen echten
+headless Chrome über einen ausschließlich lokalen HTTP-Testproxy. Der Browser
+folgt den OIDC-Redirects mit seinen eigenen Cookies; der echte Haben-Auth-Handler
+legt die Sitzung in PostgreSQL 18 an und der echte Haben-Wächter verweigert sie
+nach Widerruf des Videomaker-Cookies. Die sichtbare Seite ist eine kleine
+Testseite und die interne Wächterverbindung wird durch einen lokalen
+Funktionsaufruf simuliert. Damit sind weder das echte Haben-Dashboard noch ein
+öffentliches TLS-/Reverse-Proxy-Deployment getestet. Chromium wird nur für
+diesen Test gestartet und geschlossen.
+
 ## Was bereits getestet ist
 
 `tests/oidc-storage.test.mjs` prüft isoliert Modelltrennung, Ablauf, atomaren
@@ -202,6 +212,14 @@ isolierte Umgebung verwenden und stattdessen
 Safety-Prüfung kontrolliert vor dem Datenbank-Setup ebenso Markierung und
 `data_directory`; auch dieser Test darf nur auf einem exklusiven Testcluster
 laufen, da er Testdatenbanken neu erstellt.
+
+Für den beschriebenen Browser-Fixture denselben Aufbau mit
+`--config tests/fixtures/haben-oidc-browser-proxy.config.mjs` nutzen. Er benötigt
+zusätzlich das vorhandene `@playwright/test` und `/usr/bin/google-chrome` sowie
+genügend RAM. Der letzte isolierte Lauf war grün; der anschließende langsame
+PostgreSQL-Checkpoint überschritt eine Stop-Wartezeit von 20 Sekunden, lief
+aber nach rund 35 Sekunden kontrolliert zu Ende. Für erneute Läufe ist eine
+längere Stop-Frist zu verwenden und der tatsächlich beendete Dienst zu prüfen.
 
 Ein reproduzierbarer lokaler Test, ohne das Projekt oder einen Server zu
 installieren oder zu verändern:
