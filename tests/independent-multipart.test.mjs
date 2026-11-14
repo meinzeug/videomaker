@@ -175,3 +175,27 @@ test('default Kontrakurs retains its own optional editorial orientation on every
   for(const body of calls.slice(1))assert.equal(body.messages[0].content,prompts.KONTRAKURS_SCRIPT_SYSTEM);
  });
 });
+
+test('original part boundaries and outer whitespace survive unchanged in the completed script',async()=>{
+ await isolated(['Anfang','Ende'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
+  const first='  Anfang mit Freiraum.\n',last='\nEnde mit Freiraum.  ';
+  globalThis.fetch=async(urlArg,init)=>{
+   const response=await baseFetch(urlArg,init);
+   if(calls.length>1){const body=await response.json(),payload=JSON.parse(body.choices[0].message.content);payload.skript=calls.length===2?first:last;body.choices[0].message.content=JSON.stringify(payload);return new Response(JSON.stringify(body),{status:200});}
+   return response;
+  };
+  const result=await runGrokFlow(db,claim,true,()=>{});assert.equal(result.state,'received');
+  assert.equal(JSON.parse(result.responseText).script,first+'\n\n'+last);
+ });
+});
+
+test('a long source-verified quotation is never silently shortened',async()=>{
+ const {validateFactSheet}=await load('fact-sheet.ts');
+ const quotation='Beginn '+('Langtext '.repeat(350))+'Ende.';
+ const sourceReport={sources:[{url}],source_excerpts:[{url,status:'retrieved',text:`Vorher ${quotation} Nachher`}]};
+ const result=validateFactSheet({fakten:[{text:'Ein Fakt.',quellen:[url]}],meinungen_dritter:[],zitate:[{text:quotation,quelle:url}],unklar:[],hinweise_fuer_dennis:[]},sources,sourceReport);
+ assert.equal(result.zitate.length,1);assert.equal(result.zitate[0].text,quotation);
+ const invented=quotation+' frei erfundener Nachsatz';
+ const rejected=validateFactSheet({fakten:[{text:'Ein Fakt.',quellen:[url]}],meinungen_dritter:[],zitate:[{text:invented,quelle:url}],unklar:[],hinweise_fuer_dennis:[]},sources,sourceReport);
+ assert.deepEqual(rejected.zitate,[]);assert.match(rejected.hinweise_fuer_dennis.join(' '),/Zitat/i);
+});

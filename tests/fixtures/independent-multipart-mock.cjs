@@ -9,7 +9,7 @@ globalThis.fetch=async function(input,init){
  if(init.headers.Authorization!=='Bearer fake-test-key')throw new Error('Only the fake test key is allowed.');
  const request=JSON.parse(init.body),system=request.messages[0].content,user=request.messages.at(-1).content;
  const facts=system.includes('strukturiertes Faktenblatt');
- const partMatch=user.match(/"teil"\s*:\s*(\d+)/),part=partMatch?Number(partMatch[1]):null;
+ const partMatch=user.match(/\bTeil\s+(\d+)\s+von\s+\d+/),part=partMatch?Number(partMatch[1]):null;
  const phase=facts?'facts':part?`part${part}`:'unexpected';
  fs.appendFileSync(path.join(dir,'requests.log'),JSON.stringify({phase,model:request.model})+'\n');
  if(phase==='unexpected')throw new Error('Unexpected fake-provider phase');
