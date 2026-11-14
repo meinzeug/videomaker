@@ -35,7 +35,7 @@ function bridge(ws,tcp,stats,idleMs=5000,signal,lifetimeMs=15000){
 }
 function startTunnel(key,cert,upstream,maxConnections=8,idleMs=5000,signal,lifetimeMs=15000){
  const server=createHttpsServer({key,cert});const wss=createBoundedFixtureServer(WebSocketServer);
- const clients=new Set(),pending=new Set(),upstreams=new Set(),connections=new Set(),handles=new Set(),stats={inboundPauses:0,inboundResumes:0,outboundPauses:0,outboundResumes:0,byteLimit:0};
+ const clients=new Set(),pending=new Set(),upstreams=new Set(),connections=new Set(),handles=new Set(),allHandles=[],stats={inboundPauses:0,inboundResumes:0,outboundPauses:0,outboundResumes:0,byteLimit:0};
  server.on('connection',socket=>{connections.add(socket);socket.on('close',()=>connections.delete(socket));});
  server.on('upgrade',(req,socket,head)=>{
   if(req.url!=='/fixture'||!tokenMatches(req.headers.authorization)||clients.size+pending.size>=maxConnections){socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');return;}
@@ -45,10 +45,10 @@ function startTunnel(key,cert,upstream,maxConnections=8,idleMs=5000,signal,lifet
   socket.once('close',()=>{pending.delete(socket);if(!tcp.destroyed&&tcp.connecting)tcp.destroy();});
   tcp.once('connect',()=>{
    if(socket.destroyed){tcp.destroy();return;}pending.delete(socket);
-   wss.handleUpgrade(req,socket,head,ws=>{clients.add(ws);ws.once('close',()=>clients.delete(ws));const handle=bridge(ws,tcp,stats,idleMs,signal,lifetimeMs);handles.add(handle);void handle.closed.then(()=>handles.delete(handle));socket.resume();});
+   wss.handleUpgrade(req,socket,head,ws=>{clients.add(ws);ws.once('close',()=>clients.delete(ws));const handle=bridge(ws,tcp,stats,idleMs,signal,lifetimeMs);handles.add(handle);allHandles.push(handle);void handle.closed.then(()=>handles.delete(handle));socket.resume();});
   });
  });
- return {server,stats,clients,handles,async close(){for(const ws of clients)ws.terminate();for(const tcp of upstreams)tcp.destroy();for(const socket of connections)socket.destroy();await closeServer(server);wss.close();}};
+ return {server,stats,clients,handles,allHandles,async close(){for(const ws of clients)ws.terminate();for(const tcp of upstreams)tcp.destroy();for(const socket of connections)socket.destroy();await closeServer(server);wss.close();}};
 }
 function wsClient(port,cert,auth=token){return new WebSocket(`wss://127.0.0.1:${port}/fixture`,{ca:cert,servername:'localhost',headers:{Authorization:`Bearer ${auth}`},perMessageDeflate:false,maxPayload:MAX_FRAME});}
 async function rejected(ws){
@@ -127,6 +127,23 @@ test('prototype is disabled in production or without the explicit fixture flag',
  }finally{process.env.NODE_ENV=before;process.env.VIDEOMAKER_TURN_WSS_FIXTURE=flag;}
 });
 
+test('already closed or failed endpoints are rejected before a bridge is returned',()=>{
+ const healthyWs={readyState:1},closedWs={readyState:3};
+ const openTcp={connecting:false,destroyed:false,remoteAddress:'127.0.0.1'},closedTcp={...openTcp,destroyed:true};
+ assert.throws(()=>bridgeTestOnly({websocket:closedWs,upstream:openTcp,createWebSocketStream}),/INVALID_FIXTURE_ENDPOINT/);
+ assert.throws(()=>bridgeTestOnly({websocket:healthyWs,upstream:closedTcp,createWebSocketStream}),/INVALID_FIXTURE_ENDPOINT/);
+});
+
+test('already aborted signal closes both newly connected endpoints', {timeout:5000},async()=>{
+ let upstreamClosed=false;
+ const upstream=createTcpServer(socket=>{socket.on('close',()=>{upstreamClosed=true;});socket.on('error',()=>{});socket.resume();});const upstreamPort=await listen(upstream);
+ const controller=new AbortController();controller.abort();const tunnel=startTunnel(key,cert,upstreamPort,1,5000,controller.signal);const port=await listen(tunnel.server);
+ try{
+  const ws=wsClient(port,cert);ws.on('error',()=>{});const closed=once(ws,'close');await closed;await waitFor(()=>tunnel.allHandles.length===1);
+  assert.equal(await tunnel.allHandles[0].closed,'aborted');await waitFor(()=>upstreamClosed&&tunnel.clients.size===0&&tunnel.handles.size===0);
+ }finally{await tunnel.close();await closeServer(upstream);}
+});
+
 test('abort closes the WebSocket and TCP endpoints and resolves the shutdown', {timeout:5000},async()=>{
  let upstreamClosed=false;
  const upstream=createTcpServer(socket=>{socket.on('close',()=>{upstreamClosed=true;});socket.on('error',()=>{});socket.resume();});const upstreamPort=await listen(upstream);
@@ -143,6 +160,15 @@ test('text frames never reach the TCP peer', {timeout:5000},async()=>{
  const tunnel=startTunnel(key,cert,upstreamPort,1);const port=await listen(tunnel.server);
  try{const ws=await openSocket(wsClient(port,cert));const closed=once(ws,'close');ws.send('must not reach TCP');await closed;await waitFor(()=>tunnel.clients.size===0);assert.equal(received,0);}
  finally{await tunnel.close();await closeServer(upstream);}
+});
+
+test('abrupt TCP peer loss terminates the WebSocket and resolves shutdown', {timeout:5000},async()=>{
+ const upstream=createTcpServer(socket=>{socket.on('error',()=>{});socket.once('data',()=>socket.destroy());});const upstreamPort=await listen(upstream);
+ const tunnel=startTunnel(key,cert,upstreamPort,1);const port=await listen(tunnel.server);
+ try{
+  const ws=await openSocket(wsClient(port,cert));await waitFor(()=>tunnel.handles.size===1);const handle=[...tunnel.handles][0];const closed=once(ws,'close');ws.send(Buffer.from([1]),{binary:true});
+  await closed;assert.match(await handle.closed,/^tcp-(ended|closed|error)$/);await waitFor(()=>tunnel.clients.size===0&&tunnel.handles.size===0);
+ }finally{await tunnel.close();await closeServer(upstream);}
 });
 
 test('absolute lifetime terminates a tunnel even with ongoing traffic', {timeout:5000},async()=>{
