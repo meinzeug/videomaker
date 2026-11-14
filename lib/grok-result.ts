@@ -41,9 +41,24 @@ export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,ch
   if(close){const end=script.indexOf(close,index+1);if(end<0||end-index>2001){issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht vollständig begrenzt.'});break;}quoted.push(script.slice(index+1,end));index=end;}
   else if(closers.has(char)){issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht vollständig begrenzt.'});break;}
  }
- const announced=[...script.matchAll(/(?:^|\s)(?:Zitat|wörtlich):[^\S\r\n]*([^\r\n]*)/giu)].map(match=>match[1]);
+ // Each announced quotation must be checked separately, including multiple
+ // announcements on one line. A continuation is safe only after an explicit
+ // closing delimiter and an already complete quoted sentence. Without such a
+ // delimiter a following sentence could still be part of the quotation.
+ const markers=[...script.matchAll(/(?:^|\s)(?:Zitat|wörtlich):[^\S\r\n]*/giu)];
  const exactLine=(line:string,q:string)=>[q,`„${q}“`,`“${q}”`,`"${q}"`,`»${q}«`,`«${q}»`,`‚${q}‘`].includes(line.trim());
- if(quoted.some(q=>!verified.includes(q))||announced.some(line=>!verified.some(q=>exactLine(line,q))))issues.push({code:'unverified_quote',message:'Ein Ausdruck in Anführungszeichen oder eine als Zitat angekündigte Passage ist nicht als wörtliches Zitat im Faktenblatt bestätigt. Auch belegte Werk- oder Eigennamen können betroffen sein; gegebenenfalls ohne Anführungszeichen formulieren.'});
+ let ambiguousBoundary=false;
+ const announcedChecks=markers.map((marker,index)=>{
+  const start=marker.index+marker[0].length,next=markers[index+1]?.index??script.length;
+  const newline=script.slice(start,next).search(/[\r\n]/u);
+  const line=script.slice(start,newline<0?next:start+newline).trimEnd();
+  if(verified.some(q=>exactLine(line,q)))return true;
+  const close=pairs[line[0]];if(!close){if(verified.some(q=>line.startsWith(q)&&line.length>q.length))ambiguousBoundary=true;return false;}
+  const end=line.indexOf(close,1);if(end<0)return false;
+  const contents=line.slice(1,end),rest=line.slice(end+1);
+  return verified.includes(contents)&&/[.!?…]$/u.test(contents)&&/^[^\S\r\n]+[\p{Lu}]/u.test(rest);
+ });
+ if(quoted.some(q=>!verified.includes(q))||announcedChecks.some(valid=>!valid))issues.push({code:'unverified_quote',message:ambiguousBoundary?'Die Grenze einer als wörtlich angekündigten Passage ist ohne schließende Anführungszeichen nicht eindeutig. Bitte das vollständige belegte Zitat exakt mit Anführungszeichen abgrenzen.':'Ein Ausdruck in Anführungszeichen oder eine als Zitat angekündigte Passage ist nicht als wörtliches Zitat im Faktenblatt bestätigt. Auch belegte Werk- oder Eigennamen können betroffen sein; gegebenenfalls ohne Anführungszeichen formulieren.'});
  if(issues.length||!titles||!sources||!notes)return {project:null,issues};
  const allowed=new Set([...facts.fakten.flatMap(f=>f.quellen),...facts.meinungen_dritter.flatMap(f=>f.quellen),...facts.zitate.map(q=>q.quelle)]);
  const accepted:string[]=[];let rejected=0;

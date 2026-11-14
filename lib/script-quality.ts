@@ -27,6 +27,12 @@ export function countScriptWords(script:string):number {
 
 const forbidden=['Recherche','PDF','Stand dieser','lässt sich nicht','kein Beweis für eine Lüge','Beides kann','Überschrift','[Pause]','##'] as const;
 const normalized=(text:string)=>text.normalize('NFC').toLocaleLowerCase('de-DE').replace(/\s+/gu,' ');
+/** The phrase "Stand dieser" must not match inside another Unicode word.
+ * All other user-specified patterns retain their original substring semantics. */
+function containsForbidden(text:string,pattern:string):boolean {
+ if(pattern!==normalized('Stand dieser'))return text.includes(pattern);
+ return /(?<![\p{L}\p{M}\p{N}_])stand dieser(?![\p{L}\p{M}\p{N}_])/u.test(text);
+}
 function hasNumberedHeading(script:string):boolean {
  const numbering=/^[^\S\r\n]*(?:#{1,6}[^\S\r\n]*)?(?:\d{1,3}(?:\.\d{1,3})*[.)]|\d{1,3}\.\d{1,3}(?:\.\d{1,3})*|\d{1,3}[^\S\r\n]*[-–—:])[^\S\r\n]+\S/mu;
  const date=/^[^\S\r\n]*\d{1,2}\.[^\S\r\n]+(?:januar|februar|märz|maerz|april|mai|juni|juli|august|september|oktober|november|dezember)(?=$|[^\p{L}\p{M}])/iu;
@@ -44,7 +50,7 @@ export function validateKontrakursScript(script:string):ScriptQualityResult {
  if(!script.trimEnd().endsWith(KONTRAKURS_OUTRO))issues.push({code:'missing_outro',message:'Der vorgeschriebene Schlusssatz fehlt oder ist nicht der letzte Satz.'});
  if(!script.includes(KONTRAKURS_SUBSCRIBE_SENTENCE))issues.push({code:'missing_subscribe',message:'Der vorgeschriebene Abo-Satz fehlt oder weicht vom genauen Wortlaut ab.'});
  const comparable=normalized(script);
- for(const pattern of forbidden)if(comparable.includes(normalized(pattern)))issues.push({code:'forbidden_pattern',pattern,message:`Verbotenes Muster gefunden: ${pattern}`});
+ for(const pattern of forbidden)if(containsForbidden(comparable,normalized(pattern)))issues.push({code:'forbidden_pattern',pattern,message:`Verbotenes Muster gefunden: ${pattern}`});
  if(hasNumberedHeading(script))issues.push({code:'numbered_heading',message:'Eine nummerierte Zwischenüberschrift oder Liste wurde gefunden.'});
  if(/^[^\S\r\n]*#[^\S\r\n]+\S/mu.test(script))issues.push({code:'markdown_heading',message:'Eine Markdown-Überschrift wurde gefunden.'});
  if(wordCount<KONTRAKURS_MIN_WORDS||wordCount>KONTRAKURS_MAX_WORDS)issues.push({code:'word_count',message:`Das Skript hat ${wordCount} Wörter; zulässig sind 900 bis 1.400.`});

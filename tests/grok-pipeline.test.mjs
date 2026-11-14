@@ -34,6 +34,22 @@ test('source-verified surrounding quote marks are removed only for exact compari
  const unverified=validateFactSheet({...rawFacts,zitate:[{text:quoted,quelle:url}]},source,{...report,source_excerpts:[{url,status:'retrieved',text:'Anderer Quelltext.'}]});
  assert.equal(parseGrokScript(answer(`Zitat: ${quoted}\n`+script),false,unverified).project,null);
 });
+test('each announced quote is checked independently and only explicit closing marks bound continuation',()=>{
+ const quoted='„Bestätigter Wortlaut.“';const facts=validateFactSheet({...rawFacts,zitate:[{text:quoted,quelle:url}]},source,{...report,source_excerpts:[{url,status:'retrieved',text:`Hier steht ${quoted} Ende.`}]});
+ const good=`Zitat: ${quoted} Dann folgt eine Erläuterung.\n`;
+ assert.ok(parseGrokScript(answer(good+script),false,facts).project);
+ for(const text of [
+  `Zitat: ${quoted} und frei erfundener Zusatz.\n`,
+  'Zitat: „Bestätigter Wortlaut. Frei erfundener Zusatz.“ Dann weiter.\n',
+  `Zitat: ${quoted} Dann folgt Zitat: Frei erfundener Zusatz.\n`,
+  'Zitat: Bestätigter Wortlaut. Frei erfundener Zusatz.\n',
+ ]){
+  const result=parseGrokScript(answer(text+script),false,facts);assert.equal(result.project,null);assert.ok(result.issues.some(issue=>issue.code==='unverified_quote'),text);
+ }
+ const question='Bestätigte Frage?';const questionFacts=validateFactSheet({...rawFacts,zitate:[{text:question,quelle:url}]},source,{...report,source_excerpts:[{url,status:'retrieved',text:`Hier steht ${question} Ende.`}]});
+ const ambiguous=parseGrokScript(answer(`Zitat: ${question} Ein zusätzlicher Satz.\n`+script),false,questionFacts);assert.equal(ambiguous.project,null);assert.ok(ambiguous.issues.some(issue=>issue.code==='unverified_quote'&&/Grenze.*nicht eindeutig/.test(issue.message)));
+});
+
 test('output enforces exact quality, typed fields, verified sources and complete literal quotations',()=>{
  const facts=validateFactSheet(rawFacts,source,report);
  assert.ok(parseGrokScript(answer(),false,facts).project);
@@ -155,4 +171,17 @@ test('one quality repair starts with fallback and may use primary only within th
  globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);calls.push(request);if(calls.length===1)return response(JSON.stringify(rawFacts));if(calls.length===2)return response(answer('Zu kurz.'));if(calls.length===3)return new Response('',{status:400});return response(answer());};
  try{const final=await runGrokFlow(db,claim,true,()=>{});assert.equal(final.state,'received');assert.deepEqual(calls.map(req=>req.model),['x-ai/grok-4.3','x-ai/grok-4.3','x-ai/grok-4.20','x-ai/grok-4.3']);const rows=db.prepare("SELECT requested_model,state FROM grok_generation_attempts WHERE phase='repair' ORDER BY ordinal").all();assert.deepEqual(rows,[{requested_model:'x-ai/grok-4.20',state:'failed'},{requested_model:'x-ai/grok-4.3',state:'received'}]);assert.equal(readGrokRun(db,id).phase,'repair_ready');}
  finally{globalThis.fetch=oldFetch;if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
+
+
+test('Kontrakurs and source-only mode both retain forbidden-pattern checks',async()=>{
+ const old=process.env.OPENROUTER_API_KEY,oldFetch=globalThis.fetch;process.env.OPENROUTER_API_KEY='test-only';
+ try{
+  for(const options of [null,{mode:'source',scope:'selected',tones:[],dramaturgy:'',instructions:'',allowIncompleteSources:true}]){
+   const {db,claim}=fixture(null,options);const messages=[];
+   globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);messages.push(request.messages);return response(request.messages[0].content===FACT_SHEET_SYSTEM?JSON.stringify(rawFacts):answer('Der Zustand dieser Bewegung ist Thema.\n'+script));};
+   try{const result=await runGrokFlow(db,claim,true,()=>{});assert.equal(result.state,'received');assert.equal(messages.length,2);assert.equal(messages[1][0].content,options?SOURCE_ONLY_SCRIPT_SYSTEM:KONTRAKURS_SCRIPT_SYSTEM);}
+   finally{db.close();}
+  }
+ }finally{globalThis.fetch=oldFetch;if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;}
 });

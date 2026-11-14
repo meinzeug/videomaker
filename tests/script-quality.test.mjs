@@ -48,6 +48,13 @@ test('finds all requested forbidden patterns regardless of casing or whitespace'
  }
 });
 
+test('Stand dieser respects Unicode word boundaries; other patterns remain substrings',()=>{
+ const base=scriptWithWords(900),has=(text,pattern)=>validateKontrakursScript(`${text}\n${base}`).issues.some(issue=>issue.code==='forbidden_pattern'&&issue.pattern===pattern);
+ for(const text of ['Zustand dieser Bewegung','Überstand dieser Sache','Stand dieserung','𐐀Stand dieser','Stand dieseré','Stand dieser_weitere'])assert.equal(has(text,'Stand dieser'),false,text);
+ for(const text of ['Stand dieser Bewegung','(Stand dieser)', 'Stand\n  dieser', '💡Stand dieser!'])assert.equal(has(text,'Stand dieser'),true,text);
+ assert.equal(has('Recherchehinweise','Recherche'),true);assert.equal(has('Zwischenüberschrift','Überschrift'),true);assert.equal(has('vor##nach','##'),true);assert.equal(has('vor[Pause]nach','[Pause]'),true);
+});
+
 test('recognizes numbered and Markdown headings even with CRLF and indentation',()=>{
  const base=scriptWithWords(900);
  for(const heading of ['1. Einleitung','  2) Hintergrund','3 – Fazit','4: Überblick','\t# 5. Kapitel','1.1 Einordnung','2.3.1 Details']){
