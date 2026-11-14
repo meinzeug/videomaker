@@ -135,10 +135,10 @@ export async function runGrokFlow(db:Database.Database,claim:GenerationClaim,cre
   const repaired={...original};for(const issue of originalIssues)if(['titel','thumbnail_text','pin_kommentar','quellen','hinweise_fuer_dennis'].includes(issue.code))repaired[issue.code]=metadata[issue.code];
   if(originalIssues.some(issue=>issue.code==='unverified_quote'||issue.code==='internal_research')){
    const targets=planned?repairTargets(db,id,original,facts):[],parts=metadata.teile;
-   if(!targets.length||!Array.isArray(parts))throw new GrokInvalid('Die Zitatkorrektur ist unvollständig. Die Originalteile bleiben erhalten.');
+   if(!targets.length||!Array.isArray(parts))throw new GrokInvalid('Die Teilkorrektur ist unvollständig. Die Originalteile bleiben erhalten.');
    const saved=readGrokParts(db,id),available=new Set(saved.map(part=>part.part)),wanted=new Set(targets.map(target=>target.teil)),seen=new Set<number>(),replacements=new Map<number,string>();
-   for(const candidate of parts){const item=record(candidate);if(!item||typeof item.teil!=='number'||!Number.isSafeInteger(item.teil)||!available.has(item.teil)||seen.has(item.teil)||typeof item.skript!=='string'||!item.skript.trim())throw new GrokInvalid('Die Zitatkorrektur enthält falsche oder doppelte Teilnummern. Die Originalteile bleiben erhalten.');seen.add(item.teil);if(wanted.has(item.teil))replacements.set(item.teil,item.skript);else ignoredRepairParts.push(item.teil);}
-   if(replacements.size!==wanted.size)throw new GrokInvalid('Die Zitatkorrektur ist unvollständig. Die Originalteile bleiben erhalten.');
+   for(const candidate of parts){const item=record(candidate);if(!item||typeof item.teil!=='number'||!Number.isSafeInteger(item.teil)||!available.has(item.teil)||seen.has(item.teil)||typeof item.skript!=='string'||!item.skript.trim())throw new GrokInvalid('Die Teilkorrektur enthält falsche oder doppelte Teilnummern. Die Originalteile bleiben erhalten.');seen.add(item.teil);if(wanted.has(item.teil))replacements.set(item.teil,item.skript);else ignoredRepairParts.push(item.teil);}
+   if(replacements.size!==wanted.size)throw new GrokInvalid('Die Teilkorrektur ist unvollständig. Die Originalteile bleiben erhalten.');
    repaired.skript=saved.map(part=>replacements.get(part.part)??(partPayload(envelope(part.response)).skript as string)).join('\n\n');
   }
   resultEnvelope={text:JSON.stringify(repaired),truncated:false};
