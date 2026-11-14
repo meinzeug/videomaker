@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
-import {fork} from 'node:child_process';
+import {fork,spawnSync} from 'node:child_process';
 import {mkdtempSync,openSync,writeSync,closeSync,linkSync,rmSync,readFileSync,writeFileSync,unlinkSync,symlinkSync,mkdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import Database from 'better-sqlite3';
 import {createLiveStaging,initializeLiveStaging,LIVE_CHUNK_BYTES,LIVE_MAX_SESSIONS} from '../lib/live-recording-staging.ts';
+import {CAMERA_PROJECT_CLAIMS_SCHEMA} from '../lib/camera-project-claims.ts';
 
 const sum=bytes=>createHash('sha256').update(bytes).digest('hex');
 const huge=()=>4n*1024n*1024n*1024n;
@@ -89,6 +90,28 @@ test('Sitzungswiderruf verhindert die Zustandsänderung',()=>{
   allowed=true;assert.equal(protectedStore.status(id,project,recording).state,'open');
  }finally{f.close();}
 });
+test('nicht autorisierter Beginn legt kein Stagingschema an',()=>{
+ const directory=mkdtempSync(join(tmpdir(),'videomaker-live-auth-')),db=new Database(':memory:');
+ try{
+  const store=createLiveStaging(db,directory,huge,()=>{throw Error('UNAUTHORIZED');});
+  assert.throws(()=>store.begin(randomUUID(),randomUUID(),randomUUID()),/UNAUTHORIZED/);
+  assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='live_recording_stages'").get(),undefined);
+ }finally{db.close();rmSync(directory,{recursive:true,force:true});}
+});
+test('Webclaim und abweichende LAN-Projektbindung sperren den Liveupload ohne Datenverlust',()=>{
+ const f=fixture(),[id,project,recording]=f.ids;
+ try{
+  f.db.exec('CREATE TABLE camera_project_claims(recording_id TEXT PRIMARY KEY); CREATE TABLE lan_capture_projects(recording_id TEXT PRIMARY KEY,project_id TEXT NOT NULL)');
+  f.db.prepare('INSERT INTO camera_project_claims VALUES(?)').run(recording);
+  assert.throws(()=>f.store.begin(id,project,recording),/WEB_CLAIM/);
+  f.db.prepare('DELETE FROM camera_project_claims').run();f.db.prepare('INSERT INTO lan_capture_projects VALUES(?,?)').run(recording,randomUUID());
+  assert.throws(()=>f.store.begin(id,project,recording),/BINDING_CONFLICT/);
+  f.db.prepare('DELETE FROM lan_capture_projects').run();f.store.begin(id,project,recording);
+  f.db.prepare('INSERT INTO camera_project_claims VALUES(?)').run(recording);
+  const value=Buffer.from('x');assert.throws(()=>f.store.put(id,project,recording,0,0,value,sum(value)),/WEB_CLAIM/);
+  assert.equal(f.store.cancel(id,project,recording),true,'expliziter Abbruch bleibt trotz Konflikt möglich');
+ }finally{f.close();}
+});
 test('veröffentlichte Datei behält ihre Bytes und Abschluss ist nach Prozessabbruch wiederholbar',()=>{
  const f=fixture(),[id,project,recording]=f.ids;
  try{
@@ -127,4 +150,35 @@ test('konkurrierende Prozesse bestätigen niemals zwei unterschiedliche Daten f�
   assert.equal(sum(readFileSync(join(f.directory,'.live-recording-staging',`${key}.part`))),chunk.sha256);
   assert.equal(chunk.state,'ready');assert.equal(chunk.revision,1);
  }finally{for(const worker of workers)if(worker.connected)worker.disconnect();f.close();}
+});
+test('gleichzeitiger WEB-Claim und LAN-Livebeginn können nicht dieselbe Aufnahme belegen',async()=>{
+ const f=fixture(),[id,project,recording]=f.ids,workers=[];
+ try{
+  f.db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY)');f.db.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);f.db.prepare('INSERT INTO projects VALUES(?)').run(project);
+  const script=new URL('./fixtures/live-web-claim-race-worker.mjs',import.meta.url),device=randomUUID();
+  for(const kind of ['lan','web'])workers.push(fork(script,[join(f.directory,'db.sqlite'),f.directory,id,project,recording,device,kind],{stdio:['ignore','ignore','ignore','ipc'],execArgv:['--experimental-strip-types']}));
+  await Promise.all(workers.map(w=>new Promise((resolve,reject)=>{w.once('error',reject);w.once('message',v=>v==='ready'?resolve():reject(Error('Worker nicht bereit')));} )));
+  const pending=workers.map(w=>new Promise((resolve,reject)=>{w.once('error',reject);w.once('message',resolve);w.once('exit',code=>{if(code!==0)reject(Error('Worker fehlgeschlagen'));});}));
+  for(const worker of workers)worker.send('go');const replies=await Promise.all(pending);
+  assert.deepEqual(replies.map(item=>item.result).sort(),['created','rejected']);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM camera_project_claims').get().n+f.db.prepare('SELECT COUNT(*) AS n FROM live_recording_stages').get().n,1);
+ }finally{for(const worker of workers)if(worker.connected)worker.disconnect();f.close();}
+});
+
+test('echter Prozessabbruch an Dateisynchronisation und DB-Commit ist wiederaufnehmbar',()=>{
+ for(const point of ['after-opening-fsync','after-write-intent','after-chunk-fsync','after-chunk-commit']){
+  const f=fixture(),[id,project,recording]=f.ids,bytes=Buffer.from('recording bytes');
+  try{
+   if(point!=='after-opening-fsync')f.store.begin(id,project,recording);
+   const child=spawnSync(process.execPath,['--experimental-strip-types','tests/fixtures/live-staging-crash-worker.mjs',join(f.directory,'db.sqlite'),f.directory,id,project,recording,point],{encoding:'utf8',timeout:10000});
+   assert.equal(child.signal,'SIGKILL',point+': '+child.stderr);
+   if(point==='after-opening-fsync')f.store.begin(id,project,recording);
+   else {
+    const current=f.store.status(id,project,recording).chunks[0];
+    assert.equal(current.state,point==='after-chunk-commit'?'ready':'writing',point);
+    assert.equal(f.store.put(id,project,recording,0,0,bytes,sum(bytes)).revision,1);
+    assert.deepEqual(f.store.seal(id,project,recording,bytes.length,sum(bytes)),{sizeBytes:bytes.length,sha256:sum(bytes)});
+   }
+  }finally{f.close();}
+ }
 });

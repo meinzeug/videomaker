@@ -35,14 +35,24 @@ export function initializeLiveStaging(db:Database.Database):void {
 }
 
 /** Directory, session identities and operations must be protected by the calling route. */
-export function createLiveStaging(db:Database.Database,root:string,freeBytes?:(dir:string)=>bigint,authorize:()=>void=()=>{}) {
+export function createLiveStaging(db:Database.Database,root:string,freeBytes?:(dir:string)=>bigint,authorize:()=>void=()=>{},testHook?:(point:string)=>void) {
  const directory=path.join(root,'.live-recording-staging');
  mkdirSync(directory,{recursive:true,mode:0o700});
  const dirStat=lstatSync(directory);
  if(!dirStat.isDirectory()||dirStat.isSymbolicLink()||(dirStat.mode&0o077)!==0||dirStat.uid!==process.getuid?.())fail('UNSAFE_DIRECTORY');
  syncDirectory(root);
  const free=freeBytes??((dir:string)=>{const fs=statfsSync(dir,{bigint:true});return fs.bavail*fs.bsize;});
- const row=(id:string)=>db.prepare('SELECT * FROM live_recording_stages WHERE id=?').get(id) as Session|undefined;
+ const row=(id:string)=>{
+  if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_recording_stages'").get())return undefined;
+  return db.prepare('SELECT * FROM live_recording_stages WHERE id=?').get(id) as Session|undefined;
+ };
+ const assertLanBinding=(project:string,recording:string)=>{
+  if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='camera_project_claims'").get()&&db.prepare('SELECT 1 FROM camera_project_claims WHERE recording_id=? COLLATE NOCASE').get(recording))fail('WEB_CLAIM');
+  if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lan_capture_projects'").get()){
+   const mappings=db.prepare('SELECT project_id FROM lan_capture_projects WHERE recording_id=? COLLATE NOCASE').all(recording) as {project_id:string}[];
+   if(mappings.length>1||mappings.some(mapping=>mapping.project_id!==project))fail('BINDING_CONFLICT');
+  }
+ };
  const filename=(s:Session)=>path.join(directory,`${s.file_key}.part`);
  const openChecked=(s:Session)=>{
   if(!s.dev||!s.ino||!isRecordingId(s.file_key))return fail('INVALID_STAGE');
@@ -63,7 +73,7 @@ export function createLiveStaging(db:Database.Database,root:string,freeBytes?:(d
   catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;fd=openSync(filename(s),constants.O_RDWR|constants.O_NOFOLLOW|constants.O_NONBLOCK);}
   try{
    const info=fstatSync(fd,{bigint:true});if(!info.isFile()||info.size!==0n||(info.mode&0o077n)!==0n)fail('STAGE_CHANGED');
-   fsyncSync(fd);syncDirectory(directory);
+   fsyncSync(fd);syncDirectory(directory);testHook?.('after-opening-fsync');
    db.transaction(()=>{
     authorize();
     const current=row(id);if(!current)return fail('NOT_FOUND');
@@ -87,6 +97,7 @@ export function createLiveStaging(db:Database.Database,root:string,freeBytes?:(d
    id=normal(id);project=normal(project);recording=normal(recording);
    db.transaction(()=>{
     authorize();
+    initializeLiveStaging(db);assertLanBinding(project,recording);
     const old=row(id);if(old){if(old.project_id!==project||old.recording_id!==recording)fail('BINDING_CONFLICT');return;}
     if(db.prepare('SELECT 1 FROM live_recording_stages WHERE recording_id=?').get(recording))fail('BINDING_CONFLICT');
     if((db.prepare("SELECT COUNT(*) AS n FROM live_recording_stages WHERE state<>'published'").get() as {n:number}).n>=LIVE_MAX_SESSIONS)fail('CAPACITY');
@@ -116,7 +127,7 @@ export function createLiveStaging(db:Database.Database,root:string,freeBytes?:(d
    const s=checked(id,project,recording);
    if(!Number.isSafeInteger(part)||part<0||part>=Math.ceil(MAX_RECORDING_SIZE/LIVE_CHUNK_BYTES)||!Number.isSafeInteger(expectedRevision)||expectedRevision<0||expectedRevision>=Number.MAX_SAFE_INTEGER||!Buffer.isBuffer(bytes)||bytes.length<1||bytes.length>LIVE_CHUNK_BYTES||!sha(expectedSha)||digest(bytes)!==expectedSha)return fail('INVALID_CHUNK');
    const pending=db.transaction(()=>{
-    const current=checked(id,project,recording);if(current.state!=='open')return fail('NOT_OPEN');
+    const current=checked(id,project,recording);if(current.state!=='open')return fail('NOT_OPEN');assertLanBinding(current.project_id,current.recording_id);
     const last=db.prepare('SELECT part,size FROM live_recording_chunks WHERE stage_id=? ORDER BY part DESC LIMIT 1').get(current.id) as {part:number;size:number}|undefined;
     if(part>(last?.part??-1)+1||last&&part===last.part+1&&last.size!==LIVE_CHUNK_BYTES)fail('NONCONTIGUOUS');
     if(last&&part<last.part&&bytes.length!==LIVE_CHUNK_BYTES)fail('INVALID_CHUNK');
@@ -139,22 +150,24 @@ export function createLiveStaging(db:Database.Database,root:string,freeBytes?:(d
     return 'write';
    }).immediate();
    if(pending==='done')return {revision:expectedRevision+1,sha256:expectedSha};
-   return db.transaction(()=>{
-    const current=checked(id,project,recording);if(current.state!=='open')return fail('NOT_OPEN');
+   testHook?.('after-write-intent');
+   const result=db.transaction(()=>{
+    const current=checked(id,project,recording);if(current.state!=='open')return fail('NOT_OPEN');assertLanBinding(current.project_id,current.recording_id);
     const chunk=db.prepare('SELECT * FROM live_recording_chunks WHERE stage_id=? AND part=?').get(current.id,part) as Chunk|undefined;
     if(chunk?.state==='ready'&&chunk.revision===expectedRevision+1&&chunk.sha256===expectedSha&&chunk.size===bytes.length)return {revision:chunk.revision,sha256:expectedSha};
     if(!chunk||chunk.state!=='writing'||chunk.expected_revision!==expectedRevision||chunk.sha256!==expectedSha||chunk.size!==bytes.length)return fail('REVISION_CONFLICT');
     reserve(bytes.length);const fd=openChecked(current);
-    try{let written=0;while(written<bytes.length){const n=writeSync(fd,bytes,written,bytes.length-written,part*LIVE_CHUNK_BYTES+written);if(n<=0)fail('WRITE_FAILED');written+=n;}fsyncSync(fd);}finally{closeSync(fd);}
+    try{let written=0;while(written<bytes.length){const n=writeSync(fd,bytes,written,bytes.length-written,part*LIVE_CHUNK_BYTES+written);if(n<=0)fail('WRITE_FAILED');written+=n;}fsyncSync(fd);testHook?.('after-chunk-fsync');}finally{closeSync(fd);}
     db.prepare("UPDATE live_recording_chunks SET state='ready',revision=? WHERE stage_id=? AND part=? AND state='writing'").run(expectedRevision+1,current.id,part);
     return {revision:expectedRevision+1,sha256:expectedSha};
    }).immediate();
+   testHook?.('after-chunk-commit');return result;
   },
   /** Re-read every actual byte; only an exact full-file SHA and contiguous ledger may be sealed. */
   seal(id:string,project:string,recording:string,size:number,expectedSha:string){
    if(!Number.isSafeInteger(size)||size<=0||size>MAX_RECORDING_SIZE||!sha(expectedSha))return fail('INVALID_FINAL');
    return db.transaction(()=>{
-    const s=checked(id,project,recording);if(s.state==='opening'||s.state==='cancelling'||s.state==='published')return fail('NOT_OPEN');
+    const s=checked(id,project,recording);if(s.state==='opening'||s.state==='cancelling'||s.state==='published')return fail('NOT_OPEN');assertLanBinding(s.project_id,s.recording_id);
     if(s.state==='sealed'&&(s.final_size!==size||s.final_sha256!==expectedSha))return fail('FINAL_CONFLICT');
     const chunks=db.prepare('SELECT * FROM live_recording_chunks WHERE stage_id=? ORDER BY part').all(s.id) as Chunk[];
     if(chunks.length!==Math.ceil(size/LIVE_CHUNK_BYTES))return fail('INCOMPLETE');
@@ -176,7 +189,7 @@ export function createLiveStaging(db:Database.Database,root:string,freeBytes?:(d
   },
   /** Only for a verified, sealed recording; the calling transaction must recheck before publishing. */
   sealedPath(id:string,project:string,recording:string){
-   const s=checked(id,project,recording);if(s.state!=='sealed'||!s.final_size||!s.final_sha256)return fail('NOT_SEALED');
+   const s=checked(id,project,recording);if(s.state!=='sealed'||!s.final_size||!s.final_sha256)return fail('NOT_SEALED');assertLanBinding(s.project_id,s.recording_id);
    const fd=openChecked(s);try{if(fstatSync(fd).size!==s.final_size)fail('STAGE_CHANGED');}finally{closeSync(fd);}
    return {path:filename(s),sizeBytes:s.final_size,sha256:s.final_sha256,dev:s.dev!,ino:s.ino!};
   },
