@@ -19,17 +19,18 @@ export function createStudioRendezvousHttpFixture({db,getPrincipal,authorize,clo
  if(process.env.NODE_ENV!=='test'||process.env.VIDEOMAKER_STUDIO_RENDEZVOUS_FIXTURE!=='1')throw Error('STUDIO_RENDEZVOUS_FIXTURE_DISABLED');
  if(typeof getPrincipal!=='function'||typeof authorize!=='function'||typeof clock!=='function'||!Buffer.isBuffer(serverSecret)||serverSecret.length<32)throw Error('INVALID_FIXTURE');
  const wake=new EventEmitter(),waiters=new Set();
+ const trace=stage=>{if(process.env.VIDEOMAKER_STUDIO_FIXTURE_DIAGNOSTIC==='1')process.stderr.write('fixture guard: '+stage+'\n');};
  const poll=async(room,role,res,read)=>{
   const key=room+':'+role;if(waiters.has(key))throw Error('STUDIO_RENDEZVOUS_BACKPRESSURE');waiters.add(key);
   let finish;const pending=new Promise(resolve=>{let done=false;finish=()=>{if(done)return;done=true;clearTimeout(timer);wake.off(room,finish);res.off('close',finish);resolve();};const timer=setTimeout(finish,1000);wake.once(room,finish);res.once('close',finish);});
   try{let result=read();if(result.empty){await pending;if(res.destroyed)throw Error('closed');result=read();}return result;}finally{finish();waiters.delete(key);}
  };
  const server=createServer(async(req,res)=>{
-  if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)||req.method!=='POST'||req.headers.origin!==ORIGIN||req.headers['content-type']!=='application/json'){response(res,403,{error:'denied'});req.resume();return;}
-  let principal;try{principal=getPrincipal(req);}catch{principal=null;}if(!principal){response(res,403,{error:'denied'});req.resume();return;}
-  try{
-   const input=await body(req),url=req.url||'',base={ownerHash:principal.ownerHash,sessionHash:principal.sessionHash};let result;
-   if(url==='/fixture/rooms'&&exact(input,['deviceId']))result=createStudioRoomFixture(db,{...base,deviceId:input.deviceId},serverSecret,clock,authorize);
+  if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)||req.method!=='POST'||req.headers.origin!==ORIGIN||req.headers['content-type']!=='application/json'){trace(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)?'peer':req.method!=='POST'?'method':req.headers.origin!==ORIGIN?'origin':'content-type');response(res,403,{error:'denied'});req.resume();return;}
+  let principal;try{principal=getPrincipal(req);}catch{principal=null;}if(!principal){trace('principal');response(res,403,{error:'denied'});req.resume();return;}
+  let stage='body';try{
+   const input=await body(req),url=req.url||'',base={ownerHash:principal.ownerHash,sessionHash:principal.sessionHash};let result;stage='route-or-core';
+   if(url==='/fixture/rooms'&&exact(input,['deviceId','attemptId']))result=createStudioRoomFixture(db,{...base,deviceId:input.deviceId,attemptId:input.attemptId},serverSecret,clock,authorize);
    else if(url==='/fixture/rooms/join'&&exact(input,['roomId','deviceId','joinCode']))result=joinStudioRoomFixture(db,{...base,...input},clock,authorize);
    else{
     const match=/^\/fixture\/rooms\/([0-9a-f-]{36})\/(approve|key|send|peek|ack|close)$/.exec(url);if(!match||!UUID.test(match[1]))throw Error('denied');
@@ -45,7 +46,7 @@ export function createStudioRendezvousHttpFixture({db,getPrincipal,authorize,clo
     }
    }
    response(res,200,result);
-  }catch(error){if(error?.message==='STUDIO_RENDEZVOUS_BACKPRESSURE')response(res,429,{error:'backpressure'});else response(res,403,{error:'denied'});}
+  }catch(error){trace(stage);if(error?.message==='STUDIO_RENDEZVOUS_BACKPRESSURE')response(res,429,{error:'backpressure'});else response(res,403,{error:'denied'});}
  });
  server.headersTimeout=6000;server.requestTimeout=6000;server.maxHeadersCount=32;
  // Guard both bind and peer address: this test server cannot listen publicly.

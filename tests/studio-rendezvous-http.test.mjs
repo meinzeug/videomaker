@@ -20,7 +20,7 @@ async function setup(){
 
 test('real localhost HTTP: paired sessions exchange HMAC-authenticated binary data and logout stops both', {timeout:10000},async()=>{
  const f=await setup();try{
-  let r=await f.request(f.camera,'/fixture/rooms',{deviceId:f.camera.deviceId});assert.equal(r.status,200);const room=r.value,base=`/fixture/rooms/${room.roomId}`;
+  let r=await f.request(f.camera,'/fixture/rooms',{deviceId:f.camera.deviceId,attemptId:randomUUID()});assert.equal(r.status,200);const room=r.value,base=`/fixture/rooms/${room.roomId}`;
   assert.equal((await f.request(f.prompter,'/fixture/rooms/join',{roomId:room.roomId,joinCode:room.joinCode,deviceId:f.prompter.deviceId})).status,200);
   const member=x=>({role:x.role,deviceId:x.deviceId});
   assert.equal((await f.request(f.camera,base+'/key',member(f.camera))).status,403);
@@ -40,9 +40,9 @@ test('real localhost HTTP: paired sessions exchange HMAC-authenticated binary da
 
 test('HTTP rejects missing login, wrong origin, malformed payload and competing join', {timeout:10000},async()=>{
  const f=await setup();try{
-  assert.equal((await f.request({cookie:'wrong'},'/fixture/rooms',{deviceId:f.camera.deviceId})).status,403);
-  assert.equal((await f.request(f.camera,'/fixture/rooms',{deviceId:f.camera.deviceId},{origin:'https://evil.test'})).status,403);
-  const room=(await f.request(f.camera,'/fixture/rooms',{deviceId:f.camera.deviceId})).value;
+  assert.equal((await f.request({cookie:'wrong'},'/fixture/rooms',{deviceId:f.camera.deviceId,attemptId:randomUUID()})).status,403);
+  assert.equal((await f.request(f.camera,'/fixture/rooms',{deviceId:f.camera.deviceId,attemptId:randomUUID()},{origin:'https://evil.test'})).status,403);
+  const room=(await f.request(f.camera,'/fixture/rooms',{deviceId:f.camera.deviceId,attemptId:randomUUID()})).value;
   const join=x=>f.request(x,'/fixture/rooms/join',{roomId:room.roomId,joinCode:room.joinCode,deviceId:x.deviceId});
   const results=await Promise.all([join(f.prompter),join(f.third)]);assert.deepEqual(results.map(x=>x.status).sort(),[200,403]);
   assert.equal((await f.request(f.camera,`/fixture/rooms/${room.roomId}/send`,{deviceId:f.camera.deviceId,role:'camera',sequence:1,data:'?',ownerHash:'attacker'})).status,403);
@@ -57,7 +57,7 @@ test('fixture refuses non-loopback listener and production activation',()=>{
 
 test('a full queue produces recoverable backpressure and resumes after ACK', {timeout:10000},async()=>{
  const f=await setup();try{
-  const room=(await f.request(f.camera,'/fixture/rooms',{deviceId:f.camera.deviceId})).value,base=`/fixture/rooms/${room.roomId}`,member=x=>({role:x.role,deviceId:x.deviceId});
+  const room=(await f.request(f.camera,'/fixture/rooms',{deviceId:f.camera.deviceId,attemptId:randomUUID()})).value,base=`/fixture/rooms/${room.roomId}`,member=x=>({role:x.role,deviceId:x.deviceId});
   await f.request(f.prompter,'/fixture/rooms/join',{roomId:room.roomId,joinCode:room.joinCode,deviceId:f.prompter.deviceId});await f.request(f.camera,base+'/approve',member(f.camera));await f.request(f.prompter,base+'/approve',member(f.prompter));
   const data=Buffer.from('x').toString('base64');for(let sequence=1;sequence<=16;sequence++)assert.equal((await f.request(f.camera,base+'/send',{...member(f.camera),sequence,data})).status,200);
   const send={...member(f.camera),sequence:17,data};assert.equal((await f.request(f.camera,base+'/send',send)).status,429);
@@ -67,11 +67,18 @@ test('a full queue produces recoverable backpressure and resumes after ACK', {ti
 
 test('long poll wakes on a frame and bounds simultaneous polls per role', {timeout:10000},async()=>{
  const f=await setup();try{
-  const room=(await f.request(f.camera,'/fixture/rooms',{deviceId:f.camera.deviceId})).value,base=`/fixture/rooms/${room.roomId}`,member=x=>({role:x.role,deviceId:x.deviceId});
+  const room=(await f.request(f.camera,'/fixture/rooms',{deviceId:f.camera.deviceId,attemptId:randomUUID()})).value,base=`/fixture/rooms/${room.roomId}`,member=x=>({role:x.role,deviceId:x.deviceId});
   await f.request(f.prompter,'/fixture/rooms/join',{roomId:room.roomId,joinCode:room.joinCode,deviceId:f.prompter.deviceId});await f.request(f.camera,base+'/approve',member(f.camera));await f.request(f.prompter,base+'/approve',member(f.prompter));
   const waiting=f.request(f.prompter,base+'/peek',member(f.prompter));await new Promise(resolve=>setTimeout(resolve,50));
   assert.equal((await f.request(f.prompter,base+'/peek',member(f.prompter))).status,429);
   assert.equal((await f.request(f.camera,base+'/send',{...member(f.camera),sequence:1,data:Buffer.from('wake').toString('base64')})).status,200);
   const result=await waiting;assert.equal(result.status,200);assert.equal(Buffer.from(result.value.data,'base64').toString(),'wake');
+ }finally{await f.close();}
+});
+
+test('HTTP create retries recover the same room and code without consuming extra room slots', {timeout:10000},async()=>{
+ const f=await setup();try{
+  const body={deviceId:f.camera.deviceId,attemptId:randomUUID()},first=await f.request(f.camera,'/fixture/rooms',body),retry=await f.request(f.camera,'/fixture/rooms',body);
+  assert.equal(first.status,200);assert.equal(retry.status,200);assert.equal(retry.value.created,false);assert.equal(retry.value.roomId,first.value.roomId);assert.equal(retry.value.joinCode,first.value.joinCode);assert.equal(f.db.prepare('SELECT count(*) n FROM studio_signal_rooms').get().n,1);
  }finally{await f.close();}
 });

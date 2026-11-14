@@ -14,9 +14,9 @@ import {revokeSession} from '../lib/session-revocations.ts';
 process.env.NODE_ENV='test';process.env.VIDEOMAKER_STUDIO_RENDEZVOUS_FIXTURE='1';
 function setup(db=new Database(':memory:')){
  db.pragma('foreign_keys=ON');initializeStudioRendezvousFixture(db);
- const ownerHash='a'.repeat(64),camera={ownerHash,sessionHash:'b'.repeat(64),deviceId:randomUUID(),role:'camera'},prompter={ownerHash,sessionHash:'c'.repeat(64),deviceId:randomUUID(),role:'prompter'},secret=randomBytes(32),runtimeId=randomUUID();let now=1000;const active=new Set([camera.sessionHash,prompter.sessionHash]);
+ const ownerHash='a'.repeat(64),camera={ownerHash,sessionHash:'b'.repeat(64),deviceId:randomUUID(),role:'camera',attemptId:randomUUID()},prompter={ownerHash,sessionHash:'c'.repeat(64),deviceId:randomUUID(),role:'prompter'},secret=randomBytes(32),runtimeId=randomUUID();let now=1000;const active=new Set([camera.sessionHash,prompter.sessionHash]);
  const clock=()=>({runtimeId,wall:now,tick:now}),auth=(o,s)=>o===ownerHash&&active.has(s);
- const open=()=>{const room=createStudioRoomFixture(db,camera,secret,clock,auth);camera.roomId=room.roomId;prompter.roomId=room.roomId;return room;};
+ const open=()=>{camera.attemptId=randomUUID();const room=createStudioRoomFixture(db,camera,secret,clock,auth);camera.roomId=room.roomId;prompter.roomId=room.roomId;return room;};
  const join=room=>joinStudioRoomFixture(db,{...prompter,joinCode:room.joinCode},clock,auth);
  const approve=who=>approveStudioRoomFixture(db,who,clock,auth);
  const key=who=>studioPairingKeyFixture(db,who,secret,clock,auth);
@@ -78,7 +78,7 @@ test('caps rooms per owner and cannot run in production',()=>{
 
 test('existing browser session resolver enforces completed logout',()=>{
  const f=fixture();try{initializeStudioRendezvousFixture(f.db);const runtimeId=f.db.prepare('SELECT runtime_id FROM relay_session_tokens LIMIT 1').get().runtime_id,clock=()=>({runtimeId,wall:1023,tick:1023});
-  const auth=(owner,session)=>resolveRelayBrowserSession(f.db,f.secret,owner,session,()=>1023),camera={ownerHash:f.owner,sessionHash:f.camera.session,deviceId:randomUUID(),role:'camera'},prompter={ownerHash:f.owner,sessionHash:f.prompter.session,deviceId:randomUUID(),role:'prompter'};
+  const auth=(owner,session)=>resolveRelayBrowserSession(f.db,f.secret,owner,session,()=>1023),camera={ownerHash:f.owner,sessionHash:f.camera.session,deviceId:randomUUID(),role:'camera',attemptId:randomUUID()},prompter={ownerHash:f.owner,sessionHash:f.prompter.session,deviceId:randomUUID(),role:'prompter'};
   const room=createStudioRoomFixture(f.db,camera,Buffer.alloc(32,1),clock,auth);camera.roomId=room.roomId;prompter.roomId=room.roomId;joinStudioRoomFixture(f.db,{...prompter,joinCode:room.joinCode},clock,auth);approveStudioRoomFixture(f.db,camera,clock,auth);approveStudioRoomFixture(f.db,prompter,clock,auth);
   revokeSession(f.db,f.secret,f.camera.cookie,1024);assert.throws(()=>peekStudioFrameFixture(f.db,prompter,clock,auth));assert.equal(f.db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,1);
  }finally{f.db.close();}
@@ -103,7 +103,7 @@ test('browser expiry tombstone commits with room closure and cannot revive on cl
  const f=fixture();try{
   initializeStudioRendezvousFixture(f.db);const runtimeId=f.db.prepare('SELECT runtime_id FROM relay_session_tokens LIMIT 1').get().runtime_id;let wall=1023;
   const clock=()=>({runtimeId,wall,tick:1023}),auth=(owner,session)=>resolveRelayBrowserSession(f.db,f.secret,owner,session,()=>wall);
-  const camera={ownerHash:f.owner,sessionHash:f.camera.session,deviceId:randomUUID(),role:'camera'},secret=Buffer.alloc(32,1),room=createStudioRoomFixture(f.db,camera,secret,clock,auth);camera.roomId=room.roomId;
+  const camera={ownerHash:f.owner,sessionHash:f.camera.session,deviceId:randomUUID(),role:'camera',attemptId:randomUUID()},secret=Buffer.alloc(32,1),room=createStudioRoomFixture(f.db,camera,secret,clock,auth);camera.roomId=room.roomId;
   wall=10000;assert.throws(()=>peekStudioFrameFixture(f.db,camera,clock,auth));assert.equal(f.db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,1);
   assert.equal(f.db.prepare('SELECT expired FROM relay_browser_sessions WHERE session_hash=?').get(f.camera.session).expired,1);
   wall=1023;assert.throws(()=>peekStudioFrameFixture(f.db,camera,clock,auth));
@@ -112,4 +112,22 @@ test('browser expiry tombstone commits with room closure and cannot revive on cl
 
 test('resolver exception fails closed and commits room shutdown',()=>{
  const f=setup();try{ready(f);assert.throws(()=>studioPairingKeyFixture(f.db,f.camera,f.secret,f.clock,()=>{throw Error('resolver error');}));assert.equal(f.db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,1);assert.throws(()=>f.key(f.camera));}finally{f.db.close();}
+});
+
+
+test('lost create response is idempotently recoverable without extending QR expiry',()=>{
+ const f=setup();try{
+  const original=f.open(),same=()=>createStudioRoomFixture(f.db,f.camera,f.secret,f.clock,f.auth);f.setTime(11000);const retry=same();
+  assert.equal(retry.roomId,original.roomId);assert.equal(retry.joinCode,original.joinCode);assert.equal(retry.created,false);assert.equal(retry.expiresInMs,50000);
+  assert.throws(()=>createStudioRoomFixture(f.db,{...f.camera,deviceId:randomUUID()},f.secret,f.clock,f.auth));
+  f.setTime(61000);assert.throws(same);assert.equal(f.db.prepare('SELECT count(*) n FROM studio_signal_rooms').get().n,0);
+  assert.throws(same);assert.notEqual(f.open().roomId,original.roomId);
+ }finally{f.db.close();}
+});
+
+test('slow create authorization cannot extend its QR lease',()=>{
+ const f=setup();try{
+  const attempt={...f.camera,attemptId:randomUUID()};let calls=0;const slowly=()=>{calls++;return {...f.clock(),wall:1000+calls*1000,tick:1000+calls*1000};};
+  const created=createStudioRoomFixture(f.db,attempt,f.secret,slowly,f.auth);assert.ok(created.expiresInMs<60000&&created.expiresInMs>0);
+ }finally{f.db.close();}
 });
