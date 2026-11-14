@@ -16,7 +16,7 @@ const {runGrokFlow}=await load('grok-flow.ts');
 const prompts=await load('grok-prompt.ts');
 const id='11111111-1111-4111-8111-111111111111',url='https://example.org/a',now='2026-01-01T00:00:00.000Z';
 const sources=[{title:'Quelle',url,source:'Quelle',date:'',description:'Beschreibung'}];
-const report={sources:[{url}],source_excerpts:[{url,status:'retrieved',text:'Eine belegte Aussage.'}]};
+const report={sources:[{url}],source_excerpts:[{url,status:'retrieved',text:'Eine belegte Aussage. „Eine belegte Aussage.“, sagte Beispiel.'}]};
 const options=mode=>({mode,scope:'selected',tones:['frech'],dramaturgy:'Spannung',instructions:'Direkt zum Thema',allowIncompleteSources:true});
 const finalFields={titel:['Titel eins','Titel zwei','Titel drei'],thumbnail_text:'Ein Thema',pin_kommentar:'Was meint ihr?',quellen:[`Quelle – ${url}`],hinweise_fuer_dennis:[]};
 function fixture(channel=null,selected=null,file=':memory:'){
@@ -34,7 +34,7 @@ function fake(plan){
   const body=JSON.parse(init.body);calls.push(body);
   const facts=calls.length===1;
   const n=calls.length-1;
-  const value=facts?{fakten:[{text:'Eine belegte Aussage.',quellen:[url],belege:[{text:'Eine belegte Aussage.',quelle:url}]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:['INTERNER TESTHINWEIS'],skriptplan:{teile:plan}}:{skript:`Abschnitt ${n} enthält eine belegte Aussage.`,...(n===plan.length?finalFields:{})};
+  const value=facts?{fakten:[{text:'Eine belegte Aussage.',quellen:[url],belege:[{text:'„Eine belegte Aussage.“',quelle:url,sprecher:'Beispiel',sprecherkontext:'„Eine belegte Aussage.“, sagte Beispiel.'}]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:['INTERNER TESTHINWEIS'],skriptplan:{teile:plan}}:{skript:`Abschnitt ${n} enthält eine belegte Aussage.`,...(n===plan.length?finalFields:{})};
   return new Response(JSON.stringify({id:`fake-${calls.length}`,model:body.model,usage:{prompt_tokens:10,completion_tokens:20,total_tokens:30,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify(value)}}]}),{status:200});
  };
  return {calls,fetch};
@@ -100,7 +100,7 @@ test('invalid or empty plans are preserved and never trigger paid script parts',
   const oldFetch=globalThis.fetch,oldKey=process.env.OPENROUTER_API_KEY,{db,claim}=fixture();let calls=0;
   process.env.OPENROUTER_API_KEY='fake-test-key';globalThis.fetch=async(urlArg,init)=>{
    assert.equal(urlArg,'https://openrouter.ai/api/v1/chat/completions');assert.equal(init.headers.Authorization,'Bearer fake-test-key');calls++;
-   return new Response(JSON.stringify({id:'fake',model:'x-ai/grok-4.3',usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify({fakten:[{text:'Eine Aussage.',quellen:[url],belege:[{text:'Eine belegte Aussage.',quelle:url}]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[],skriptplan:{teile:plan}})}}]}),{status:200});
+   return new Response(JSON.stringify({id:'fake',model:'x-ai/grok-4.3',usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify({fakten:[{text:'Eine Aussage.',quellen:[url],belege:[{text:'„Eine belegte Aussage.“',quelle:url,sprecher:'Beispiel',sprecherkontext:'„Eine belegte Aussage.“, sagte Beispiel.'}]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[],skriptplan:{teile:plan}})}}]}),{status:200});
   };
   try{
    await assert.rejects(runGrokFlow(db,claim,true,()=>{}),/Faktenblatt|Skriptplan/i);assert.equal(calls,1);
@@ -236,18 +236,18 @@ test('only source-confirmed named film titles can appear as titles, never as inv
 for(const variant of ['valid','extra','missing','foreign','extraForeign','duplicate','duplicateExtra','unverified']) test(`targeted correction preserves original parts and makes only one repair call: ${variant}`,async()=>{
  await isolated(['Einleitung','Zitat eins','Zitat zwei'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
   const original=['Unveränderter erster Teil.','Zitat: „Erfundener erster Wortlaut.“','Zitat: „Erfundener zweiter Wortlaut.“'];
-  const item2={teil:2,skript:'Zitat: „Eine belegte Aussage.“'},item3={teil:3,skript:'Zitat: „Eine belegte Aussage.“'},extra={teil:1,skript:'Ungeforderte Änderung darf nicht übernommen werden.'};
-  const corrections={valid:[item2,item3],extra:[item2,item3,extra],missing:[item2],foreign:[item2,{teil:4,skript:'Zitat: „Eine belegte Aussage.“'}],extraForeign:[item2,item3,{teil:99,skript:'Unerwarteter unbekannter Teil.'}],duplicate:[item2,item2],duplicateExtra:[item2,item3,extra,extra],unverified:[{teil:2,skript:'Zitat: „Eine unbelegte Aussage.“'},item3]};
+  const item2={teil:2,skript:'Zitat: „Eine belegte Aussage.“, sagte Beispiel.'},item3={teil:3,skript:'Zitat: „Eine belegte Aussage.“, sagte Beispiel.'},extra={teil:1,skript:'Ungeforderte Änderung darf nicht übernommen werden.'};
+  const corrections={valid:[item2,item3],extra:[item2,item3,extra],missing:[item2],foreign:[item2,{teil:4,skript:'Zitat: „Eine belegte Aussage.“, sagte Beispiel.'}],extraForeign:[item2,item3,{teil:99,skript:'Unerwarteter unbekannter Teil.'}],duplicate:[item2,item2],duplicateExtra:[item2,item3,extra,extra],unverified:[{teil:2,skript:'Zitat: „Eine unbelegte Aussage.“'},item3]};
   globalThis.fetch=async(urlArg,init)=>{
    if(calls.length===4){const request=JSON.parse(init.body);calls.push(request);return new Response(JSON.stringify({id:'repair-mock',model:request.model,usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify({teile:corrections[variant]})}}]}),{status:200});}
    const response=await baseFetch(urlArg,init),body=await response.json(),payload=JSON.parse(body.choices[0].message.content);
-   if(calls.length===1)payload.zitate=[{text:'Eine belegte Aussage.',quelle:url}];
+   if(calls.length===1)payload.zitate=[{text:'„Eine belegte Aussage.“',quelle:url,sprecher:'Beispiel',sprecherkontext:'„Eine belegte Aussage.“, sagte Beispiel.'}];
    else payload.skript=original[calls.length-2];
    body.choices[0].message.content=JSON.stringify(payload);return new Response(JSON.stringify(body),{status:200});
   };
   if(variant==='valid'||variant==='extra'){
    const result=await runGrokFlow(db,claim,true,()=>{}),project=JSON.parse(result.responseText),text=project.script;
-   assert.equal(text,'Unveränderter erster Teil.\n\nZitat: „Eine belegte Aussage.“\n\nZitat: „Eine belegte Aussage.“');
+   assert.equal(text,'Unveränderter erster Teil.\n\nZitat: „Eine belegte Aussage.“, sagte Beispiel.\n\nZitat: „Eine belegte Aussage.“, sagte Beispiel.');
    assert.equal(project._originalScript,original.join('\n\n'),'original script must remain available for the project');
   }else await assert.rejects(runGrokFlow(db,claim,true,()=>{}),/Korrektur|Teil|vollständig|ungültig/i);
   const stored=state.readGrokParts(db,id).map(p=>JSON.parse(JSON.parse(p.response).text).skript);

@@ -1,9 +1,10 @@
 import {canonicalSourceUrl} from './research.ts';
+import {sourceConfirmsSpeaker} from './quote-speaker.ts';
 /** An AI-produced fact sheet is a draft, not a guarantee that sources are true. */
 type Evidence={text:string;quelle:string;ungeprueft?:boolean};
 type Fact={text:string;quellen:string[];belege?:Evidence[];ungeprueft?:boolean};
-type Quote={text:string;quelle:string};
-export type FactSheet={fakten:Fact[];meinungen_dritter:Fact[];zitate:Quote[];unklar:string[];hinweise_fuer_dennis:string[];werktitel?:string[]};
+type Quote={text:string;quelle:string;sprecher?:string;sprecherkontext?:string};
+export type FactSheet={fakten:Fact[];meinungen_dritter:Fact[];zitate:Quote[];unklar:string[];hinweise_fuer_dennis:string[];werktitel?:string[];zitatSprecherpflicht?:boolean};
 const str=(x:unknown,max:number)=>typeof x==='string'?x.trim().slice(0,max):'';
 const obj=(x:unknown):Record<string,unknown>|null=>x&&typeof x==='object'&&!Array.isArray(x)?x as Record<string,unknown>:null;
 
@@ -44,22 +45,25 @@ export function validateFactSheet(raw:unknown,sources:unknown,report:unknown,req
  const works=new Set<string>();
  for(const fact of facts){
   const named=/(?:^|[^\p{L}])(?:film|dokumentarfilm|dokufilm|doku|dokumentation|buch|roman|artikel|sendung|serie)\s*(?:[:–—-]\s*)?(?:„([^“\r\n]+)“|"([^"\r\n]+)"|»([^«\r\n]+)«)/giu;
-  for(const match of fact.text.matchAll(named)){
+  const attributed=[{text:fact.text,urls:fact.quellen},...(fact.belege||[]).filter(item=>!item.ungeprueft).map(item=>({text:item.text,urls:[item.quelle]}))];
+  for(const candidate of attributed)for(const match of candidate.text.matchAll(named)){
    const title=match[1]||match[2]||match[3];
-   if(title&&fact.quellen.some(url=>originals.get(url)?.some(source=>[...source.matchAll(named)].some(found=>(found[1]||found[2]||found[3])===title))))works.add(title);
+   if(title&&candidate.urls.some(url=>originals.get(url)?.some(source=>[...source.matchAll(named)].some(found=>(found[1]||found[2]||found[3])===title))))works.add(title);
   }
  }
  let omitted=0;const quotes:Quote[]=[];
  for(const item of data.zitate.slice(0,100)){
   const q=obj(item),text=typeof q?.text==='string'?q.text.trim():'',quelle=canonicalSourceUrl(q?.quelle);
-  if(text&&known.has(quelle)&&originals.get(quelle)?.some(source=>source.includes(text)))quotes.push({text,quelle});else omitted++;
+  const sprecher=typeof q?.sprecher==='string'?q.sprecher.trim():'',sprecherkontext=typeof q?.sprecherkontext==='string'?q.sprecherkontext.trim():'';
+  const named=!!sprecher&&/^[\p{L}\p{M}][\p{L}\p{M}'’\- ]{0,149}$/u.test(sprecher);
+  if(text&&known.has(quelle)&&originals.get(quelle)?.some(source=>requireEvidence?named&&sourceConfirmsSpeaker(source,text,sprecher,sprecherkontext):source.includes(text)))quotes.push({text,quelle,...(requireEvidence?{sprecher,sprecherkontext}:{})});else omitted++;
  }
  const strings=(items:unknown[])=>items.map(x=>str(x,1200)).filter(Boolean).slice(0,100);
  const notes=strings(data.hinweise_fuer_dennis);
  if(omittedFacts)notes.push(`${omittedFacts} Aussage(n) ohne exakte überprüfbare Textstelle wurden nicht ins Skript übernommen.`);
  if(fallbackFacts)notes.push(`${fallbackFacts} Aussage(n) beruhen auf ausdrücklich zugelassenen Kurzbeschreibungen, nicht auf abgerufenen Originalquellen, und sind ungeprüft.`);
  if(requireEvidence)notes.push('Belegstellen sind exakte Texttreffer. Sie beweisen nicht automatisch, dass eine Aussage den Quellkontext richtig wiedergibt.');
- if(omitted)notes.push(`${omitted} Zitat(e) ohne überprüfbaren Originalwortlaut wurden ausgelassen.`);
+ if(omitted)notes.push(`${omitted} Zitat(e) ohne überprüfbaren Originalwortlaut${requireEvidence?' oder eindeutige Sprecherstelle':''} wurden ausgelassen.`);
  if(!originals.size)notes.push('Für wörtliche Zitate liegt kein direkt abgerufener Originaltext vor; solche Zitate wurden nicht übernommen.');
- return {fakten:facts,meinungen_dritter:opinions,zitate:quotes,unklar:[...strings(data.unklar),...rejectedFacts],hinweise_fuer_dennis:notes,werktitel:[...works]};
+ return {fakten:facts,meinungen_dritter:opinions,zitate:quotes,unklar:[...strings(data.unklar),...rejectedFacts],hinweise_fuer_dennis:notes,werktitel:[...works],...(requireEvidence?{zitatSprecherpflicht:true}:{})};
 }
