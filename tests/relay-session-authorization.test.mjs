@@ -125,3 +125,38 @@ test('a new challenge that expires before commit is rolled back',()=>{
   assert.equal(f.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='relay_session_challenges'").get(),undefined);
  }finally{f.db.close();}
 });
+
+test('an observed expired grant cannot revive after wall clock rollback',()=>{
+ const f=fixture();try{
+  const {challenge,signature}=f.make();completeRelaySession(f.db,owner,session,f.request,challenge.challengeId,signature,()=>clock(1020),()=>true);
+  assert.equal(verifyRelaySession(f.db,owner,session,f.request,f.credential,()=>clock(301011,1021),()=>true),false);
+  assert.equal(verifyRelaySession(f.db,owner,session,f.request,f.credential,()=>clock(1022,1022),()=>true),false);
+ }finally{f.db.close();}
+});
+test('an observed expired session challenge stays expired after wall clock rollback',()=>{
+ const f=fixture();try{
+  const {challenge,signature}=f.make();
+  assert.throws(()=>completeRelaySession(f.db,owner,session,f.request,challenge.challengeId,signature,()=>clock(61001,1021),()=>true),/EXPIRED/);
+  assert.throws(()=>completeRelaySession(f.db,owner,session,f.request,challenge.challengeId,signature,()=>clock(1022,1022),()=>true),/EXPIRED/);
+ }finally{f.db.close();}
+});
+test('an expired role grant is discarded even if the other role is absent',()=>{
+ const f=fixture();try{
+  const {challenge,signature}=f.make();completeRelaySession(f.db,owner,session,f.request,challenge.challengeId,signature,()=>clock(1020),()=>true);
+  const camera={session,request:f.request,credential:f.credential,authorize:()=>true},credential=randomBytes(32).toString('base64url');
+  const request={...f.request,deviceId:f.prompter.deviceId,role:'prompter',tokenHash:createHash('sha256').update(credential).digest('hex')};
+  const guest={session:otherSession,request,credential,authorize:()=>true};
+  assert.equal(verifyRelaySessionPair(f.db,owner,camera,guest,()=>clock(301011,1021)),false);
+  assert.equal(verifyRelaySession(f.db,owner,session,f.request,f.credential,()=>clock(1022,1022),()=>true),false);
+ }finally{f.db.close();}
+});
+
+test('expiry-sensitive operations cannot be wrapped in a transaction that rolls back their tombstones',()=>{
+ const f=fixture();try{
+  assert.throws(()=>f.db.transaction(()=>beginRelaySession(f.db,owner,session,f.request,()=>clock(1010),()=>true)).immediate(),/NESTED_RELAY_TRANSACTION_UNSUPPORTED/);
+  const {challenge,signature}=f.make();
+  assert.throws(()=>f.db.transaction(()=>completeRelaySession(f.db,owner,session,f.request,challenge.challengeId,signature,()=>clock(1020),()=>true)).immediate(),/NESTED_RELAY_TRANSACTION_UNSUPPORTED/);
+  completeRelaySession(f.db,owner,session,f.request,challenge.challengeId,signature,()=>clock(1020),()=>true);
+  assert.throws(()=>f.db.transaction(()=>verifyRelaySession(f.db,owner,session,f.request,f.credential,()=>clock(1021),()=>true)).immediate(),/NESTED_RELAY_TRANSACTION_UNSUPPORTED/);
+ }finally{f.db.close();}
+});

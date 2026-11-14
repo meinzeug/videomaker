@@ -98,7 +98,7 @@ test('pairing challenge expiry during the final commit preparation rolls back ev
   assert.throws(()=>completeRelayPairing(f.db,owner,input,()=>time(++reads<3?1001:61001),()=>true),/EXPIRED/);
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_links').get().n,0);
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_devices').get().n,0);
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_challenges').get().n,1);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_challenges').get().n,0);
  }finally{f.db.close();}
 });
 
@@ -108,5 +108,13 @@ test('a different runtime cannot delete an unrelated pending pairing challenge',
   const otherRuntime=randomUUID();beginRelayPairing(f.db,owner,randomUUID(),transcript,()=>time(1001,1001,otherRuntime),()=>true);
   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM relay_pair_challenges').get().n,2);
   assert.equal(completeRelayPairing(f.db,owner,f.prepare(first),()=>time(1002),()=>true).created,true);
+ }finally{f.db.close();}
+});
+
+test('an observed expired pairing challenge cannot revive after wall clock rollback',()=>{
+ const f=fixture();try{
+  const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(),()=>true),input=f.prepare(challenge);
+  assert.throws(()=>completeRelayPairing(f.db,owner,input,()=>time(61000,1001),()=>true),/EXPIRED/);
+  assert.throws(()=>completeRelayPairing(f.db,owner,input,()=>time(1002,1002),()=>true),/EXPIRED/);
  }finally{f.db.close();}
 });
