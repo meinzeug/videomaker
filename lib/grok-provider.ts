@@ -4,7 +4,7 @@ import {beginGrokAttempt,finishGrokAttempt,type Usage,type GrokAttemptPhase} fro
 export class GrokProviderError extends Error {status:number;uncertain:boolean;constructor(status:number,uncertain:boolean,message:string){super(message);this.status=status;this.uncertain=uncertain;}}
 export type GrokReply={text:string;truncated:boolean;usage:Usage};
 type Phase=GrokAttemptPhase;
-type Dependencies={fetch?:typeof fetch;sleep?:(ms:number)=>Promise<void>;timeoutMs?:number;authorize?:()=>void;kontrakurs?:boolean;partFinal?:boolean;partSystem?:string;metadataOnly?:boolean};
+type Dependencies={fetch?:typeof fetch;sleep?:(ms:number)=>Promise<void>;timeoutMs?:number;authorize?:()=>void;kontrakurs?:boolean;partFinal?:boolean;partSystem?:string;metadataOnly?:boolean;partsRepair?:boolean};
 const empty:Usage={model:null,id:null,promptTokens:null,completionTokens:null,reasoningTokens:null,totalTokens:null,costUsd:null};
 const nonnegative=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)&&v>=0?v:null;
 const safeString=(v:unknown)=>typeof v==='string'&&/^[\w./:-]{1,160}$/.test(v)?v:null;
@@ -25,6 +25,7 @@ function scriptResponseFormat(_kontrakurs:boolean) {return SCRIPT_RESPONSE_FORMA
 const PART_RESPONSE_FORMAT={type:'json_schema',json_schema:{name:'videomaker_skriptteil',strict:true,schema:{type:'object',additionalProperties:false,required:['skript'],properties:{skript:{type:'string'}}}}} as const;
 const {skript:_scriptField,...metadataProperties}=SCRIPT_RESPONSE_FORMAT.json_schema.schema.properties;
 const METADATA_RESPONSE_FORMAT={type:'json_schema',json_schema:{name:'videomaker_metadaten',strict:true,schema:{type:'object',additionalProperties:false,required:['titel','thumbnail_text','pin_kommentar','quellen','hinweise_fuer_dennis'],properties:metadataProperties}}} as const;
+const PART_REPAIR_RESPONSE_FORMAT={type:'json_schema',json_schema:{name:'videomaker_teilkorrektur',strict:true,schema:{type:'object',additionalProperties:false,required:['teile','titel','thumbnail_text','pin_kommentar','quellen','hinweise_fuer_dennis'],properties:{...metadataProperties,teile:{type:'array',items:{type:'object',additionalProperties:false,required:['teil','skript'],properties:{teil:{type:'integer'},skript:{type:'string'}}}}}}}} as const;
 
 export function grokModels(){
  const primary=process.env.SCRIPT_MODEL||'x-ai/grok-4.3',fallback=process.env.SCRIPT_FALLBACK_MODEL||'x-ai/grok-4.20';
@@ -70,7 +71,7 @@ export async function grokCompletion(db:Database.Database,id:string,phase:Phase,
    const ordinal=beginGrokAttempt(db,id,phase,model,new Date().toISOString(),deps.authorize);
    let response:Response;const signal=AbortSignal.timeout(deps.timeoutMs??120000);
    try{
-    response=await withAbort(fetcher('https://openrouter.ai/api/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json','HTTP-Referer':'https://videomaker.dorfspy.de','X-Title':'Kontrakurs Studio'},body:JSON.stringify({model,temperature:phase==='facts'?0.3:0.85,top_p:0.95,...tokenLimit,response_format:phase==='facts'?{type:'json_object'}:deps.metadataOnly?METADATA_RESPONSE_FORMAT:phase.startsWith('part')&&!deps.partFinal?PART_RESPONSE_FORMAT:scriptResponseFormat(!!deps.kontrakurs),reasoning:{enabled:false},provider:{require_parameters:true},messages:[{role:'system',content:system},...(deps.partSystem?[{role:'system',content:deps.partSystem}]:[]),{role:'user',content:prompt}]}),signal}),signal);
+    response=await withAbort(fetcher('https://openrouter.ai/api/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json','HTTP-Referer':'https://videomaker.dorfspy.de','X-Title':'Kontrakurs Studio'},body:JSON.stringify({model,temperature:phase==='facts'?0.3:0.85,top_p:0.95,...tokenLimit,response_format:phase==='facts'?{type:'json_object'}:deps.partsRepair?PART_REPAIR_RESPONSE_FORMAT:deps.metadataOnly?METADATA_RESPONSE_FORMAT:phase.startsWith('part')&&!deps.partFinal?PART_RESPONSE_FORMAT:scriptResponseFormat(!!deps.kontrakurs),reasoning:{enabled:false},provider:{require_parameters:true},messages:[{role:'system',content:system},...(deps.partSystem?[{role:'system',content:deps.partSystem}]:[]),{role:'user',content:prompt}]}),signal}),signal);
    }catch{
     finishGrokAttempt(db,id,phase,ordinal,'unknown',null,null,new Date().toISOString());
     console.info(JSON.stringify({event:'script_provider_attempt',phase,model,status:'unknown',costUsd:null}));

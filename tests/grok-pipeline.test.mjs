@@ -120,6 +120,15 @@ test('unknown in-flight or old pending claims cannot start duplicate paid calls'
  const {db,claim}=fixture();await assert.rejects(runGrokFlow(db,claim,false,()=>{}),GrokPending);assert.equal(readGenerationClaim(db,id).state,'pending');assert.equal(db.prepare('SELECT count(*) AS n FROM grok_generation_attempts').get().n,0);db.close();
 });
 
+test('invalid JSON from a legacy single-response run remains preserved without a repair call',async()=>{
+ const {db,claim}=fixture(),old=process.env.OPENROUTER_API_KEY,oldFetch=globalThis.fetch;let calls=0;
+ process.env.OPENROUTER_API_KEY='test-only';globalThis.fetch=async()=>response(++calls===1?JSON.stringify(rawFacts):'{unvollständige Antwort');
+ try{
+  await assert.rejects(runGrokFlow(db,claim,true,()=>{}),GrokInvalid);
+  assert.equal(calls,2);assert.equal(readGenerationClaim(db,id).responseText,'{unvollständige Antwort');
+ }finally{globalThis.fetch=oldFetch;if(old===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=old;db.close();}
+});
+
 test('all 5xx attempts are globally bounded and include fallback',async()=>{
  const {db}=fixture(),old=process.env.OPENROUTER_API_KEY;process.env.OPENROUTER_API_KEY='test-only';const models=[];
  try{

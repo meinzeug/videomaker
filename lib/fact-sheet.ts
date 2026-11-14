@@ -1,7 +1,7 @@
 /** An AI-produced fact sheet is a draft, not a guarantee that sources are true. */
 type Fact={text:string;quellen:string[]};
 type Quote={text:string;quelle:string};
-export type FactSheet={fakten:Fact[];meinungen_dritter:Fact[];zitate:Quote[];unklar:string[];hinweise_fuer_dennis:string[]};
+export type FactSheet={fakten:Fact[];meinungen_dritter:Fact[];zitate:Quote[];unklar:string[];hinweise_fuer_dennis:string[];werktitel?:string[]};
 const str=(x:unknown,max:number)=>typeof x==='string'?x.trim().slice(0,max):'';
 const obj=(x:unknown):Record<string,unknown>|null=>x&&typeof x==='object'&&!Array.isArray(x)?x as Record<string,unknown>:null;
 
@@ -19,6 +19,16 @@ export function validateFactSheet(raw:unknown,sources:unknown,report:unknown):Fa
  }).filter(x=>x.text&&x.quellen.length);
  const facts=readFacts(data.fakten),opinions=readFacts(data.meinungen_dritter);
  if(!facts.length)throw new Error('Das Faktenblatt enthält keine Aussagen mit bekannten Quellen.');
+ // Titles are not speech quotations. Accept a named work only if both the
+ // attributed fact and its retrieved source contain its exact title.
+ const works=new Set<string>();
+ for(const fact of facts){
+  const named=/(?:^|[^\p{L}])(?:film|dokumentarfilm|dokufilm|doku|dokumentation|buch|roman|artikel|sendung|serie)\s*(?:[:–—-]\s*)?(?:„([^“\r\n]+)“|"([^"\r\n]+)"|»([^«\r\n]+)«)/giu;
+  for(const match of fact.text.matchAll(named)){
+   const title=match[1]||match[2]||match[3];
+   if(title&&fact.quellen.some(url=>originals.get(url)?.some(source=>[...source.matchAll(named)].some(found=>(found[1]||found[2]||found[3])===title))))works.add(title);
+  }
+ }
  let omitted=0;const quotes:Quote[]=[];
  for(const item of data.zitate.slice(0,100)){
   const q=obj(item),text=typeof q?.text==='string'?q.text.trim():'',quelle=str(q?.quelle,2000);
@@ -28,5 +38,5 @@ export function validateFactSheet(raw:unknown,sources:unknown,report:unknown):Fa
  const notes=strings(data.hinweise_fuer_dennis);
  if(omitted)notes.push(`${omitted} Zitat(e) ohne überprüfbaren Originalwortlaut wurden ausgelassen.`);
  if(!originals.size)notes.push('Für wörtliche Zitate liegt kein direkt abgerufener Originaltext vor; solche Zitate wurden nicht übernommen.');
- return {fakten:facts,meinungen_dritter:opinions,zitate:quotes,unklar:strings(data.unklar),hinweise_fuer_dennis:notes};
+ return {fakten:facts,meinungen_dritter:opinions,zitate:quotes,unklar:strings(data.unklar),hinweise_fuer_dennis:notes,werktitel:[...works]};
 }

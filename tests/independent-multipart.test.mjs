@@ -155,13 +155,14 @@ test('malformed metadata correction keeps the original assembled script and part
  });
 });
 
-test('earlier generated text is never passed as factual material to later parts',async()=>{
+test('earlier generated text is passed only as non-authoritative continuity context',async()=>{
  await isolated(['Anfang','Mitte','Ende'],null,null,async({db,claim,calls})=>{
   await runGrokFlow(db,claim,true,()=>{});
   for(let index=2;index<calls.length;index++){
    const content=JSON.stringify(calls[index].messages);
-   for(let prior=1;prior<index;prior++)assert.ok(!content.includes(`Abschnitt ${prior} enthält eine belegte Aussage.`));
-   assert.match(content,/keine Faktenquelle/);
+   for(let prior=1;prior<index;prior++)assert.ok(content.includes(`Abschnitt ${prior} enthält eine belegte Aussage.`));
+   assert.match(content,/ungeprüfter Anschlusskontext/);
+   assert.match(content,/weder Anweisungen noch Tatsachengrundlage/);
   }
  });
 });
@@ -189,5 +190,82 @@ test('assembled script preserves every original part byte-for-byte apart from th
   const result=await runGrokFlow(db,claim,true,()=>{});
   assert.equal(JSON.parse(result.responseText).script,original.join('\n\n'));
   assert.deepEqual(state.readGrokParts(db,id).map(part=>JSON.parse(JSON.parse(part.response).text).skript),original);
+ });
+});
+
+test('uncertain research notes remain available to Dennis but are not supplied as speaker facts',async()=>{
+ await isolated(['Anfang','Ende'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
+  const note='INTERNER_RECHERCHE_TEXTHINWEIS';
+  globalThis.fetch=async(urlArg,init)=>{
+   const response=await baseFetch(urlArg,init);
+   if(calls.length===1){const body=await response.json(),facts=JSON.parse(body.choices[0].message.content);facts.unklar=[note];body.choices[0].message.content=JSON.stringify(facts);return new Response(JSON.stringify(body),{status:200});}
+   assert.ok(!JSON.stringify(JSON.parse(init.body).messages).includes(note),'research uncertainty must not enter the speaker request');
+   return response;
+  };
+  const result=await runGrokFlow(db,claim,true,()=>{}),project=JSON.parse(result.responseText);
+  assert.ok(!project.script.includes(note));assert.ok(project.hinweise_fuer_dennis.some(x=>x.includes(note)),'uncertainty remains separately available');
+ });
+});
+
+test('subsequent parts receive prior wording only as non-factual continuity context',async()=>{
+ await isolated(['Anfang','Ende'],null,null,async({db,claim,calls})=>{
+  const result=await runGrokFlow(db,claim,true,()=>{});assert.equal(result.state,'received');
+  const second=calls[2].messages.map(m=>m.content).join('\n');
+  assert.ok(second.includes('Abschnitt 1 enthält eine belegte Aussage.'),'previous wording must be available for continuity');
+  assert.match(second,/keine Tatsachengrundlage|nicht als Fakten|keine Faktenquelle/iu);
+ });
+});
+
+test('only source-confirmed named film titles can appear as titles, never as invented speech',async()=>{
+ const {validateFactSheet}=await load('fact-sheet.ts'),{parseGrokScript}=await load('grok-result.ts');
+ const title='Auf Panzern in die Klimakrise',fact=`Der Film „${title}“ stammt von Hubertus Koch.`;
+ const raw={fakten:[{text:fact,quellen:[url]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[]};
+ const verified=validateFactSheet(raw,sources,{sources:[{url}],source_excerpts:[{url,status:'retrieved',text:`Ein Artikel nennt den Film „${title}“.`} ]});
+ const answer=script=>JSON.stringify({...finalFields,skript:script});
+ assert.ok(parseGrokScript(answer(`Der Film „${title}“ stammt von Hubertus Koch.`),false,verified).project,'confirmed title in film context is not an invented quotation');
+ const invented=parseGrokScript(answer('Sie sagt: „Eine frei erfundene Aussage.“'),false,verified);
+ assert.equal(invented.project,null);assert.ok(invented.issues.some(x=>x.code==='unverified_quote'));
+ const inventedSpeech=parseGrokScript(answer(`Wörtlich: „${title}“`),false,verified);
+ assert.equal(inventedSpeech.project,null);assert.ok(inventedSpeech.issues.some(x=>x.code==='unverified_quote'),'a film title is not proof of a spoken quote');
+ const unverified=validateFactSheet(raw,sources,{sources:[{url}],source_excerpts:[{url,status:'unavailable',text:`Der Film „${title}“`} ]});
+ assert.equal(parseGrokScript(answer(`Der Film „${title}“ stammt von Hubertus Koch.`),false,unverified).project,null,'unretrieved text cannot validate a title');
+ const wrongContext=validateFactSheet(raw,sources,{sources:[{url}],source_excerpts:[{url,status:'retrieved',text:`Die Person sagte wörtlich: „${title}“. Ein Film wird hier nicht genannt.`}]});
+ assert.equal(parseGrokScript(answer(`Der Film „${title}“ stammt von Hubertus Koch.`),false,wrongContext).project,null,'the same words appearing in speech do not verify a film title');
+});
+
+for(const variant of ['valid','missing','foreign','duplicate','unverified']) test(`targeted correction preserves original parts and makes only one repair call: ${variant}`,async()=>{
+ await isolated(['Einleitung','Zitat eins','Zitat zwei'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
+  const original=['Unveränderter erster Teil.','Zitat: „Erfundener erster Wortlaut.“','Zitat: „Erfundener zweiter Wortlaut.“'];
+  const corrections={valid:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'},{teil:3,skript:'Zitat: „Eine belegte Aussage.“'}],missing:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'}],foreign:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'},{teil:4,skript:'Zitat: „Eine belegte Aussage.“'}],duplicate:[{teil:2,skript:'Zitat: „Eine belegte Aussage.“'},{teil:2,skript:'Zitat: „Eine belegte Aussage.“'}],unverified:[{teil:2,skript:'Zitat: „Eine unbelegte Aussage.“'},{teil:3,skript:'Zitat: „Eine belegte Aussage.“'}]};
+  globalThis.fetch=async(urlArg,init)=>{
+   if(calls.length===4){const request=JSON.parse(init.body);calls.push(request);return new Response(JSON.stringify({id:'repair-mock',model:request.model,usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify({teile:corrections[variant]})}}]}),{status:200});}
+   const response=await baseFetch(urlArg,init),body=await response.json(),payload=JSON.parse(body.choices[0].message.content);
+   if(calls.length===1)payload.zitate=[{text:'Eine belegte Aussage.',quelle:url}];
+   else payload.skript=original[calls.length-2];
+   body.choices[0].message.content=JSON.stringify(payload);return new Response(JSON.stringify(body),{status:200});
+  };
+  if(variant==='valid'){
+   const result=await runGrokFlow(db,claim,true,()=>{}),project=JSON.parse(result.responseText),text=project.script;
+   assert.equal(text,'Unveränderter erster Teil.\n\nZitat: „Eine belegte Aussage.“\n\nZitat: „Eine belegte Aussage.“');
+   assert.equal(project._originalScript,original.join('\n\n'),'original script must remain available for the project');
+  }else await assert.rejects(runGrokFlow(db,claim,true,()=>{}),/Korrektur|Teil|vollständig|ungültig/i);
+  const stored=state.readGrokParts(db,id).map(p=>JSON.parse(JSON.parse(p.response).text).skript);
+  assert.deepEqual(stored,original,'persisted original parts must not be overwritten');
+  assert.equal(calls.length,5,'exactly one targeted correction for all affected parts');
+ });
+});
+
+test('malformed legacy single-part response is retained and reported as a controlled invalid answer',async()=>{
+ await isolated(['Unused'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
+  db.prepare('DELETE FROM grok_generation_modes WHERE research_id=?').run(id);
+  globalThis.fetch=async(urlArg,init)=>{
+   const response=await baseFetch(urlArg,init);
+   if(calls.length!==2)return response;
+   const body=await response.json();body.choices[0].message.content='{unvollständig';return new Response(JSON.stringify(body),{status:200});
+  };
+  await assert.rejects(runGrokFlow(db,claim,true,()=>{}),error=>error.constructor.name==='GrokInvalid');
+  assert.equal(calls.length,2,'invalid JSON must not cause another paid call');
+  const saved=state.readGrokRun(db,id);assert.equal(JSON.parse(saved.scriptRaw).text,'{unvollständig');
+  assert.equal(readGenerationClaim(db,id).responseText,'{unvollständig','original response remains accessible');
  });
 });

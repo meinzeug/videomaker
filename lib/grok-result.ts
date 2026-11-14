@@ -29,10 +29,10 @@ export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,_c
   const close=pairs[text[0]];
   return close&&text.length>2&&text.endsWith(close)?[text,text.slice(1,-1)]:[text];
  });
- const quoted:string[]=[];
+ const quoted:Array<{text:string;workContext:boolean}>=[];
  for(let index=0;index<script.length;index++){
   const char=script[index],close=pairs[char];
-  if(close){const end=script.indexOf(close,index+1);if(end<0){issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht vollständig begrenzt.'});break;}quoted.push(script.slice(index+1,end));index=end;}
+  if(close){const end=script.indexOf(close,index+1);if(end<0){issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht vollständig begrenzt.'});break;}const prefix=script.slice(Math.max(0,index-40),index);const workContext=/(?:^|[^\p{L}])(?:film|dokumentarfilm|dokufilm|doku|dokumentation|buch|roman|artikel|sendung|serie)\s*[:–—-]?\s*$/iu.test(prefix);quoted.push({text:script.slice(index+1,end),workContext});index=end;}
   else if(closers.has(char)){issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht vollständig begrenzt.'});break;}
  }
  // Each announced quotation must be checked separately, including multiple
@@ -52,7 +52,7 @@ export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,_c
   const contents=line.slice(1,end),rest=line.slice(end+1);
   return verified.includes(contents)&&/[.!?…]$/u.test(contents)&&/^[^\S\r\n]+[\p{Lu}]/u.test(rest);
  });
- if(quoted.some(q=>!verified.includes(q))||announcedChecks.some(valid=>!valid))issues.push({code:'unverified_quote',message:ambiguousBoundary?'Die Grenze einer als wörtlich angekündigten Passage ist ohne schließende Anführungszeichen nicht eindeutig. Bitte das vollständige belegte Zitat exakt mit Anführungszeichen abgrenzen.':'Ein Ausdruck in Anführungszeichen oder eine als Zitat angekündigte Passage ist nicht als wörtliches Zitat im Faktenblatt bestätigt. Auch belegte Werk- oder Eigennamen können betroffen sein; gegebenenfalls ohne Anführungszeichen formulieren.'});
+ if(quoted.some(q=>!verified.includes(q.text)&&!(q.workContext&&facts.werktitel?.includes(q.text)))||announcedChecks.some(valid=>!valid))issues.push({code:'unverified_quote',message:ambiguousBoundary?'Die Grenze einer als wörtlich angekündigten Passage ist ohne schließende Anführungszeichen nicht eindeutig. Bitte das vollständige belegte Zitat exakt mit Anführungszeichen abgrenzen.':'Ein Ausdruck in Anführungszeichen oder eine als Zitat angekündigte Passage ist nicht als wörtliches Zitat im Faktenblatt bestätigt. Auch belegte Werk- oder Eigennamen können betroffen sein; gegebenenfalls ohne Anführungszeichen formulieren.'});
  if(issues.length||!titles||!sources||!notes)return {project:null,issues};
  const allowed=new Set([...facts.fakten.flatMap(f=>f.quellen),...facts.meinungen_dritter.flatMap(f=>f.quellen),...facts.zitate.map(q=>q.quelle)]);
  const accepted:string[]=[];let rejected=0;
@@ -61,7 +61,7 @@ export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,_c
   const url=urls.length===1?urls[0].replace(/[),.;]+$/,''):'';
   if(allowed.has(url)){try{const entry=`${new URL(url).hostname} – ${url}`;if(!accepted.includes(entry))accepted.push(entry);}catch{rejected++;}}else rejected++;
  }
- const notices=[...facts.hinweise_fuer_dennis,...notes];
+ const notices=[...facts.hinweise_fuer_dennis,...facts.unklar.map(note=>`Unklar: ${note}`),...notes];
  if(rejected)notices.push(`${rejected} Quellenangabe(n) ohne passenden Faktenblattbeleg wurden entfernt.`);
  if(!accepted.length&&allowed.size){for(const url of allowed){try{accepted.push(`${new URL(url).hostname} – ${url}`);}catch{}}notices.push('Die Quellenliste wurde aus den belegten Faktenblatt-URLs ergänzt.');}
  return {project:{titles,script,thumbnail,broll:[],pin_kommentar:pin,hinweise_fuer_dennis:notices,quellen:accepted},issues:[]};
