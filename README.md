@@ -26,6 +26,8 @@ Vorhandene Finanzvorgänge lassen sich unabhängig von Belegen ausdrücklich mit
 
 Das Journal lässt sich als CSV mit sämtlichen bestätigten Buchungszeilen, Kontodaten und Stornos herunterladen. Der Export enthält keine Belege, Finanzzuordnungen oder Einträge der separaten Einnahmen-/Ausgabenübersicht. Potenzielle Formelanfänge werden im Export als sichtbare Unicode-Codes maskiert; die Originaltexte bleiben im Journal. Beim Import Kontonummern als Text auswählen. Der CSV-Export ist weder eine DATEV-Schnittstelle noch ein vollständiges Backup. Übersteigt das Journal die technischen Exportgrenzen, wird keine unvollständige Datei erzeugt.
 
+Die [Zeitraumauswertung](docs/ug-ledger-period.md) berechnet für frei gewählte Daten die Bewegungen je Journalkonto und eine rein rechnerische Differenz der als Ertrag beziehungsweise Aufwand bezeichneten Konten. Sie prüft weder Kontierung noch Steuern, Abschlussbuchungen oder Vollständigkeit und ist kein Jahresabschluss. Ein UG-Rücklagenbetrag wird daraus nicht berechnet.
+
 Dies ist keine vollständige Buchhaltung: Die inhaltliche Verarbeitung von E-Rechnungen, Steueraufteilung, steuerliche Schnittstellen, Perioden- und Jahresabschluss sowie eine Berechnung der UG-Rücklage fehlen. Die Unveränderlichkeit einzelner Einträge allein weist keine GoBD-Konformität nach. Weitere fachliche Grundlagen und Quellen stehen in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## DNS und Deployment
