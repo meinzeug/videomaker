@@ -48,6 +48,45 @@ angenommen. Der Test erzeugt dafür nur kurzlebige Testzertifikate und einen
 lokalen Proxy. Dieser Client ist noch nicht in einen produktiven OIDC-Anbieter
 eingebunden; er stellt selbst weder OIDC noch eine gemeinsame Anmeldung bereit.
 
+Der separate Test `tests/fixtures/haben-oidc-integration.test.mjs` prüft den
+echten Haben-Callback mit PostgreSQL 18 und dem echten `oidc-provider` unter
+dem Anwendungspfad `/buchhaltung/`. Er erstellt eine synthetische signierte
+Video-Maker-Sitzung und verwendet deren echte SQLite-Bindungslogik; der
+Testanbieter gibt nur bei aktiver Bindung eine Identität aus. Geprüft werden
+PKCE, Callback-Adresse, angelegtes Haben-Konto und Inhaberrolle, Code-Replay
+und die Ablehnung einer neuen Anmeldung nach Widerruf der Video-Maker-Referenz.
+Der Test ruft Haben direkt über seinen Authentifizierungs-Handler auf; er ist
+kein Browsertest und benutzt keinen produktiven Provider oder Proxy. Das
+synthetische Video-Maker-Cookie wird den Testanfragen ausdrücklich mitgegeben;
+Browser-Redirects, Cookie-Domain und SameSite-Verhalten bleiben zu prüfen. Er belegt
+ausdrücklich auch, dass eine bereits erstellte Haben-Sitzung nach Video-Maker-
+Logout ohne zusätzlichen Sitzungsschutz bestehen bleibt.
+
+Der Lauf benötigt Node 22, installierte Video-Maker- und Haben-Abhängigkeiten,
+die unter `OIDC_PROVIDER_TEST_DIR` separat installierte Testbibliothek
+`oidc-provider` und einen leeren, ausschließlich lokalen PostgreSQL-18-
+Testcluster. Er löscht und erzeugt dort Testdatenbanken. Der Schutz in
+`tests/fixtures/haben-oidc-safety.mjs` verlangt explizite Freigabe, eine
+Markierungsdatei mit exakt `VIDEOMAKER HABEN OIDC TEST ONLY` und Zeilenumbruch,
+die Datenbank `videomaker_haben_fixture` auf `127.0.0.1` mit explizitem
+nichtprivilegiertem Port und bestätigt vor der Vorbereitung anhand der
+Servereinstellung `data_directory`, dass der Server zum markierten Testordner
+gehört. Die Verbindung und sämtliche Testdaten müssen während des Laufs
+exklusiv für diesen Test reserviert sein; die Markierung ist keine Absicherung
+gegen einen absichtlichen Austausch des Servers nach der Prüfung. Es darf
+keine produktive oder gemeinsam genutzte Datenbank verwendet werden.
+
+```sh
+# Cluster, Markierung und leere Datenbank zuvor isoliert vorbereiten.
+HABEN_OIDC_DISPOSABLE_CLUSTER=/absoluter/testcluster \
+HABEN_OIDC_ALLOW_DISPOSABLE_WRITES=1 \
+TEST_DATABASE_URL=postgres://testbenutzer:testpasswort@127.0.0.1:55439/videomaker_haben_fixture \
+OIDC_PROVIDER_TEST_DIR=/absoluter/oidc-provider-testordner \
+TMPDIR=/absoluter/testcluster \
+node apps/buchhaltung/node_modules/vitest/vitest.mjs run \
+  --config tests/fixtures/haben-oidc-vitest.config.mjs
+```
+
 Ein reproduzierbarer lokaler Test, ohne das Projekt oder einen Server zu
 installieren oder zu verändern:
 
