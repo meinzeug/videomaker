@@ -34,7 +34,7 @@ function pipelineInfo(database:ReturnType<typeof db>,id:string) {
  const plan=readGrokPlan(database,id),parts=readGrokParts(database,id),pending=parts.some(part=>part.state==='pending'),invalid=parts.some(part=>part.state==='invalid')||!!readGrokFailure(database,id);
  const usage=database.prepare('SELECT count(*) AS attempts, count(cost_usd) AS reportedCosts, sum(cost_usd) AS costUsd, sum(prompt_tokens) AS promptTokens, sum(completion_tokens) AS completionTokens FROM grok_generation_attempts WHERE research_id=?').get(id) as {attempts:number;reportedCosts:number;costUsd:number|null;promptTokens:number|null;completionTokens:number|null};
  const pipelinePhase=run.phase==='script_pending'?(invalid?'parts_invalid':!pending?'parts_ready':run.phase):run.phase;
- return {pipelinePhase,partCount:plan?.length??null,completedParts:parts.filter(part=>part.state==='ready').length,maxProviderAttempts:plan?(plan.length+2)*3:null,attemptCount:usage.attempts,reportedCostUsd:usage.costUsd,unknownCostAttempts:usage.attempts-usage.reportedCosts,promptTokens:usage.promptTokens,completionTokens:usage.completionTokens};
+ return {pipelinePhase,...(readGrokFailure(database,id)?{failure:readGrokFailure(database,id)}:{}),partCount:plan?.length??null,completedParts:parts.filter(part=>part.state==='ready').length,maxProviderAttempts:plan?(plan.length+2)*3:null,attemptCount:usage.attempts,reportedCostUsd:usage.costUsd,unknownCostAttempts:usage.attempts-usage.reportedCosts,promptTokens:usage.promptTokens,completionTokens:usage.completionTokens};
 }
 
 /** Read only: no status request ever starts or resumes a paid provider call. */
@@ -122,7 +122,7 @@ export async function POST(req:Request) {
   const snapshot=claimSnapshot(claim),channel=snapshot.channel;
   const content:Record<string,unknown>={titles:result.titles,thumbnail:result.thumbnail,broll:result.broll,script:result.script};
   const grok=!!readGrokRun(database,claim.researchId)&&result._grok===true;
-  if(grok){content.pin_kommentar=result.pin_kommentar;content.hinweise_fuer_dennis=result.hinweise_fuer_dennis;content.quellen=result.quellen;if(typeof result._originalScript==='string')content.generation_original_script=result._originalScript;content.generation_usage=database.prepare('SELECT phase,ordinal,requested_model AS requestedModel,state,status_code AS statusCode,actual_model AS actualModel,generation_id AS generationId,prompt_tokens AS promptTokens,completion_tokens AS completionTokens,reasoning_tokens AS reasoningTokens,total_tokens AS totalTokens,cost_usd AS costUsd FROM grok_generation_attempts WHERE research_id=? ORDER BY started_at,phase,ordinal').all(claim.researchId);}
+  if(grok){content.pin_kommentar=result.pin_kommentar;content.hinweise_fuer_dennis=result.hinweise_fuer_dennis;content.quellen=result.quellen;if(Array.isArray(result.quellenbelege))content.quellenbelege=result.quellenbelege;if(typeof result._originalScript==='string')content.generation_original_script=result._originalScript;content.generation_usage=database.prepare('SELECT phase,ordinal,requested_model AS requestedModel,state,status_code AS statusCode,actual_model AS actualModel,generation_id AS generationId,prompt_tokens AS promptTokens,completion_tokens AS completionTokens,reasoning_tokens AS reasoningTokens,total_tokens AS totalTokens,cost_usd AS costUsd FROM grok_generation_attempts WHERE research_id=? ORDER BY started_at,phase,ordinal').all(claim.researchId);}
   const customized=usesCustomScript(snapshot.options);
   const greetingWarning=!!channel&&channelGreetingMayMismatch(result.script as string,channel.name);
   content.script=grok?(result.script as string):customized?(result.script as string).trim():ensureChannelFraming(result.script as string,channel?.name,channel?.platform);
@@ -131,7 +131,7 @@ export async function POST(req:Request) {
   if(channel)content.generation_target=channel;
   const warnings=greetingWarning?['Die Begrüßung nennt möglicherweise einen anderen Kanal. Bitte vor der Aufnahme prüfen und bei Bedarf bearbeiten.']:[];
   const access=(snapshot.report as {source_access?:unknown})?.source_access;
-  if(Array.isArray(access)&&access.some(item=>item?.status==='unavailable'))warnings.push('Mindestens eine Quelle war nicht abrufbar. Es wurde nur die gespeicherte Kurzbeschreibung verwendet.');
+  if(Array.isArray(access)&&access.some(item=>item?.status==='unavailable'))warnings.push((snapshot.report as {source_mode?:unknown})?.source_mode==='web'?'Mindestens eine recherchierte Quelle war nicht abrufbar; ohne passenden Beleg wurden daraus keine Fakten übernommen.':'Mindestens eine Quelle war nicht abrufbar. Es wurde nur die gespeicherte Kurzbeschreibung verwendet.');
   if(Array.isArray(access)&&access.some(item=>item?.truncated))warnings.push('Mindestens ein ausgelesener Quelltext wurde auf 40.000 Zeichen begrenzt.');
   content.generation_warnings=warnings;
   const project:Project={id:claim.projectId,created_at:new Date().toISOString(),title:(result.titles as string[])[0],sources:snapshot.sources,content};

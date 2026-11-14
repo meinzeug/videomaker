@@ -2,7 +2,7 @@ export type NewsSource={title:string;url:string;source:string;date:string;descri
 export type ResearchSource={title:string;url:string;publisher:string;date:string};
 export type Finding={claim:string;assessment:'belegt'|'umstritten'|'offen';explanation:string;source_urls:string[]};
 export type Hypothesis={question:string;indications:string;alternative:string;limitations:string;source_urls:string[]};
-export type ResearchReport={search_requests:number;summary:string;sources:ResearchSource[];findings:Finding[];hypotheses:Hypothesis[];open_questions:string[];source_mode?:'selected';source_access?:Array<{url:string;status:'retrieved'|'unavailable';truncated:boolean}>};
+export type ResearchReport={search_requests:number;summary:string;sources:ResearchSource[];findings:Finding[];hypotheses:Hypothesis[];open_questions:string[];source_mode?:'selected'|'web';source_access?:Array<{url:string;status:'retrieved'|'unavailable';truncated:boolean}>};
 const text=(value:unknown,max:number)=>typeof value==='string'?value.trim().slice(0,max):'';
 function url(value:unknown){try{const u=new URL(String(value));return u.protocol==='https:'&&u.hostname.includes('.')&&u.pathname!=='/'?u.href:'';}catch{return '';}}
 export function normalizeSources(value:unknown,minimum=2):NewsSource[]|null {

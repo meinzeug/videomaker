@@ -34,7 +34,7 @@ function fake(plan){
   const body=JSON.parse(init.body);calls.push(body);
   const facts=calls.length===1;
   const n=calls.length-1;
-  const value=facts?{fakten:[{text:'Eine belegte Aussage.',quellen:[url]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:['INTERNER TESTHINWEIS'],skriptplan:{teile:plan}}:{skript:`Abschnitt ${n} enthält eine belegte Aussage.`,...(n===plan.length?finalFields:{})};
+  const value=facts?{fakten:[{text:'Eine belegte Aussage.',quellen:[url],belege:[{text:'Eine belegte Aussage.',quelle:url}]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:['INTERNER TESTHINWEIS'],skriptplan:{teile:plan}}:{skript:`Abschnitt ${n} enthält eine belegte Aussage.`,...(n===plan.length?finalFields:{})};
   return new Response(JSON.stringify({id:`fake-${calls.length}`,model:body.model,usage:{prompt_tokens:10,completion_tokens:20,total_tokens:30,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify(value)}}]}),{status:200});
  };
  return {calls,fetch};
@@ -100,7 +100,7 @@ test('invalid or empty plans are preserved and never trigger paid script parts',
   const oldFetch=globalThis.fetch,oldKey=process.env.OPENROUTER_API_KEY,{db,claim}=fixture();let calls=0;
   process.env.OPENROUTER_API_KEY='fake-test-key';globalThis.fetch=async(urlArg,init)=>{
    assert.equal(urlArg,'https://openrouter.ai/api/v1/chat/completions');assert.equal(init.headers.Authorization,'Bearer fake-test-key');calls++;
-   return new Response(JSON.stringify({id:'fake',model:'x-ai/grok-4.3',usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify({fakten:[{text:'Eine Aussage.',quellen:[url]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[],skriptplan:{teile:plan}})}}]}),{status:200});
+   return new Response(JSON.stringify({id:'fake',model:'x-ai/grok-4.3',usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify({fakten:[{text:'Eine Aussage.',quellen:[url],belege:[{text:'Eine belegte Aussage.',quelle:url}]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[],skriptplan:{teile:plan}})}}]}),{status:200});
   };
   try{
    await assert.rejects(runGrokFlow(db,claim,true,()=>{}),/Faktenblatt|Skriptplan/i);assert.equal(calls,1);

@@ -55,7 +55,7 @@ export default function GenerationRecovery({refreshKey,active=false,onProject}:{
     const project=await finish.json();if(!finish.ok)throw new Error(project?.error||'Das Skript konnte noch nicht fertiggestellt werden.');if(!mounted.current)return;
     onProject(project as Project);setNotice('Das gespeicherte Skript wurde geöffnet.');await refresh();return;
    }
-   if(body.state==='pending')setNotice(body.pipelinePhase==='facts_invalid'||body.pipelinePhase==='parts_invalid'?'Das gespeicherte Faktenblatt oder ein Skriptteil ist unvollständig und kann nicht automatisch fortgesetzt werden.':'Ein Modellaufruf läuft möglicherweise noch oder sein Ergebnis ist unklar. Es wird kein zweiter Aufruf gestartet.');
+   if(body.state==='pending')setNotice(typeof body.failure==='string'?body.failure:body.pipelinePhase==='facts_invalid'||body.pipelinePhase==='parts_invalid'?'Das gespeicherte Faktenblatt oder ein Skriptteil ist unvollständig und kann nicht automatisch fortgesetzt werden.':'Ein Modellaufruf läuft möglicherweise noch oder sein Ergebnis ist unklar. Es wird kein zweiter Aufruf gestartet.');
    else if(body.state==='invalid')setNotice('Die KI-Antwort ist gespeichert, konnte aber nicht verarbeitet werden. Du kannst sie herunterladen.');
    else if(body.state==='project_missing')setNotice('Das bereits erstellte Skript ist nicht mehr vorhanden. Es wird nicht automatisch neu erzeugt.');
    else setNotice('Für diesen Eintrag ist kein wiederherstellbares Ergebnis verfügbar.');

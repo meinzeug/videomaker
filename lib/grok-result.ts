@@ -1,7 +1,7 @@
 import type {FactSheet} from './fact-sheet.ts';
 
 
-export type GrokScript={titles:string[];script:string;thumbnail:string;broll:string[];pin_kommentar:string;hinweise_fuer_dennis:string[];quellen:string[]};
+export type GrokScript={titles:string[];script:string;thumbnail:string;broll:string[];pin_kommentar:string;hinweise_fuer_dennis:string[];quellen:string[];quellenbelege?:Array<{aussage:string;belege:Array<{text:string;quelle:string;ungeprueft?:boolean}>;ungeprueft:boolean}>};
 export type ParsedGrokScript={project:GrokScript|null;issues:Array<{code:string;message:string;pattern?:string}>};
 const one=(x:unknown,_max:number)=>typeof x==='string'?x.trim():'';
 const list=(x:unknown,max=100)=>Array.isArray(x)?x.map(y=>one(y,2000)).filter(Boolean).slice(0,max):null;
@@ -64,5 +64,6 @@ export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,_c
  const notices=[...facts.hinweise_fuer_dennis,...facts.unklar.map(note=>`Unklar: ${note}`),...notes];
  if(rejected)notices.push(`${rejected} Quellenangabe(n) ohne passenden Faktenblattbeleg wurden entfernt.`);
  if(!accepted.length&&allowed.size){for(const url of allowed){try{accepted.push(`${new URL(url).hostname} – ${url}`);}catch{}}notices.push('Die Quellenliste wurde aus den belegten Faktenblatt-URLs ergänzt.');}
- return {project:{titles,script,thumbnail,broll:[],pin_kommentar:pin,hinweise_fuer_dennis:notices,quellen:accepted},issues:[]};
+ const evidence=[...facts.fakten,...facts.meinungen_dritter].filter(fact=>fact.belege?.length).map(fact=>({aussage:fact.text,belege:fact.belege!,ungeprueft:!!fact.ungeprueft}));
+ return {project:{titles,script,thumbnail,broll:[],pin_kommentar:pin,hinweise_fuer_dennis:notices,quellen:accepted,...(evidence.length?{quellenbelege:evidence}:{})},issues:[]};
 }
