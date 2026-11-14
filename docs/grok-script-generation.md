@@ -26,12 +26,11 @@ Hinweisfeld vermerkt. Bei Webrecherchen ohne gespeicherten Originaltext werden
 keine Zitate als wörtlich belegt übernommen. Recherchehinweise aus dem
 Faktenblatt werden beim Skriptaufruf nicht mitgesendet und bleiben getrennt
 vom Telepromptertext. Die mechanische Zitatprüfung erkennt nicht jede indirekt
-formulierte Behauptung oder sinngemäße Rede; Inhalte müssen geprüft werden.
+formulierte Behauptung oder sinngemäße Rede; Inhalte müssen geprüft werden. Umgekehrt können auch belegte Werk- oder Filmtitel in Anführungszeichen als wörtliches Zitat abgelehnt werden. Der Prompt verlangt für solche Fälle die Schreibweise ohne Anführungszeichen; die automatische Prüfung ist bewusst konservativ.
 
 Die Skript- und Korrekturanfragen fordern ein striktes JSON-Schema mit festgelegten Feldtypen und drei Titeln an. Die Anwendung prüft die Antwort weiterhin selbst, da ein Provider das Schema ignorieren kann. Unabhängige Feld- und Inhaltsfehler werden gesammelt und dem einzigen Korrekturversuch gemeinsam mitgeteilt.
 
-Die Ergebnisprüfung kontrolliert vor dem Speichern bei Kontrakurs unter anderem Pflichtsätze und Wortzahl; für andere Kanäle gelten diese Vorgaben nicht. Die verbotenen Muster werden bei allen geprüft. Offensichtliche fremde Kanalbegrüßungen lösen eine Korrektur aus, lassen sich aber nicht vollständig automatisch erkennen. Bei Fehlern folgt höchstens
-ein Korrekturaufruf. Ist auch diese Antwort ungültig oder abgeschnitten, wird
+Die Ergebnisprüfung kontrolliert vor dem Speichern bei Kontrakurs unter anderem Pflichtsätze und Wortzahl; für andere Kanäle gelten diese Vorgaben nicht. Die verbotenen Muster werden bei allen geprüft. Offensichtliche fremde Kanalbegrüßungen lösen eine Korrektur aus, lassen sich aber nicht vollständig automatisch erkennen. Bei Qualitätsfehlern folgt höchstens ein Korrekturdurchlauf. Dieser beginnt mit dem konfigurierten Ersatzmodell; bei technischen Fehlern kann innerhalb der gleichen begrenzten Provider-Versuche das ursprüngliche Modell eingesetzt werden. Ist auch diese Antwort ungültig oder abgeschnitten, wird
 sie nicht als fertiges Skript gespeichert. Gespeicherte Providerantworten und
 der Status bleiben für angemeldete Nutzer abrufbar. `content.script` bleibt
 der Telepromptertext; Titel, Thumbnail, Pinnkommentar und interne Hinweise

@@ -36,7 +36,7 @@ export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,ch
  }
  const announced=[...script.matchAll(/(?:^|\s)(?:Zitat|wörtlich):[^\S\r\n]*([^\r\n]*)/giu)].map(match=>match[1]);
  const exactLine=(line:string,q:string)=>[q,`„${q}“`,`“${q}”`,`"${q}"`,`»${q}«`,`«${q}»`,`‚${q}‘`].includes(line.trim());
- if(quoted.some(q=>!verified.includes(q))||announced.some(line=>!verified.some(q=>exactLine(line,q))))issues.push({code:'unverified_quote',message:'Ein wörtliches Zitat ist nicht durch einen abgerufenen Originaltext belegt.'});
+ if(quoted.some(q=>!verified.includes(q))||announced.some(line=>!verified.some(q=>exactLine(line,q))))issues.push({code:'unverified_quote',message:'Ein Ausdruck in Anführungszeichen oder eine als Zitat angekündigte Passage ist nicht als wörtliches Zitat im Faktenblatt bestätigt. Auch belegte Werk- oder Eigennamen können betroffen sein; gegebenenfalls ohne Anführungszeichen formulieren.'});
  if(issues.length||!titles||!sources||!notes)return {project:null,issues};
  const allowed=new Set([...facts.fakten.flatMap(f=>f.quellen),...facts.meinungen_dritter.flatMap(f=>f.quellen),...facts.zitate.map(q=>q.quelle)]);
  const accepted:string[]=[];let rejected=0;
