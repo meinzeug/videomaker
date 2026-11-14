@@ -84,11 +84,12 @@ synthetische Datensätze; das produktive System wird nicht angesprochen.
 headless Chrome über einen ausschließlich lokalen HTTP-Testproxy. Der Browser
 folgt den OIDC-Redirects mit seinen eigenen Cookies; der echte Haben-Auth-Handler
 legt die Sitzung in PostgreSQL 18 an und der echte Haben-Wächter verweigert sie
-nach Widerruf des Videomaker-Cookies. Die sichtbare Seite ist eine kleine
-Testseite und die interne Wächterverbindung wird durch einen lokalen
-Funktionsaufruf simuliert. Damit sind weder das echte Haben-Dashboard noch ein
-öffentliches TLS-/Reverse-Proxy-Deployment getestet. Chromium wird nur für
-diesen Test gestartet und geschlossen.
+nach Widerruf des Videomaker-Cookies. OIDC-Dienst und Wächter nutzen dabei ihre
+tatsächlichen HTTPS-Clients und prüfen eine separate synthetische CA sowie den
+festen internen TLS-Namen; der interne TLS-Gegenserver ist eine lokale Fixture.
+Die sichtbare Seite ist ebenfalls eine kleine Testseite. Damit sind weder das
+echte Haben-Dashboard noch ein öffentliches TLS-/Reverse-Proxy-Deployment
+getestet. Chromium wird nur für diesen Test gestartet und geschlossen.
 
 ## Was bereits getestet ist
 
@@ -216,10 +217,10 @@ laufen, da er Testdatenbanken neu erstellt.
 Für den beschriebenen Browser-Fixture denselben Aufbau mit
 `--config tests/fixtures/haben-oidc-browser-proxy.config.mjs` nutzen. Er benötigt
 zusätzlich das vorhandene `@playwright/test` und `/usr/bin/google-chrome` sowie
-genügend RAM. Der letzte isolierte Lauf war grün; der anschließende langsame
-PostgreSQL-Checkpoint überschritt eine Stop-Wartezeit von 20 Sekunden, lief
-aber nach rund 35 Sekunden kontrolliert zu Ende. Für erneute Läufe ist eine
-längere Stop-Frist zu verwenden und der tatsächlich beendete Dienst zu prüfen.
+genügend RAM. Bei einem Lauf überschritt der langsame PostgreSQL-Checkpoint eine
+Stop-Wartezeit von 20 Sekunden, lief aber nach rund 35 Sekunden kontrolliert zu
+Ende. Der anschließende HTTPS-Fixturelauf mit 60 Sekunden Stop-Frist war grün
+und wurde einschließlich Datenbank geordnet beendet.
 
 Ein reproduzierbarer lokaler Test, ohne das Projekt oder einen Server zu
 installieren oder zu verändern:

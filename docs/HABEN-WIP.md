@@ -34,4 +34,5 @@ Buildslot. Der echte OIDC-Dienst-/Haben-Callback-Test mit isoliertem
 PostgreSQL 18 ist unabhängig davon bestanden; ein echter Browser-/Proxytest
 des vollständigen Haben-Dashboards steht aus. Ein kleinerer Fixture mit echtem
 Browser, lokalem Testproxy, echtem OIDC-Dienst und Haben-Auth-Handler ist
-inzwischen bestanden; seine Seite und der interne Prüftransport sind simuliert.
+inzwischen bestanden; seine Seite und der interne TLS-Gegenserver sind
+simuliert, die internen HTTPS-Clients und deren CA-Prüfung sind echt.

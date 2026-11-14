@@ -1,12 +1,17 @@
 // TEST ONLY. A real browser, OIDC service and Haben auth handler behind a local proxy.
-// The page shell and internal session-check transport are fixtures, not production UI/TLS.
+// The page shell and TLS bridge server are fixtures, not the production UI/proxy.
 import {test,expect,vi} from 'vitest';
 import {createServer,request as httpRequest} from 'node:http';
+import {createServer as createHttpsServer} from 'node:https';
 import {generateKeyPairSync,randomBytes} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
+import {chmodSync,mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {homedir} from 'node:os';
 import {createRequire} from 'node:module';
 import {join} from 'node:path';
 import Database from 'better-sqlite3';
 import {createVideomakerOidcService} from '../../lib/videomaker-oidc-service.mjs';
+import {createOidcBindingClient} from '../../lib/oidc-binding-client.ts';
 import {initializeOidcStorage} from '../../lib/oidc-storage.ts';
 import {initializeOidcProviderSessionMap} from '../../lib/oidc-provider-session-map.ts';
 import {createOidcSessionBindings,initializeOidcSessionBindings} from '../../lib/oidc-session-bindings.ts';
@@ -24,7 +29,23 @@ test('browser follows proxy SSO and the real Haben guard rejects a revoked sessi
  sessionRevoked(vmDb,vmSecret,'testinitialisierung');initializeOidcSessionBindings(vmDb);
  const bindings=createOidcSessionBindings(vmDb,(db,value)=>verifiedSessionBindingProof(db,value,vmSecret),Date.now,()=>vmSecret);
  const raw=cookie=>cookie.startsWith('kontrakurs_session=')?cookie.slice('kontrakurs_session='.length):'';
- const binding={issue:async cookie=>bindings.issue(raw(cookie)),check:async reference=>bindings.isActive(reference),match:async(reference,cookie)=>bindings.matchesCookie(reference,raw(cookie))};
+ const tlsDir=mkdtempSync(join(homedir(),'.videomaker-browser-guard-tls-')),key=join(tlsDir,'key.pem'),cert=join(tlsDir,'cert.pem');
+ execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',key,'-out',cert,'-days','1','-subj','/CN=videomaker-session.internal','-addext','subjectAltName=DNS:videomaker-session.internal'],{stdio:'ignore'});chmodSync(cert,0o600);
+ const guardSecret='synthetischer-guard-schluessel-123456789',bindingSecret='synthetischer-binding-schluessel-123456789';
+ const tls=createHttpsServer({key:readFileSync(key),cert:readFileSync(cert)},(req,res)=>{
+  try{
+   const cookie=raw(req.headers.cookie||''),reference=req.headers['x-oidc-session-reference']||'';
+   if(req.url==='/api/internal/buchhaltung/session'&&req.method==='GET'&&req.headers['x-videomaker-internal-secret']===guardSecret){res.writeHead(verifiedSessionBindingProof(vmDb,cookie,vmSecret)?204:401).end();return;}
+   if(req.url!=='/api/internal/oidc/session-binding'||req.method!=='POST'||req.headers['x-videomaker-internal-secret']!==bindingSecret||req.headers['content-length']!=='0'){res.writeHead(401).end();return;}
+   const operation=req.headers['x-oidc-binding-operation'];
+   if(operation==='issue'){const issued=bindings.issue(cookie);if(!issued){res.writeHead(401).end();return;}res.writeHead(200,{'content-type':'application/json'}).end(JSON.stringify({reference:issued}));return;}
+   if(operation==='check'){res.writeHead(bindings.isActive(reference)?204:401).end();return;}
+   if(operation==='match'){res.writeHead(bindings.matchesCookie(reference,cookie)?204:401).end();return;}
+   res.writeHead(400).end();
+  }catch{res.writeHead(503).end();}
+ });
+ await new Promise(resolve=>tls.listen(0,'127.0.0.1',resolve));
+ const binding=createOidcBindingClient({endpoint:`https://127.0.0.1:${tls.address().port}/api/internal/oidc/session-binding`,secret:bindingSecret,caFile:cert});
  const proxy=createServer(),upstream=createServer();
  await Promise.all([new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve)),new Promise(resolve=>upstream.listen(0,'127.0.0.1',resolve))]);
  const origin=`http://127.0.0.1:${proxy.address().port}`,appUrl=`${origin}/buchhaltung`,issuer=`${origin}/oidc`;
@@ -35,8 +56,7 @@ test('browser follows proxy SSO and the real Haben guard rejects a revoked sessi
  upstream.on('request',(req,res)=>void service.handle(req,res));
  const body=`${Date.now()+300000}.${randomBytes(18).toString('base64url')}`,value=`${body}.${signSessionBody(body,vmSecret)}`;
  let sql,browser,handleAuth,guard,oidcForwarded=0;
- const guardConfig={mode:'required',endpoint:'https://127.0.0.1:4443/api/internal/buchhaltung/session',secret:'synthetischer-guard-schluessel-123456789',bindingSecret:'synthetischer-binding-schluessel-123456789',caFile:'/nur-test'};
- const verifyGuard=async(_endpoint,options)=>options.reference?bindings.matchesCookie(options.reference,raw(options.cookie))?204:401:verifiedSessionBindingProof(vmDb,raw(options.cookie),vmSecret)?204:401;
+ const guardConfig={mode:'required',endpoint:`https://127.0.0.1:${tls.address().port}/api/internal/buchhaltung/session`,secret:guardSecret,bindingSecret,caFile:cert};
  async function webRequest(req){
   const chunks=[];for await(const chunk of req)chunks.push(chunk);const content=Buffer.concat(chunks);
   return new Request(origin+req.url,{method:req.method,headers:req.headers,...(content.length?{body:content}: {})});
@@ -61,7 +81,7 @@ test('browser follows proxy SSO and the real Haben guard rejects a revoked sessi
    if(req.url==='/fixture/logout'&&req.method==='POST'){revokeSession(vmDb,vmSecret,value,Date.now());res.writeHead(204).end();return;}
    if(req.url.startsWith('/buchhaltung/api/auth/')){await webResponse(res,await handleAuth(await webRequest(req)));return;}
    if(req.url==='/buchhaltung/'||req.url==='/buchhaltung'){
-    const rejection=await guard(await webRequest(req),guardConfig,verifyGuard);
+    const rejection=await guard(await webRequest(req),guardConfig);
     if(rejection){await webResponse(res,rejection);return;}
     res.writeHead(200,{'content-type':'text/html'}).end('<!doctype html><title>Fixture</title><p>HABEN_AUTHENTICATED_FIXTURE</p>');return;
    }
@@ -87,8 +107,8 @@ test('browser follows proxy SSO and the real Haben guard rejects a revoked sessi
   const after=await page.reload();expect(after?.status()).toBe(401);
   await context.close();
  }finally{
-  await browser?.close();await new Promise(resolve=>{proxy.close(resolve);proxy.closeAllConnections();});await new Promise(resolve=>{upstream.close(resolve);upstream.closeAllConnections();});
+  await browser?.close();await new Promise(resolve=>{proxy.close(resolve);proxy.closeAllConnections();});await new Promise(resolve=>{upstream.close(resolve);upstream.closeAllConnections();});await new Promise(resolve=>{tls.close(resolve);tls.closeAllConnections();});
   await sql?.end();try{await (await import('../../apps/buchhaltung/apps/web/src/server/db/index.ts')).closeDatabase();}catch{}
-  providerDb.close();vmDb.close();vi.unstubAllEnvs();
+  providerDb.close();vmDb.close();vi.unstubAllEnvs();rmSync(tlsDir,{recursive:true,force:true});
  }
 },120000);
