@@ -4,6 +4,7 @@ import {cameraUploadIdFor} from '@/lib/camera-project-claims';
 import {acquireRecordingUpload,readRecordingChunk} from '@/lib/recording-upload-guard';
 import {createLiveStaging,LIVE_CHUNK_BYTES,LiveStagingError} from '@/lib/live-recording-staging';
 import {publishLiveRecording} from '@/lib/live-recording-publish';
+import {getLiveRecordingReceipt} from '@/lib/live-recording-receipt';
 import {isRecordingId} from '@/lib/recordings';
 import {NextResponse} from 'next/server';
 
@@ -15,7 +16,7 @@ const headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nos
 const enabled=()=>process.env.NODE_ENV!=='production'&&process.env.LIVE_RECORDING_UPLOAD_TEST_ENABLE==='1';
 const response=(body:unknown,status=200)=>NextResponse.json(body,{status,headers});
 const number=(raw:string|null)=>raw!==null&&/^(?:0|[1-9]\d{0,15})$/.test(raw)&&Number.isSafeInteger(Number(raw))?Number(raw):null;
-const codes:Record<string,number>={INVALID_ID:400,INVALID_PAGE:400,INVALID_CHUNK:400,INVALID_FINAL:400,NOT_FOUND:404,UNAUTHORIZED:401,PROJECT_MISSING:404,BINDING_CONFLICT:409,WEB_CLAIM:409,REVISION_CONFLICT:409,NONCONTIGUOUS:409,NOT_OPEN:409,NOT_SEALED:409,PUBLISHED:409,PUBLISH_UNCERTAIN:409,FINAL_CONFLICT:409,INCOMPLETE:409,FINAL_MISMATCH:422,STAGE_CHANGED:409,RETRY:409,INVALID_MP4:422,PROBE_BUSY:429,PROBE_UNAVAILABLE:503,CAPACITY:429,NO_SPACE:507};
+const codes:Record<string,number>={INVALID_ID:400,INVALID_PAGE:400,INVALID_CHUNK:400,INVALID_FINAL:400,NOT_FOUND:404,RECEIPT_MISSING:404,UNAUTHORIZED:401,PROJECT_MISSING:404,BINDING_CONFLICT:409,WEB_CLAIM:409,REVISION_CONFLICT:409,NONCONTIGUOUS:409,NOT_OPEN:409,NOT_SEALED:409,PUBLISHED:409,PUBLISH_UNCERTAIN:409,FINAL_CONFLICT:409,INCOMPLETE:409,FINAL_MISMATCH:422,STAGE_CHANGED:409,RETRY:409,INVALID_MP4:422,PROBE_BUSY:429,PROBE_UNAVAILABLE:503,CAPACITY:429,NO_SPACE:507};
 const error=(e:unknown)=>e instanceof LiveStagingError?response({code:e.code,error:'Aufnahme konnte nicht fortgesetzt werden. Das Original bleibt auf dem Smartphone.'},codes[e.code]??503):response({error:'Upload vorübergehend nicht verfügbar. Das Original bleibt auf dem Smartphone.'},503);
 async function setup(req:Request,context:Context,mutate:boolean,allowMissingProject=false){
  if(!enabled())return {failure:response({error:'Nicht gefunden.'},404)} as const;
@@ -36,7 +37,12 @@ async function setup(req:Request,context:Context,mutate:boolean,allowMissingProj
 export async function GET(req:Request,context:Context){
  try{
   const input=await setup(req,context,false,true);if(input.failure)return input.failure;
-  const query=new URL(req.url).searchParams,afterValues=query.getAll('after'),limitValues=query.getAll('limit');
+  const query=new URL(req.url).searchParams,receiptValues=query.getAll('receipt');
+  if(receiptValues.length){
+   if(receiptValues.length!==1||receiptValues[0]!=='1'||query.has('after')||query.has('limit'))return response({error:'Ungültiger Belegabruf.'},400);
+   return response(await getLiveRecordingReceipt({database:input.database,root:process.env.DATA_DIR||'./data',id:input.upload,project:input.project,recording:input.recording,authorize:input.assertAuthorized}));
+  }
+  const afterValues=query.getAll('after'),limitValues=query.getAll('limit');
   if(afterValues.length>1||limitValues.length>1)return response({error:'Ungültige Seitenauswahl.'},400);
   const after=afterValues.length?number(afterValues[0]): -1,limit=limitValues.length?number(limitValues[0]):16;
   if(after===null||limit===null)return response({error:'Ungültige Seitenauswahl.'},400);
