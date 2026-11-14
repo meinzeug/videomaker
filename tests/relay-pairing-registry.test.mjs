@@ -85,3 +85,9 @@ test('concurrent independent processes commit one pairing and an exact retry onl
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_links').get().n,1);
  }finally{for(const child of children)if(child.connected)child.kill();f.db.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('pairing transcript matches the Android role-bound test vector',()=>{
+ const pair='00000000-0000-4000-8000-000000000001',challenge='00000000-0000-4000-8000-000000000002',camera='00000000-0000-4000-8000-000000000003',prompter='00000000-0000-4000-8000-000000000004',nonce='A'.repeat(43),owner='a'.repeat(64),transcript='c'.repeat(64);
+ const expected=`videomaker-relay-pair/v1\n${owner}\n${pair}\n${challenge}\n${nonce}\n${transcript}\n${camera}\n1da57ee8fb4654e9343dffaa2f1925e7158a3a07dd61bb2fa411741a5097f664\n${prompter}\nff6d15f7d14324b2dac093e20f6b5562de82494d758ffa1890ab486b1e3b4b62\ncamera\n`;
+ assert.equal(relayPairingMessage(owner,pair,challenge,nonce,transcript,camera,Buffer.from('camera-key'),prompter,Buffer.from('prompter-key'),'camera').toString(),expected);
+});

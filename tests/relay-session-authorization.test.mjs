@@ -51,3 +51,9 @@ test('logout and durable pair/device revocation invalidate live grants without e
   }finally{f.db.close();}
  }
 });
+
+test('session transcript matches the Android role and room test vector',()=>{
+ const pairId='00000000-0000-4000-8000-000000000001',challengeId='00000000-0000-4000-8000-000000000002',deviceId='00000000-0000-4000-8000-000000000004',nonce='A'.repeat(43),roomId='A'.repeat(22),tokenHash='d'.repeat(64);
+ const expected=`videomaker-relay-session/v1\n${owner}\n${session}\n${pairId}\nprompter\n${deviceId}\n${roomId}\n${tokenHash}\n${challengeId}\n${nonce}\n`;
+ assert.equal(relaySessionMessage(owner,session,{pairId,role:'prompter',deviceId,roomId,tokenHash},challengeId,nonce).toString(),expected);
+});
