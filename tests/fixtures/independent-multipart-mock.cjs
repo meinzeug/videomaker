@@ -19,6 +19,6 @@ globalThis.fetch=async function(input,init){
   await new Promise(()=>{});
  }
  const urlSource='https://example.org/a';
- const result=facts?{fakten:[{text:'Synthetischer Fakt.',quellen:[urlSource]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[],skriptplan:{teile:['Einstieg','Hauptteil','Abschluss']}}:{skript:`Synthetischer Abschnitt ${part}.`};
+ const result=facts?{fakten:[{text:'Synthetischer Fakt.',quellen:[urlSource],belege:[{text:'Synthetischer Fakt.',quelle:urlSource}]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:[],skriptplan:{teile:['Einstieg','Hauptteil','Abschluss']}}:{skript:`Synthetischer Abschnitt ${part}.`};
  return new Response(JSON.stringify({id:'mock-multipart',model:request.model,usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify(result)}}]}),{status:200});
 };

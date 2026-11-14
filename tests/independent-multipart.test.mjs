@@ -34,7 +34,7 @@ function fake(plan){
   const body=JSON.parse(init.body);calls.push(body);
   const facts=calls.length===1;
   const n=calls.length-1;
-  const value=facts?{fakten:[{text:'Eine belegte Aussage.',quellen:[url]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:['INTERNER TESTHINWEIS'],skriptplan:{teile:plan}}:{skript:`Abschnitt ${n} enthält eine belegte Aussage.`,...(n===plan.length?finalFields:{})};
+  const value=facts?{fakten:[{text:'Eine belegte Aussage.',quellen:[url],belege:[{text:'Eine belegte Aussage.',quelle:url}]}],meinungen_dritter:[],zitate:[],unklar:[],hinweise_fuer_dennis:['INTERNER TESTHINWEIS'],skriptplan:{teile:plan}}:{skript:`Abschnitt ${n} enthält eine belegte Aussage.`,...(n===plan.length?finalFields:{})};
   return new Response(JSON.stringify({id:`fake-${calls.length}`,model:body.model,usage:{prompt_tokens:10,completion_tokens:20,total_tokens:30,cost:0},choices:[{finish_reason:'stop',message:{content:JSON.stringify(value)}}]}),{status:200});
  };
  return {calls,fetch};
