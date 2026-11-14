@@ -1,0 +1,25 @@
+# Studio-Rendezvous: isolierter Erstpfad
+
+Dieses Experiment ist ausschließlich bei `NODE_ENV=test` und `VIDEOMAKER_STUDIO_RENDEZVOUS_FIXTURE=1` nutzbar. Es existiert keine produktive Route oder Migration. Die mitgelieferte HTTP-Fixture bindet nur an Loopback und ist keine produktive HTTPS-Implementierung.
+
+Der Server ist für Signalisierungsmetadaten und -inhalte vertrauenswürdig: Er vergibt den temporären Sitzungsschlüssel und kann die HMAC-geschützten Nachrichten lesen. Der bestehende Android-Kanal authentifiziert Nachrichten und schützt ihre Reihenfolge, verschlüsselt sie aber nicht. Bei einer späteren Integration müssen daher alle App-Server-Verbindungen echtes TLS und eine geprüfte Serveridentität verwenden. Die Geräte-IDs sind nur zufällige App-Instanz-IDs und kein dauerhafter kryptografischer Gerätenachweis. Ein Account ist derzeit der existierende Einzeladministrator; echte Mandanten müssen später serverseitig aus authentifizierten Accounts abgeleitet werden.
+
+Die angemeldete Kamera erstellt einen Raum; der QR-Inhalt besteht aus Version/Origin, Raum-ID und einem zufälligen 256-Bit-Code. Server und Logs speichern keinen rohen Code, sondern nur dessen Hash. Eine andere angemeldete Studio-Sitzung desselben Owners tritt als Prompter mit eigener Instanz-ID bei. Der Code bindet höchstens einen Prompter; identischer Retry derselben Sitzung und Instanz ist bis zur Join-Frist idempotent. Beide Seiten müssen im sicheren Anwendungskontext die Gegenstelle ausdrücklich bestätigen. Erst danach erhalten beide denselben aus einem separaten Servergeheimnis abgeleiteten 128-Bit-Schlüssel für den vorhandenen HMAC-Pairingkanal. Ein Secret-Epoch-Marker verhindert abweichende Schlüssel bei Rotation. Der Raum ist maximal zwei Stunden gültig, der Join-Code maximal 60 Sekunden.
+
+Die SQLite-Fixture prüft bei jeder Operation beide Sitzungen, Rollen und App-Instanzen erneut. Ein festgestellter Logout oder Ablauf schließt den Raum und verwirft wartende Bytes, wobei Browser-Ablaufmarkierungen gemeinsam committed werden. Bestehende Daten in Netzwerkpuffern können nicht zurückgerufen werden. Sofortiger Widerruf ohne weitere Aktion, verteilte Benachrichtigung und striktes Fencing alter laufender Verbindungen sind nicht implementiert. Ein späterer Android-Adapter muss bei Verlust des Signalisierungswegs die laufende Kameraaufnahme und das lokale Original unangetastet lassen; das ist noch nicht auf Geräten geprüft.
+
+## Nur lokaler Test-HTTP-Vertrag
+
+Alle Aufrufe sind `POST` mit `Content-Type: application/json`, Origin `https://videomaker.dorfspy.de` und separater angemeldeter Sitzung pro Seite. Die Fixture verwendet vom Test bereitgestellte Authentifizierung; sie implementiert keine produktive Anmeldung. Der Server bestimmt Owner und Session, Client-JSON darf sie nicht vorgeben. Antworten tragen `Cache-Control: no-store`. Die QR-Codes, Cookies, Schlüssel und Frameinhalte dürfen weder in Logs noch in URLs stehen.
+
+- `/fixture/rooms` mit `{deviceId}` → `{roomId,joinCode,expiresInMs}`.
+- `/fixture/rooms/join` mit `{roomId,deviceId,joinCode}` → `{roomId,role,created}`.
+- `/fixture/rooms/{roomId}/approve`, `/key`, `/peek`, `/close` mit `{deviceId,role}`. `key` ergibt `{token}` mit 32 Hexzeichen; `peek` ergibt `{empty:true}` oder `{sequence,data}`.
+- `/fixture/rooms/{roomId}/send` mit `{deviceId,role,sequence,data}`. `data` ist kanonisches Base64 mit höchstens 16 KiB dekodierten Bytes.
+- `/fixture/rooms/{roomId}/ack` mit `{deviceId,role,sequence}`.
+
+Sequenzen beginnen richtungsweise bei 1. Identische Wiederholung des zuletzt akzeptierten Frames und der zuletzt bestätigten ACK ist idempotent, veränderte Wiederholung und Sequenzsprung scheitern. Ein leerer `peek` wartet bis zu einer Sekunde und wird bei neuen Daten früher geweckt; je Rolle und Raum ist höchstens ein wartender `peek` erlaubt. Ein doppelter paralleler `peek` erhält ebenfalls 429. Maximal 16 Frames und 256 KiB sind pro Raum gemeinsam in den Warteschlangen; bei voller Queue antwortet die Fixture mit `429 {"error":"backpressure"}`. Der Client darf denselben Frame mit begrenztem Backoff erneut senden. Maximal 8 MiB pro Richtung sind während eines Raums zulässig. Andere Fehler geben `403 {"error":"denied"}` zurück. HTTP-Bodies sind auf 24 KiB und fünf Sekunden begrenzt. Bis zum echten Adaptertest gelten Rückgabeformate und Fehlerbehandlung als WIP.
+
+Der Dienst muss vor einer Freigabe insbesondere einen echten HTTPS-Adapter mit Origin-/CSRF-Prüfung, Body-/Zeitbegrenzung, robusten verteilten Rate- und Ressourcenlimits einschließlich unauthentifizierter Requests, Session-/Owner- und Logout-Bindung, epochensicherer Wiederaufnahme sowie unabhängiges Sicherheitsreview erhalten. Ein echter Test muss den vorhandenen Android-`AuthenticatedChannel` und dessen Abbruch-/Aufnahme-Lifecycle beider Geräte ausführen. Die lokale HTTP-Fixture verwendet keine physische Kamera. Ein solcher Signalisierungsweg allein garantiert kein Kamerabild: Die WebRTC-Medien benötigen einen direkten ICE-Pfad oder separat getestetes TURN als Fallback.
+
+Test: `node --experimental-strip-types --test tests/studio-rendezvous.test.mjs tests/studio-rendezvous-http.test.mjs`.
