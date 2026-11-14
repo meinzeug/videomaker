@@ -1,13 +1,23 @@
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+import { request as httpsRequest } from "node:https";
+import { isAbsolute } from "node:path";
 import { appPath } from "../lib/app-path.ts";
 
-type GuardConfig = { mode: string | undefined; endpoint: string | undefined; secret: string | undefined };
-type GuardFetch = (input: string, init: RequestInit) => Promise<Response>;
+type GuardConfig = { mode: string | undefined; endpoint: string | undefined; secret: string | undefined; caFile: string | undefined };
+type GuardFetch = (endpoint: string, options: { cookie: string; secret: string; caFile: string }) => Promise<number>;
+const LIMIT = 16;
+const STATE = Symbol.for("videomaker.haben.sessionGuard");
+const shared = globalThis as typeof globalThis & { [STATE]?: { active: number; caReads: number } };
+shared[STATE] ??= { active: 0, caReads: 0 };
+const limits = shared[STATE];
 
 /** Nur ausdrücklich aktivieren: die lokale Haben-Anmeldung bleibt ansonsten wie bei Upstream. */
 const configuration = (): GuardConfig => ({
   mode: process.env.HABEN_VIDEOMAKER_SESSION_GUARD,
   endpoint: process.env.HABEN_VIDEOMAKER_SESSION_URL,
   secret: process.env.HABEN_VIDEOMAKER_INTERNAL_SECRET,
+  caFile: process.env.HABEN_VIDEOMAKER_SESSION_CA_FILE,
 });
 
 /** Diese Endpunkte authentifizieren selbst per Bearer-Token bzw. validieren den OIDC-Callback. */
@@ -32,7 +42,7 @@ function endpointUrl(endpoint: string | undefined): string | null {
   try {
     const url = new URL(endpoint);
     if (
-      url.protocol !== "http:" ||
+      url.protocol !== "https:" ||
       url.hostname !== "127.0.0.1" ||
       !url.port ||
       url.username ||
@@ -48,33 +58,95 @@ function endpointUrl(endpoint: string | undefined): string | null {
   }
 }
 
+/** Begrenzter Speicherbedarf auch bei Gerätedateien, FIFOs oder während des Lesens wachsender Datei. */
+async function readTrustedCa(path: string): Promise<Buffer> {
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const stat = await file.stat();
+    const limit = 64 * 1024;
+    if (!stat.isFile() || stat.size < 1 || stat.size > limit || (stat.mode & 0o022) !== 0 || (stat.uid !== 0 && stat.uid !== process.geteuid?.()))
+      throw new Error("Ungültige CA-Datei");
+    const buffer = Buffer.alloc(limit + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, null);
+      if (!bytesRead) break;
+      offset += bytesRead;
+    }
+    if (!offset || offset > limit) throw new Error("Ungültige CA-Datei");
+    return buffer.subarray(0, offset);
+  } finally {
+    await file.close();
+  }
+}
+
+/** Nur die konfigurierte CA und der feste DNS-Name authentifizieren die lokale Gegenstelle. */
+async function verifiedRequest(endpoint: string, options: { cookie: string; secret: string; caFile: string }): Promise<number> {
+  const signal = AbortSignal.timeout(2000);
+  if (limits.caReads >= LIMIT) throw new Error("Zu viele CA-Lesevorgänge");
+  limits.caReads++;
+  const pendingCa = readTrustedCa(options.caFile);
+  void pendingCa.then(
+    () => {
+      limits.caReads--;
+    },
+    () => {
+      limits.caReads--;
+    },
+  );
+  const ca = await Promise.race([
+    pendingCa,
+    new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("Zeitüberschreitung")), { once: true })),
+  ]);
+  return new Promise((resolve, reject) => {
+    const outgoing = httpsRequest(
+      endpoint,
+      {
+        method: "GET",
+        headers: { cookie: options.cookie, "X-Videomaker-Internal-Secret": options.secret },
+        ca,
+        servername: "videomaker-session.internal",
+        rejectUnauthorized: true,
+        agent: false,
+        signal,
+      },
+      (response) => {
+        const status = response.statusCode ?? 0;
+        response.resume();
+        resolve(status);
+      },
+    );
+    outgoing.once("error", reject);
+    outgoing.end();
+  });
+}
+
 /**
  * Bei aktivierter Video-Maker-Sitzungsprüfung keinen gecachten Erfolg verwenden. Die Prüfung
  * ergänzt die Haben-Anmeldung; sie erzeugt selbst keine Haben-Sitzung oder OIDC-Identität.
  */
-export async function guardVideomakerSession(request: Request, config = configuration(), send: GuardFetch = fetch): Promise<Response | null> {
+export async function guardVideomakerSession(request: Request, config = configuration(), send: GuardFetch = verifiedRequest): Promise<Response | null> {
   if (!config.mode || config.mode === "off") return null;
   const endpoint = endpointUrl(config.endpoint);
-  if (config.mode !== "required" || !endpoint || !config.secret || config.secret.length < 32) {
+  if (config.mode !== "required" || !endpoint || !config.secret || config.secret.length < 32 || !config.caFile || !isAbsolute(config.caFile)) {
     return new Response("Die Video-Maker-Sitzungsprüfung ist nicht verfügbar.", { status: 503, headers: { "Cache-Control": "no-store" } });
   }
   if (independentlyAuthenticated(request)) return null;
   const cookie = sessionCookie(request);
   if (!cookie) return new Response("Bitte bei Video-Maker anmelden.", { status: 401, headers: { "Cache-Control": "no-store" } });
+  if (limits.active >= LIMIT)
+    return new Response("Die Video-Maker-Sitzungsprüfung ist ausgelastet.", { status: 503, headers: { "Cache-Control": "no-store" } });
+  limits.active++;
   try {
-    const response = await send(endpoint, {
-      method: "GET",
-      headers: { cookie, "X-Videomaker-Internal-Secret": config.secret },
-      cache: "no-store",
-      redirect: "error",
-      signal: AbortSignal.timeout(2000),
-    });
-    if (response.status === 204) return null;
-    if (response.status === 401 || response.status === 403) {
+    const status = await send(endpoint, { cookie, secret: config.secret, caFile: config.caFile });
+    if (status === 204) return null;
+    if (status === 401 || status === 403) {
       return new Response("Bitte bei Video-Maker anmelden.", { status: 401, headers: { "Cache-Control": "no-store" } });
     }
   } catch {
     // Keine Zugangsdaten, URLs oder Fehlerobjekte mit Anfragedaten protokollieren.
+  } finally {
+    limits.active--;
   }
   return new Response("Die Video-Maker-Sitzungsprüfung ist nicht verfügbar.", { status: 503, headers: { "Cache-Control": "no-store" } });
 }

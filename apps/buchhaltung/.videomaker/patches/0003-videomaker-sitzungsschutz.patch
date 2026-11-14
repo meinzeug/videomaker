@@ -1,13 +1,235 @@
+diff --git a/apps/web/src/server/videomaker-session-tls.test.ts b/apps/web/src/server/videomaker-session-tls.test.ts
+new file mode 100644
+index 0000000..f38c976
+--- /dev/null
++++ b/apps/web/src/server/videomaker-session-tls.test.ts
+@@ -0,0 +1,216 @@
++import { execFileSync } from "node:child_process";
++import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
++import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
++import { createServer as createTcpServer } from "node:net";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
++import { guardVideomakerSession } from "./videomaker-session.ts";
++
++const request = () => new Request("http://localhost:3199/buchhaltung/setup", { headers: { cookie: "kontrakurs_session=12345.test.signature" } });
++const secret = "synthetischer-testschluessel-nicht-produktiv";
++let scratch: string;
++let caFile: string;
++let otherCaFile: string;
++let good: { key: Buffer; cert: Buffer };
++let wrongName: { key: Buffer; cert: Buffer };
++
++function openssl(...args: string[]) {
++  execFileSync("openssl", args, { cwd: scratch, stdio: "ignore" });
++}
++function cert(name: string, dns: string, serial: string) {
++  openssl(
++    "req",
++    "-new",
++    "-newkey",
++    "rsa:2048",
++    "-nodes",
++    "-keyout",
++    `${name}.key`,
++    "-out",
++    `${name}.csr`,
++    "-subj",
++    `/CN=${dns}`,
++    "-addext",
++    `subjectAltName=DNS:${dns}`,
++  );
++  openssl(
++    "x509",
++    "-req",
++    "-in",
++    `${name}.csr`,
++    "-CA",
++    "ca.pem",
++    "-CAkey",
++    "ca.key",
++    "-set_serial",
++    serial,
++    "-days",
++    "1",
++    "-copy_extensions",
++    "copy",
++    "-out",
++    `${name}.pem`,
++  );
++  return { key: readFileSync(join(scratch, `${name}.key`)), cert: readFileSync(join(scratch, `${name}.pem`)) };
++}
++async function listen(server: HttpsServer | ReturnType<typeof createTcpServer>): Promise<number> {
++  await new Promise<void>((resolve, reject) => {
++    server.once("error", reject);
++    server.listen(0, "127.0.0.1", resolve);
++  });
++  const address = server.address();
++  if (!address || typeof address === "string") throw new Error("Testport fehlt");
++  return address.port;
++}
++const config = (port: number, ca = caFile) => ({
++  mode: "required",
++  endpoint: `https://127.0.0.1:${port}/api/internal/buchhaltung/session`,
++  secret,
++  caFile: ca,
++});
++
++beforeAll(() => {
++  scratch = mkdtempSync(join(tmpdir(), "haben-sitzung-tls-"));
++  openssl(
++    "req",
++    "-x509",
++    "-newkey",
++    "rsa:2048",
++    "-nodes",
++    "-keyout",
++    "ca.key",
++    "-out",
++    "ca.pem",
++    "-days",
++    "1",
++    "-subj",
++    "/CN=Haben test CA",
++    "-addext",
++    "basicConstraints=critical,CA:TRUE",
++  );
++  openssl(
++    "req",
++    "-x509",
++    "-newkey",
++    "rsa:2048",
++    "-nodes",
++    "-keyout",
++    "other.key",
++    "-out",
++    "other.pem",
++    "-days",
++    "1",
++    "-subj",
++    "/CN=Other test CA",
++    "-addext",
++    "basicConstraints=critical,CA:TRUE",
++  );
++  caFile = join(scratch, "ca.pem");
++  otherCaFile = join(scratch, "other.pem");
++  chmodSync(caFile, 0o644);
++  chmodSync(otherCaFile, 0o644);
++  good = cert("good", "videomaker-session.internal", "1");
++  wrongName = cert("wrong", "other.internal", "2");
++}, 30_000);
++
++afterAll(() => {
++  if (scratch) rmSync(scratch, { recursive: true, force: true });
++});
++
++describe("Authentifizierte Video-Maker-Gegenstelle", () => {
++  it("erlaubt nur den passenden Server und prüft jede Sitzung neu", async () => {
++    let count = 0;
++    const server = createHttpsServer(good, (req, res) => {
++      expect(req.headers.cookie).toBe("kontrakurs_session=12345.test.signature");
++      expect(req.headers["x-videomaker-internal-secret"]).toBe(secret);
++      res.writeHead(++count === 1 ? 204 : 401).end();
++    });
++    const port = await listen(server);
++    try {
++      expect(await guardVideomakerSession(request(), config(port))).toBeNull();
++      expect((await guardVideomakerSession(request(), config(port)))?.status).toBe(401);
++      expect(count).toBe(2);
++    } finally {
++      server.close();
++    }
++  });
++
++  it("verweigert fremde CA und falschen Zertifikatsnamen, ohne Cookie oder Secret preiszugeben", async () => {
++    let received = 0;
++    const validServer = createHttpsServer(good, (_req, res) => {
++      received++;
++      res.writeHead(204).end();
++    });
++    const wrongServer = createHttpsServer(wrongName, (_req, res) => {
++      received++;
++      res.writeHead(204).end();
++    });
++    const port = await listen(validServer);
++    const wrongPort = await listen(wrongServer);
++    try {
++      expect((await guardVideomakerSession(request(), config(port, otherCaFile)))?.status).toBe(503);
++      expect((await guardVideomakerSession(request(), config(wrongPort)))?.status).toBe(503);
++      expect(received).toBe(0);
++    } finally {
++      validServer.close();
++      wrongServer.close();
++    }
++  });
++
++  it("verweigert fehlende CA-Datei, Verbindungsfehler und einen hängenden TLS-Handshake", async () => {
++    const hanging = createTcpServer(() => {});
++    const port = await listen(hanging);
++    try {
++      expect((await guardVideomakerSession(request(), config(port, join(scratch, "fehlt.pem"))))?.status).toBe(503);
++      expect((await guardVideomakerSession(request(), config(port)))?.status).toBe(503);
++    } finally {
++      hanging.close();
++    }
++    expect((await guardVideomakerSession(request(), config(port)))?.status).toBe(503);
++  }, 10_000);
++
++  it("verweigert FIFO, Gerät, Symlink, veränderbare und übergroße CA-Dateien ohne Serveranfrage", async () => {
++    let received = 0;
++    const server = createHttpsServer(good, (_req, res) => {
++      received++;
++      res.writeHead(204).end();
++    });
++    const port = await listen(server);
++    const fifo = join(scratch, "fifo");
++    const symlink = join(scratch, "link.pem");
++    const large = join(scratch, "large.pem");
++    const writable = join(scratch, "writable.pem");
++    execFileSync("mkfifo", [fifo]);
++    symlinkSync(caFile, symlink);
++    writeFileSync(large, Buffer.alloc(64 * 1024 + 1));
++    writeFileSync(writable, readFileSync(caFile));
++    chmodSync(writable, 0o666);
++    try {
++      for (const path of [fifo, "/dev/zero", symlink, large, writable, scratch]) {
++        expect((await guardVideomakerSession(request(), config(port, path)))?.status).toBe(503);
++      }
++      expect(received).toBe(0);
++    } finally {
++      server.close();
++    }
++  }, 10_000);
++
++  const uid = process.geteuid?.();
++  it.skipIf(uid === undefined || uid === 0)("verweigert eine nicht vom Dienstbenutzer oder root besessene CA", async () => {
++    let received = 0;
++    const server = createHttpsServer(good, (_req, res) => {
++      received++;
++      res.writeHead(204).end();
++    });
++    const port = await listen(server);
++    const owner = vi.spyOn(process, "geteuid").mockReturnValue(uid! + 1);
++    try {
++      expect((await guardVideomakerSession(request(), config(port)))?.status).toBe(503);
++      expect(received).toBe(0);
++    } finally {
++      owner.mockRestore();
++      server.close();
++    }
++  });
++});
 diff --git a/apps/web/src/server/videomaker-session.test.ts b/apps/web/src/server/videomaker-session.test.ts
 new file mode 100644
-index 0000000..4ef0d2f
+index 0000000..bba7d59
 --- /dev/null
 +++ b/apps/web/src/server/videomaker-session.test.ts
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,101 @@
 +import { afterEach, describe, expect, it, vi } from "vitest";
 +import { guardVideomakerSession } from "./videomaker-session.ts";
 +
-+const config = { mode: "required", endpoint: "http://127.0.0.1:3000/api/internal/buchhaltung/session", secret: "s".repeat(32) };
++const config = { mode: "required", endpoint: "https://127.0.0.1:3000/api/internal/buchhaltung/session", secret: "s".repeat(32), caFile: "/tmp/ca.pem" };
 +const request = (path = "/buchhaltung/belege", cookie = "kontrakurs_session=12345.test.signature", method = "GET") =>
 +  new Request(`http://localhost:3199${path}`, { method, headers: { cookie, "x-forwarded-user": "inhaber" } });
 +
@@ -21,6 +243,8 @@ index 0000000..4ef0d2f
 +      { ...config, mode: "requred" },
 +      { ...config, endpoint: undefined },
 +      { ...config, secret: "short" },
++      { ...config, caFile: undefined },
++      { ...config, caFile: "relative.pem" },
 +      { ...config, endpoint: "https://example.com/api/internal/buchhaltung/session" },
 +      { ...config, endpoint: "http://localhost:3000/api/internal/buchhaltung/session" },
 +      { ...config, endpoint: "http://127.0.0.1:3000/andere" },
@@ -32,15 +256,12 @@ index 0000000..4ef0d2f
 +  });
 +
 +  it("verwendet nur das Video-Maker-Cookie und das interne Secret, niemals Browser-Header", async () => {
-+    const send = vi.fn(async () => new Response(null, { status: 204 }));
++    const send = vi.fn(async () => 204);
 +    expect(await guardVideomakerSession(request("/buchhaltung/belege", "haben=privat; kontrakurs_session=12345.test.signature"), config, send)).toBeNull();
 +    expect(send).toHaveBeenCalledTimes(1);
-+    const [url, init] = send.mock.calls[0] as unknown as [string, RequestInit];
++    const [url, init] = send.mock.calls[0] as unknown as [string, Record<string, string>];
 +    expect(url).toBe(config.endpoint);
-+    expect(init.headers).toEqual({ cookie: "kontrakurs_session=12345.test.signature", "X-Videomaker-Internal-Secret": config.secret });
-+    expect(init.redirect).toBe("error");
-+    expect(init.cache).toBe("no-store");
-+    expect(init.signal).toBeInstanceOf(AbortSignal);
++    expect(init).toEqual({ cookie: "kontrakurs_session=12345.test.signature", secret: config.secret, caFile: config.caFile });
 +  });
 +
 +  it("weist fehlende, widersprüchliche oder manipulierte Cookies ohne Anfrage ab", async () => {
@@ -54,13 +275,26 @@ index 0000000..4ef0d2f
 +  });
 +
 +  it("prüft jede Anfrage neu und akzeptiert nach Widerruf keine kopierte Sitzung", async () => {
-+    const send = vi
-+      .fn()
-+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
-+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
++    const send = vi.fn().mockResolvedValueOnce(204).mockResolvedValueOnce(401);
 +    expect(await guardVideomakerSession(request(), config, send)).toBeNull();
 +    expect((await guardVideomakerSession(request(), config, send))?.status).toBe(401);
 +    expect(send).toHaveBeenCalledTimes(2);
++  });
++
++  it("begrenzt parallele Prüfungen ohne Warteschlange und gibt Plätze wieder frei", async () => {
++    const release: Array<() => void> = [];
++    const send = vi.fn(
++      () =>
++        new Promise<number>((resolve) => {
++          release.push(() => resolve(204));
++        }),
++    );
++    const requests = Array.from({ length: 16 }, () => guardVideomakerSession(request(), config, send));
++    expect((await guardVideomakerSession(request(), config, send))?.status).toBe(503);
++    expect(send).toHaveBeenCalledTimes(16);
++    for (const finish of release) finish();
++    expect(await Promise.all(requests)).toEqual(Array.from({ length: 16 }, () => null));
++    expect(await guardVideomakerSession(request(), config, async () => 204)).toBeNull();
 +  });
 +
 +  it("schließt bei Ausfällen, Weiterleitungen und unerwarteten Antworten", async () => {
@@ -68,9 +302,9 @@ index 0000000..4ef0d2f
 +      async () => {
 +        throw new Error("Netzfehler");
 +      },
-+      async () => new Response(null, { status: 302, headers: { location: "https://example.com" } }),
-+      async () => new Response(null, { status: 200 }),
-+      async () => new Response(null, { status: 503 }),
++      async () => 302,
++      async () => 200,
++      async () => 503,
 +    ])
 +      expect((await guardVideomakerSession(request(), config, send))?.status).toBe(503);
 +  });
@@ -95,20 +329,30 @@ index 0000000..4ef0d2f
 +});
 diff --git a/apps/web/src/server/videomaker-session.ts b/apps/web/src/server/videomaker-session.ts
 new file mode 100644
-index 0000000..901895d
+index 0000000..8639ce1
 --- /dev/null
 +++ b/apps/web/src/server/videomaker-session.ts
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,152 @@
++import { constants } from "node:fs";
++import { open } from "node:fs/promises";
++import { request as httpsRequest } from "node:https";
++import { isAbsolute } from "node:path";
 +import { appPath } from "../lib/app-path.ts";
 +
-+type GuardConfig = { mode: string | undefined; endpoint: string | undefined; secret: string | undefined };
-+type GuardFetch = (input: string, init: RequestInit) => Promise<Response>;
++type GuardConfig = { mode: string | undefined; endpoint: string | undefined; secret: string | undefined; caFile: string | undefined };
++type GuardFetch = (endpoint: string, options: { cookie: string; secret: string; caFile: string }) => Promise<number>;
++const LIMIT = 16;
++const STATE = Symbol.for("videomaker.haben.sessionGuard");
++const shared = globalThis as typeof globalThis & { [STATE]?: { active: number; caReads: number } };
++shared[STATE] ??= { active: 0, caReads: 0 };
++const limits = shared[STATE];
 +
 +/** Nur ausdrücklich aktivieren: die lokale Haben-Anmeldung bleibt ansonsten wie bei Upstream. */
 +const configuration = (): GuardConfig => ({
 +  mode: process.env.HABEN_VIDEOMAKER_SESSION_GUARD,
 +  endpoint: process.env.HABEN_VIDEOMAKER_SESSION_URL,
 +  secret: process.env.HABEN_VIDEOMAKER_INTERNAL_SECRET,
++  caFile: process.env.HABEN_VIDEOMAKER_SESSION_CA_FILE,
 +});
 +
 +/** Diese Endpunkte authentifizieren selbst per Bearer-Token bzw. validieren den OIDC-Callback. */
@@ -133,7 +377,7 @@ index 0000000..901895d
 +  try {
 +    const url = new URL(endpoint);
 +    if (
-+      url.protocol !== "http:" ||
++      url.protocol !== "https:" ||
 +      url.hostname !== "127.0.0.1" ||
 +      !url.port ||
 +      url.username ||
@@ -149,33 +393,95 @@ index 0000000..901895d
 +  }
 +}
 +
++/** Begrenzter Speicherbedarf auch bei Gerätedateien, FIFOs oder während des Lesens wachsender Datei. */
++async function readTrustedCa(path: string): Promise<Buffer> {
++  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
++  try {
++    const stat = await file.stat();
++    const limit = 64 * 1024;
++    if (!stat.isFile() || stat.size < 1 || stat.size > limit || (stat.mode & 0o022) !== 0 || (stat.uid !== 0 && stat.uid !== process.geteuid?.()))
++      throw new Error("Ungültige CA-Datei");
++    const buffer = Buffer.alloc(limit + 1);
++    let offset = 0;
++    while (offset < buffer.length) {
++      const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, null);
++      if (!bytesRead) break;
++      offset += bytesRead;
++    }
++    if (!offset || offset > limit) throw new Error("Ungültige CA-Datei");
++    return buffer.subarray(0, offset);
++  } finally {
++    await file.close();
++  }
++}
++
++/** Nur die konfigurierte CA und der feste DNS-Name authentifizieren die lokale Gegenstelle. */
++async function verifiedRequest(endpoint: string, options: { cookie: string; secret: string; caFile: string }): Promise<number> {
++  const signal = AbortSignal.timeout(2000);
++  if (limits.caReads >= LIMIT) throw new Error("Zu viele CA-Lesevorgänge");
++  limits.caReads++;
++  const pendingCa = readTrustedCa(options.caFile);
++  void pendingCa.then(
++    () => {
++      limits.caReads--;
++    },
++    () => {
++      limits.caReads--;
++    },
++  );
++  const ca = await Promise.race([
++    pendingCa,
++    new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("Zeitüberschreitung")), { once: true })),
++  ]);
++  return new Promise((resolve, reject) => {
++    const outgoing = httpsRequest(
++      endpoint,
++      {
++        method: "GET",
++        headers: { cookie: options.cookie, "X-Videomaker-Internal-Secret": options.secret },
++        ca,
++        servername: "videomaker-session.internal",
++        rejectUnauthorized: true,
++        agent: false,
++        signal,
++      },
++      (response) => {
++        const status = response.statusCode ?? 0;
++        response.resume();
++        resolve(status);
++      },
++    );
++    outgoing.once("error", reject);
++    outgoing.end();
++  });
++}
++
 +/**
 + * Bei aktivierter Video-Maker-Sitzungsprüfung keinen gecachten Erfolg verwenden. Die Prüfung
 + * ergänzt die Haben-Anmeldung; sie erzeugt selbst keine Haben-Sitzung oder OIDC-Identität.
 + */
-+export async function guardVideomakerSession(request: Request, config = configuration(), send: GuardFetch = fetch): Promise<Response | null> {
++export async function guardVideomakerSession(request: Request, config = configuration(), send: GuardFetch = verifiedRequest): Promise<Response | null> {
 +  if (!config.mode || config.mode === "off") return null;
 +  const endpoint = endpointUrl(config.endpoint);
-+  if (config.mode !== "required" || !endpoint || !config.secret || config.secret.length < 32) {
++  if (config.mode !== "required" || !endpoint || !config.secret || config.secret.length < 32 || !config.caFile || !isAbsolute(config.caFile)) {
 +    return new Response("Die Video-Maker-Sitzungsprüfung ist nicht verfügbar.", { status: 503, headers: { "Cache-Control": "no-store" } });
 +  }
 +  if (independentlyAuthenticated(request)) return null;
 +  const cookie = sessionCookie(request);
 +  if (!cookie) return new Response("Bitte bei Video-Maker anmelden.", { status: 401, headers: { "Cache-Control": "no-store" } });
++  if (limits.active >= LIMIT)
++    return new Response("Die Video-Maker-Sitzungsprüfung ist ausgelastet.", { status: 503, headers: { "Cache-Control": "no-store" } });
++  limits.active++;
 +  try {
-+    const response = await send(endpoint, {
-+      method: "GET",
-+      headers: { cookie, "X-Videomaker-Internal-Secret": config.secret },
-+      cache: "no-store",
-+      redirect: "error",
-+      signal: AbortSignal.timeout(2000),
-+    });
-+    if (response.status === 204) return null;
-+    if (response.status === 401 || response.status === 403) {
++    const status = await send(endpoint, { cookie, secret: config.secret, caFile: config.caFile });
++    if (status === 204) return null;
++    if (status === 401 || status === 403) {
 +      return new Response("Bitte bei Video-Maker anmelden.", { status: 401, headers: { "Cache-Control": "no-store" } });
 +    }
 +  } catch {
 +    // Keine Zugangsdaten, URLs oder Fehlerobjekte mit Anfragedaten protokollieren.
++  } finally {
++    limits.active--;
 +  }
 +  return new Response("Die Video-Maker-Sitzungsprüfung ist nicht verfügbar.", { status: 503, headers: { "Cache-Control": "no-store" } });
 +}

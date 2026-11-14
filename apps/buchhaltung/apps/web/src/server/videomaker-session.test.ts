@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { guardVideomakerSession } from "./videomaker-session.ts";
 
-const config = { mode: "required", endpoint: "http://127.0.0.1:3000/api/internal/buchhaltung/session", secret: "s".repeat(32) };
+const config = { mode: "required", endpoint: "https://127.0.0.1:3000/api/internal/buchhaltung/session", secret: "s".repeat(32), caFile: "/tmp/ca.pem" };
 const request = (path = "/buchhaltung/belege", cookie = "kontrakurs_session=12345.test.signature", method = "GET") =>
   new Request(`http://localhost:3199${path}`, { method, headers: { cookie, "x-forwarded-user": "inhaber" } });
 
@@ -15,6 +15,8 @@ describe("Video-Maker-Sitzungsprüfung", () => {
       { ...config, mode: "requred" },
       { ...config, endpoint: undefined },
       { ...config, secret: "short" },
+      { ...config, caFile: undefined },
+      { ...config, caFile: "relative.pem" },
       { ...config, endpoint: "https://example.com/api/internal/buchhaltung/session" },
       { ...config, endpoint: "http://localhost:3000/api/internal/buchhaltung/session" },
       { ...config, endpoint: "http://127.0.0.1:3000/andere" },
@@ -26,15 +28,12 @@ describe("Video-Maker-Sitzungsprüfung", () => {
   });
 
   it("verwendet nur das Video-Maker-Cookie und das interne Secret, niemals Browser-Header", async () => {
-    const send = vi.fn(async () => new Response(null, { status: 204 }));
+    const send = vi.fn(async () => 204);
     expect(await guardVideomakerSession(request("/buchhaltung/belege", "haben=privat; kontrakurs_session=12345.test.signature"), config, send)).toBeNull();
     expect(send).toHaveBeenCalledTimes(1);
-    const [url, init] = send.mock.calls[0] as unknown as [string, RequestInit];
+    const [url, init] = send.mock.calls[0] as unknown as [string, Record<string, string>];
     expect(url).toBe(config.endpoint);
-    expect(init.headers).toEqual({ cookie: "kontrakurs_session=12345.test.signature", "X-Videomaker-Internal-Secret": config.secret });
-    expect(init.redirect).toBe("error");
-    expect(init.cache).toBe("no-store");
-    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init).toEqual({ cookie: "kontrakurs_session=12345.test.signature", secret: config.secret, caFile: config.caFile });
   });
 
   it("weist fehlende, widersprüchliche oder manipulierte Cookies ohne Anfrage ab", async () => {
@@ -48,13 +47,26 @@ describe("Video-Maker-Sitzungsprüfung", () => {
   });
 
   it("prüft jede Anfrage neu und akzeptiert nach Widerruf keine kopierte Sitzung", async () => {
-    const send = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(null, { status: 204 }))
-      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+    const send = vi.fn().mockResolvedValueOnce(204).mockResolvedValueOnce(401);
     expect(await guardVideomakerSession(request(), config, send)).toBeNull();
     expect((await guardVideomakerSession(request(), config, send))?.status).toBe(401);
     expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("begrenzt parallele Prüfungen ohne Warteschlange und gibt Plätze wieder frei", async () => {
+    const release: Array<() => void> = [];
+    const send = vi.fn(
+      () =>
+        new Promise<number>((resolve) => {
+          release.push(() => resolve(204));
+        }),
+    );
+    const requests = Array.from({ length: 16 }, () => guardVideomakerSession(request(), config, send));
+    expect((await guardVideomakerSession(request(), config, send))?.status).toBe(503);
+    expect(send).toHaveBeenCalledTimes(16);
+    for (const finish of release) finish();
+    expect(await Promise.all(requests)).toEqual(Array.from({ length: 16 }, () => null));
+    expect(await guardVideomakerSession(request(), config, async () => 204)).toBeNull();
   });
 
   it("schließt bei Ausfällen, Weiterleitungen und unerwarteten Antworten", async () => {
@@ -62,9 +74,9 @@ describe("Video-Maker-Sitzungsprüfung", () => {
       async () => {
         throw new Error("Netzfehler");
       },
-      async () => new Response(null, { status: 302, headers: { location: "https://example.com" } }),
-      async () => new Response(null, { status: 200 }),
-      async () => new Response(null, { status: 503 }),
+      async () => 302,
+      async () => 200,
+      async () => 503,
     ])
       expect((await guardVideomakerSession(request(), config, send))?.status).toBe(503);
   });
