@@ -71,3 +71,17 @@ test('authorization must explicitly return true before and after proof verificat
   }finally{f.db.close();}
  }
 });
+
+test('concurrent independent processes commit one pairing and an exact retry only',async()=>{
+ const {mkdtempSync,rmSync}=await import('node:fs'),{tmpdir}=await import('node:os'),{join}=await import('node:path'),{fork}=await import('node:child_process');
+ const dir=mkdtempSync(join(tmpdir(),'relay-pair-race-')),file=join(dir,'fixture.sqlite'),f=fixture();f.db.close();f.db=new Database(file,{timeout:10000});
+ const children=[];
+ try{
+  const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>true),input=f.prepare(challenge);
+  const serialized={...input,camera:{...input.camera,publicKey:input.camera.publicKey.toString('base64'),signature:input.camera.signature.toString('base64')},prompter:{...input.prompter,publicKey:input.prompter.publicKey.toString('base64'),signature:input.prompter.signature.toString('base64')}};
+  const run=()=>new Promise((resolve,reject)=>{const child=fork('tests/fixtures/relay-pairing-race-worker.mjs',[file],{execArgv:['--experimental-strip-types'],stdio:['ignore','ignore','pipe','ipc']});children.push(child);let ready=false;child.on('message',value=>{if(value==='ready'){ready=true;resolve({child,result:new Promise((done,fail)=>{child.once('message',done);child.once('error',fail);})});}});child.once('error',reject);child.once('exit',code=>{if(!ready)reject(Error('worker exited '+code));});});
+  const workers=await Promise.all([run(),run()]);workers.forEach(({child})=>child.send({owner,input:serialized,clock:time(1001)}));
+  const results=await Promise.all(workers.map(x=>x.result));assert.ok(results.every(x=>x.ok));assert.deepEqual(results.map(x=>x.value.created).sort(),[false,true]);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_links').get().n,1);
+ }finally{for(const child of children)if(child.connected)child.kill();f.db.close();rmSync(dir,{recursive:true,force:true});}
+});
