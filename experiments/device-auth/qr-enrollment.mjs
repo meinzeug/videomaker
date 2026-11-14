@@ -23,7 +23,7 @@ function binding(input){
  const cameraHash=keyHash(input.camera.publicKey),prompterHash=keyHash(input.prompter.publicKey);if(cameraHash===prompterHash)deny();
  return {pairId:input.pairId,challengeId:input.challengeId,transcriptHash:input.transcriptHash,cameraId:input.camera.deviceId,prompterId:input.prompter.deviceId,cameraHash,prompterHash};
 }
-function same(row,owner,session,b){return row&&row.owner_hash===owner&&row.session_hash===session&&row.pair_id===b.pairId&&row.challenge_id===b.challengeId&&row.transcript_hash===b.transcriptHash&&row.camera_id===b.cameraId&&row.prompter_id===b.prompterId&&row.camera_key_hash===b.cameraHash&&row.prompter_key_hash===b.prompterHash&&row.consumed_at===null;}
+function same(row,owner,session,b,consumed=false){return row&&row.owner_hash===owner&&row.session_hash===session&&row.pair_id===b.pairId&&row.challenge_id===b.challengeId&&row.transcript_hash===b.transcriptHash&&row.camera_id===b.cameraId&&row.prompter_id===b.prompterId&&row.camera_key_hash===b.cameraHash&&row.prompter_key_hash===b.prompterHash&&(consumed?Number.isSafeInteger(row.consumed_at):row.consumed_at===null);}
 function auth(authorize,owner,session,b){if(typeof authorize!=='function'||authorize(owner,session,Object.freeze({...b}))!==true)deny();}
 
 export function initializeQrEnrollmentFixture(db){
@@ -76,4 +76,28 @@ export function completeQrEnrollmentFixture(db,{ownerHash,sessionHash,token,inpu
   if(expired&&!db.inTransaction)db.transaction(()=>{db.prepare('DELETE FROM device_enrollment_tickets WHERE token_hash=? AND owner_hash=? AND session_hash=? AND consumed_at IS NULL').run(hash,ownerHash,sessionHash);}).immediate();
   throw error;
  }
+}
+
+
+/** Read-only recovery for a lost completion response, under the same admin session. */
+export function readQrEnrollmentReceiptFixture(db,{ownerHash,sessionHash,token,input},clock,authorize){
+ requireFixture(db);if(!HASH.test(ownerHash)||!HASH.test(sessionHash)||typeof clock!=='function')deny();const hash=tokenHash(token),b=binding(input);if(!hash)deny();
+ for(const side of [input.camera,input.prompter])if(!Buffer.isBuffer(side.signature)||side.signature.length<1||side.signature.length>80)deny();
+ const proof=sha(Buffer.from(JSON.stringify([ownerHash,b.pairId,b.challengeId,b.transcriptHash,b.cameraId,input.camera.publicKey.toString('base64'),input.camera.signature.toString('base64'),b.prompterId,input.prompter.publicKey.toString('base64'),input.prompter.signature.toString('base64')]),'utf8'));
+ const result=db.transaction(()=>{
+  const row=db.prepare('SELECT * FROM device_enrollment_tickets WHERE token_hash=?').get(hash);if(!same(row,ownerHash,sessionHash,b,true))return null;
+  let now=checkedClock(clock);if(!fresh(row,now)){if(row.runtime_id===now.runtimeId)db.prepare('DELETE FROM device_enrollment_tickets WHERE token_hash=? AND consumed_at IS NOT NULL').run(hash);return null;}
+  auth(authorize,ownerHash,sessionHash,b);
+  const check=()=>{
+   const current=db.prepare('SELECT * FROM device_enrollment_tickets WHERE token_hash=?').get(hash);
+   if(!same(current,ownerHash,sessionHash,b,true)||current.runtime_id!==row.runtime_id||current.created_wall!==row.created_wall||current.created_tick!==row.created_tick||current.consumed_at!==row.consumed_at)return false;
+   const pair=db.prepare('SELECT * FROM relay_pair_links WHERE pair_id=?').get(b.pairId),p=db.prepare('SELECT * FROM relay_pair_completions WHERE pair_id=?').get(b.pairId);
+   if(!pair||pair.owner_hash!==ownerHash||pair.camera_id!==b.cameraId||pair.prompter_id!==b.prompterId||pair.transcript_hash!==b.transcriptHash||pair.revoked_at!==null||!p||p.challenge_id!==b.challengeId||p.proof_hash!==proof)return false;
+   const devices=db.prepare('SELECT * FROM relay_pair_devices WHERE device_id IN (?,?)').all(b.cameraId,b.prompterId);
+   return devices.length===2&&devices.every(d=>d.owner_hash===ownerHash&&d.revoked_at===null&&sha(d.public_key)===(d.device_id===b.cameraId?b.cameraHash:b.prompterHash));
+  };
+  if(!check())return null;now=checkedClock(clock);if(!fresh(row,now)){if(row.runtime_id===now.runtimeId)db.prepare('DELETE FROM device_enrollment_tickets WHERE token_hash=? AND consumed_at IS NOT NULL').run(hash);return null;}
+  if(!check())return null;return {pairId:b.pairId,created:true};
+ }).immediate();
+ if(!result)deny();return result;
 }

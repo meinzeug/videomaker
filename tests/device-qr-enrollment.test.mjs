@@ -7,9 +7,12 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
+import {fixture} from './fixtures/relay-delivery-fixture.mjs';
+import {resolveRelayBrowserSession} from '../lib/relay-browser-sessions.ts';
+import {revokeSession} from '../lib/session-revocations.ts';
 import {beginRelayPairing,relayPairingMessage,revokeRelayPairing} from '../lib/relay-pairing-registry.ts';
 import {initializeDeviceAuthFixture,beginDeviceReconnect,completeDeviceReconnect,reconnectTranscript} from '../experiments/device-auth/core.mjs';
-import {initializeQrEnrollmentFixture,issueQrEnrollmentFixture,completeQrEnrollmentFixture} from '../experiments/device-auth/qr-enrollment.mjs';
+import {initializeQrEnrollmentFixture,issueQrEnrollmentFixture,completeQrEnrollmentFixture,readQrEnrollmentReceiptFixture} from '../experiments/device-auth/qr-enrollment.mjs';
 process.env.NODE_ENV='test';process.env.VIDEOMAKER_DEVICE_AUTH_FIXTURE='1';
 function setup(db=new Database(':memory:')){
  db.pragma('foreign_keys=ON');const ownerHash='a'.repeat(64),sessionHash='b'.repeat(64),runtimeId=randomUUID(),pairId=randomUUID(),transcriptHash='c'.repeat(64);let time=1000,active=true;
@@ -78,7 +81,7 @@ test('two processes cannot redeem the same QR approval', {timeout:10000},async()
  }finally{f.db.close();rmSync(directory,{recursive:true,force:true});}
 });
 
-test('pending and consumed grants share a bounded per-owner capacity',()=>{
+test('pending grants have a bounded per-owner capacity',()=>{
  const f=setup();try{const tickets=Array.from({length:8},()=>f.issue());assert.throws(()=>f.issue());assert.equal(f.complete(tickets[0]).created,true);assert.throws(()=>f.issue());}finally{f.db.close();}
 });
 
@@ -100,5 +103,39 @@ test('a reentrant callback cannot extend an existing approval or replace its met
   }));
   assert.equal(f.db.prepare('SELECT created_wall FROM device_enrollment_tickets').get().created_wall,1000);
   assert.equal(f.complete(qr).created,true);
+ }finally{f.db.close();}
+});
+
+
+test('real browser-session resolver binds QR approval and rejects a completed logout',()=>{
+ const f=fixture();try{
+  const runtimeId=f.db.prepare('SELECT runtime_id FROM relay_session_tokens LIMIT 1').get().runtime_id,clock=()=>({runtimeId,wall:1023,tick:1023}),pairId=randomUUID(),transcriptHash='d'.repeat(64),sessionHash=f.camera.session;
+  const auth=(owner,session,binding)=>binding.pairId===pairId&&resolveRelayBrowserSession(f.db,f.secret,owner,session,()=>1023);
+  const ch=beginRelayPairing(f.db,f.owner,pairId,transcriptHash,clock,()=>resolveRelayBrowserSession(f.db,f.secret,f.owner,sessionHash,()=>1023));
+  initializeDeviceAuthFixture(f.db);initializeQrEnrollmentFixture(f.db);
+  const msg=role=>relayPairingMessage(f.owner,pairId,ch.challengeId,ch.nonce,transcriptHash,f.camera.deviceId,f.camera.publicKey,f.prompter.deviceId,f.prompter.publicKey,role);
+  const input={pairId,challengeId:ch.challengeId,transcriptHash,camera:{deviceId:f.camera.deviceId,publicKey:f.camera.publicKey,signature:sign('sha256',msg('camera'),f.camera.keys.privateKey)},prompter:{deviceId:f.prompter.deviceId,publicKey:f.prompter.publicKey,signature:sign('sha256',msg('prompter'),f.prompter.keys.privateKey)}};
+  const qr=issueQrEnrollmentFixture(f.db,{ownerHash:f.owner,sessionHash,input},clock,auth);
+  revokeSession(f.db,f.secret,f.camera.cookie,1024);
+  assert.throws(()=>completeQrEnrollmentFixture(f.db,{ownerHash:f.owner,sessionHash,token:qr.token,input},clock,auth));
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_links WHERE pair_id=?').get(pairId).n,0);
+ }finally{f.db.close();}
+});
+
+
+test('lost completion ACK can be recovered only with matching proof and still-authorized admin',()=>{
+ const f=setup();try{
+  const qr=f.issue();f.complete(qr);const receipt=(changes={})=>readQrEnrollmentReceiptFixture(f.db,{ownerHash:f.ownerHash,sessionHash:f.sessionHash,token:qr.token,input:f.input,...changes},f.clock,(o,s)=>o===f.ownerHash&&s===f.sessionHash);
+  assert.deepEqual(receipt(),{pairId:f.input.pairId,created:true});
+  assert.throws(()=>receipt({input:{...f.input,camera:{...f.input.camera,signature:Buffer.alloc(4)}}}));
+  assert.throws(()=>receipt({sessionHash:'f'.repeat(64)}));
+  revokeRelayPairing(f.db,f.ownerHash,f.input.pairId,1001,()=>true);assert.throws(()=>receipt());
+ }finally{f.db.close();}
+});
+
+test('expired completion receipts cannot revive after a clock rollback',()=>{
+ const f=setup();try{
+  const qr=f.issue();f.complete(qr);const receipt=()=>readQrEnrollmentReceiptFixture(f.db,{ownerHash:f.ownerHash,sessionHash:f.sessionHash,token:qr.token,input:f.input},f.clock,()=>true);
+  f.setTime(60000);assert.throws(receipt);f.setTime(1000);assert.throws(receipt);
  }finally{f.db.close();}
 });
