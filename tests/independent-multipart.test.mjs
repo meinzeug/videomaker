@@ -260,3 +260,18 @@ for(const variant of ['valid','missing','foreign','duplicate']) test(`targeted c
   assert.equal(calls.length,5,'exactly one targeted correction for all affected parts');
  });
 });
+
+test('malformed legacy single-part response is retained and reported as a controlled invalid answer',async()=>{
+ await isolated(['Unused'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
+  db.prepare('DELETE FROM grok_generation_modes WHERE research_id=?').run(id);
+  globalThis.fetch=async(urlArg,init)=>{
+   const response=await baseFetch(urlArg,init);
+   if(calls.length!==2)return response;
+   const body=await response.json();body.choices[0].message.content='{unvollständig';return new Response(JSON.stringify(body),{status:200});
+  };
+  await assert.rejects(runGrokFlow(db,claim,true,()=>{}),error=>error.constructor.name==='GrokInvalid');
+  assert.equal(calls.length,2,'invalid JSON must not cause another paid call');
+  const saved=state.readGrokRun(db,id);assert.equal(JSON.parse(saved.scriptRaw).text,'{unvollständig');
+  assert.equal(readGenerationClaim(db,id).responseText,'{unvollständig','original response remains accessible');
+ });
+});
