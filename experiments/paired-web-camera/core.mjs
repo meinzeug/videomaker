@@ -53,13 +53,14 @@ export function initializePairedWebFixture(db){fixture(db);db.exec(`
 `);}
 /** Authorizer MUST prove the real session/device and active, explicitly approved LAN pairing. */
 export function issuePairedWebTicketFixture(db,identity,clock,authorize){
- fixture(db);identity=fixedIdentity(identity);if(!validIdentity(identity))fail();
+ fixture(db);identity=fixedIdentity(identity);if(!validIdentity(identity))fail();const expired=[];
  return tx(db,()=>{const c=now(clock);if(!auth(authorize,identity,'device'))return null;if(db.prepare('SELECT count(*) n FROM pwc_tickets').get().n>=MAX_TICKETS)return null;
   // Cross-ticket and cross-epoch camera fence. Old ambiguous executions must be reconciled first.
   const previous=db.prepare('SELECT * FROM pwc_tickets WHERE camera_id=?').all(identity.cameraId);
   for(const old of previous){
    if(old.runtime_id!==c.runtimeId)return null;
    if(!old.revoked&&fresh(old,c,TICKET_MS))return null;
+   if(!old.revoked)expired.push(old.token_hash);
    const active=db.prepare("SELECT * FROM pwc_commands WHERE token_hash=? AND stage IN ('queued','delivered','admitted','uncertain')").all(old.token_hash);
    for(const command of active){if(command.runtime_id!==c.runtimeId)return null;if(command.stage==='queued'&&!fresh(command,c,COMMAND_MS))db.prepare("UPDATE pwc_commands SET stage='expired' WHERE id=?").run(command.id);else return null;}
    if(!old.revoked)db.prepare('UPDATE pwc_tickets SET revoked=1 WHERE token_hash=?').run(old.token_hash);
@@ -68,7 +69,7 @@ export function issuePairedWebTicketFixture(db,identity,clock,authorize){
   db.prepare('INSERT INTO pwc_tickets VALUES(?,?,?,?,?,?,?,?,?,0)').run(hash,identity.owner,identity.session,identity.deviceId,identity.cameraId,identity.pairEpoch,c.runtimeId,c.wall,c.tick);
   const row=db.prepare('SELECT * FROM pwc_tickets WHERE token_hash=?').get(hash),final=now(clock);if(!bound(row,identity)||!fresh(row,final,TICKET_MS)||!auth(authorize,identity,'device'))return null;
   const last=db.prepare('SELECT * FROM pwc_tickets WHERE token_hash=?').get(hash),end=now(clock);if(!bound(last,identity)||last.runtime_id!==c.runtimeId||last.created_wall!==c.wall||last.created_tick!==c.tick||!fresh(last,end,TICKET_MS))return null;
-  return {ticket:token,expiresInMs:Math.min(TICKET_MS-(end.wall-c.wall),TICKET_MS-(end.tick-c.tick))};});
+  return {ticket:token,expiresInMs:Math.min(TICKET_MS-(end.wall-c.wall),TICKET_MS-(end.tick-c.tick))};},()=>{for(const hash of expired)db.prepare('UPDATE pwc_tickets SET revoked=1 WHERE token_hash=? AND camera_id=?').run(hash,identity.cameraId);});
 }
 /** Caller must only report camera snapshots received on the exact approved LAN generation. */
 export function reportPairedCameraFixture(db,identity,token,state,clock,authorize){
@@ -103,6 +104,7 @@ export function queuePairedWebCommandFixture(db,identity,token,browserSession,co
   if(command.action==='start'&&projectExists(command.projectId)!==true)return null;
   if(!checkedTicket(db,identity,token,clock,authorize,context)||!auth(authorize,{...identity,session:browserSession},'browser'))return null;
   const end=now(clock),last=db.prepare('SELECT * FROM pwc_states WHERE token_hash=?').get(ticket.token_hash),saved=db.prepare('SELECT * FROM pwc_commands WHERE id=?').get(command.id);if(!sameState(state,last)||!fresh(last,end,STATE_MS)||!fresh({runtime_id:c.runtimeId,created_wall:c.wall,created_tick:c.tick},end,COMMAND_MS)||!saved||saved.token_hash!==ticket.token_hash||saved.browser_session!==browserSession||saved.payload_hash!==payloadHash||saved.result_phase!==null||saved.result_revision!==null||saved.stage!=='queued'||saved.action!==command.action||saved.recording_id!==command.recordingId||saved.project_id!==command.projectId||saved.expected_revision!==command.expectedRevision||saved.expected_front!==(command.expectedFront===null?null:Number(command.expectedFront)))return null;
+  if(command.action==='start'&&projectExists(command.projectId)!==true)return null;
   return {id:command.id,stage:'queued',created:true};},()=>invalidateTicket(db,context));
 }
 /** Offers at most once. Unknown response or device crash must never trigger a replay. */
@@ -121,6 +123,7 @@ export function pollPairedWebCommandFixture(db,identity,token,clock,authorize,pr
   if(pending.action==='start'&&projectExists(pending.project_id)!==true)return null;
   if(!checkedTicket(db,identity,token,clock,authorize,context)||!auth(authorize,{...identity,session:pending.browser_session},'browser'))return null;
   const latest=db.prepare('SELECT * FROM pwc_states WHERE token_hash=?').get(ticket.token_hash),end=now(clock);const delivered=db.prepare('SELECT * FROM pwc_commands WHERE id=?').get(pending.id);if(!sameCommand(pending,delivered)||delivered.stage!=='delivered'||!sameState(snapshot,latest)||!fresh(latest,end,STATE_MS)||!fresh(pending,end,COMMAND_MS)||!permitted(command,stateObject(latest)))return null;
+  if(pending.action==='start'&&projectExists(pending.project_id)!==true)return null;
   return {id:pending.id,action:pending.action,recordingId:pending.recording_id,projectId:pending.project_id,expectedFront:pending.expected_front===null?null:!!pending.expected_front,expectedRevision:pending.expected_revision};},()=>invalidateTicket(db,context));
 }
 /** Camera admission is not completion; only a newer camera-reported state can confirm it. */

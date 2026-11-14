@@ -70,9 +70,29 @@ test('logout during command creation rolls back the new command',()=>{
  }finally{f.db.close();}
 });
 
+test('project is rechecked after the final browser authorization callback',()=>{
+ const f=setup();try{f.report(f.state(1));const c=f.command();let exists=true,checks=0;
+  const changingAuth=(value,kind)=>{if(kind==='browser'&&++checks===2)exists=false;return f.authorize(value,kind);};
+  const lookup=id=>exists&&id===f.project;
+  assert.throws(()=>queuePairedWebCommandFixture(f.db,f.identity,f.ticket,f.browser,c,f.clock,changingAuth,lookup));
+  assert.equal(f.db.prepare('SELECT count(*) n FROM pwc_commands').get().n,0);
+  exists=true;checks=0;f.queue(c);
+  assert.throws(()=>pollPairedWebCommandFixture(f.db,f.identity,f.ticket,f.clock,changingAuth,lookup));
+  assert.equal(f.db.prepare('SELECT stage FROM pwc_commands').get().stage,'queued');
+ }finally{f.db.close();}
+});
+
 test('ticket expiry is durable after wall-clock rollback and foreign boot cannot revoke it',()=>{
  const f=setup();try{assert.throws(()=>pollPairedWebCommandFixture(f.db,f.identity,f.ticket,()=>({...f.clock(),runtimeId:randomUUID()}),f.authorize,f.projectExists));assert.equal(f.db.prepare('SELECT revoked FROM pwc_tickets').get().revoked,0);
   f.setTime(61000);assert.throws(f.poll);assert.equal(f.db.prepare('SELECT revoked FROM pwc_tickets').get().revoked,1);f.setTime(1000);assert.throws(f.poll);
+ }finally{f.db.close();}
+});
+
+test('denied renewal with unresolved delivery permanently invalidates observed expired ticket',()=>{
+ const f=setup();try{f.report(f.state(1));const c=f.command();f.queue(c);f.poll();f.setTime(61000);
+  assert.throws(()=>issuePairedWebTicketFixture(f.db,f.identity,f.clock,f.authorize));
+  assert.equal(f.db.prepare('SELECT revoked FROM pwc_tickets').get().revoked,1);
+  f.setTime(1000);assert.throws(f.poll);assert.equal(f.db.prepare('SELECT stage FROM pwc_commands').get().stage,'delivered');
  }finally{f.db.close();}
 });
 
