@@ -18,6 +18,7 @@ export default function VideoEditor({projects,initialProjectId}:{projects:Projec
  const [recordings,setRecordings]=useState<Recording[]|null>(null);
  const [recordingId,setRecordingId]=useState('');
  const [duration,setDuration]=useState(0),[start,setStart]=useState(0),[end,setEnd]=useState(0);
+ const [position,setPosition]=useState(0);
  const [previewing,setPreviewing]=useState(false),[working,setWorking]=useState(false),[refreshing,setRefreshing]=useState(false),[notice,setNotice]=useState(''),[error,setError]=useState(''),[durationNotice,setDurationNotice]=useState('');
  const video=useRef<HTMLVideoElement>(null);
  const probingDuration=useRef(false),durationInitialized=useRef(false),probeTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
@@ -71,6 +72,15 @@ export default function VideoEditor({projects,initialProjectId}:{projects:Projec
   finally{setWorking(false);}
  }
  function playRange(){const el=video.current;if(!el||!valid)return;setError('');try{el.currentTime=start;setPreviewing(true);void el.play().catch(()=>{setPreviewing(false);setError('Die Vorschau konnte nicht gestartet werden.');});}catch{setPreviewing(false);setError('Die Vorschau konnte nicht gestartet werden.');}}
+ function markPosition(which:'start'|'end'){
+  const el=video.current;
+  if(!el||!source||!duration||working||refreshing||probingDuration.current||!Number.isFinite(el.currentTime))return;
+  // Use the element's live position, not the most recent timeupdate event.
+  const value=Math.round(Math.max(0,Math.min(el.currentTime,duration))*1000)/1000;
+  setPosition(value);
+  if(which==='start')setStart(value);else setEnd(value);
+  setError('');setNotice(`${which==='start'?'Anfang':'Ende'} bei ${seconds(value)} gesetzt.`);
+ }
  if(!projects.length)return <section className="video-editor-empty"><Clapperboard size={28}/><h2>Bereit für deinen Schnitt?</h2><p>Lege zuerst ein Skript an und nimm dazu ein Video auf.</p></section>;
  return <div className="video-editor">
   <div className="section-heading large"><div><p className="eyebrow">DEIN VIDEOSTUDIO</p><h1>Videoeditor<span>.</span></h1><p>Wähle eine Aufnahme, setze Anfang und Ende und speichere deinen Schnitt.</p></div></div>
@@ -81,18 +91,24 @@ export default function VideoEditor({projects,initialProjectId}:{projects:Projec
     <label>Aufnahme<select value={recordingId} disabled={working||refreshing||!recordings?.length} onChange={e=>{setRecordingId(e.target.value);setDuration(0);setNotice('');setError('');}}>{!recordings?.length&&<option value="">{recordings===null?'Wird geladen …':'Keine Aufnahme vorhanden'}</option>}{recordings?.map(recording=><option key={recording.id} value={recording.id}>{date(recording.created_at)} · {recording.mime==='video/mp4'?'MP4':'WebM'} · {(recording.size/1024/1024).toFixed(1)} MB</option>)}</select></label>
     <button type="button" className="secondary-action" disabled={working||refreshing||!projectId} onClick={()=>void refresh()}>{refreshing?'Aktualisiert …':'Aufnahmen aktualisieren'}</button>
     {source?<video key={source} ref={video} className="editor-video" src={source} controls playsInline preload="metadata" aria-label="Aufnahme im Videoeditor"
-     onLoadStart={()=>{if(probeTimer.current)clearTimeout(probeTimer.current);probeTimer.current=null;probingDuration.current=false;durationInitialized.current=false;setDuration(0);setDurationNotice('');setPreviewing(false);}}
-     onError={()=>{if(probeTimer.current)clearTimeout(probeTimer.current);probeTimer.current=null;probingDuration.current=false;setDuration(0);setPreviewing(false);setDurationNotice('');setError('Die Aufnahme konnte nicht abgespielt werden.');}}
+     onLoadStart={()=>{if(probeTimer.current)clearTimeout(probeTimer.current);probeTimer.current=null;probingDuration.current=false;durationInitialized.current=false;setDuration(0);setPosition(0);setDurationNotice('');setPreviewing(false);}}
+     onError={()=>{if(probeTimer.current)clearTimeout(probeTimer.current);probeTimer.current=null;probingDuration.current=false;setDuration(0);setPosition(0);setPreviewing(false);setDurationNotice('');setError('Die Aufnahme konnte nicht abgespielt werden.');}}
      onLoadedMetadata={event=>readDuration(event.currentTarget)}
      onDurationChange={event=>{if(event.currentTarget.readyState>=1&&Number.isFinite(event.currentTarget.duration))updateDuration(event.currentTarget,event.currentTarget.duration);}}
-     onSeeked={event=>{const el=event.currentTarget;if(probingDuration.current){const candidate=Number.isFinite(el.duration)?el.duration:el.currentTime;if(candidate>0&&candidate<1e9)updateDuration(el,candidate);}}}
-     onTimeUpdate={event=>{if(previewing&&event.currentTarget.currentTime>=end){event.currentTarget.pause();setPreviewing(false);}}}
+     onSeeked={event=>{const el=event.currentTarget;if(probingDuration.current){const candidate=Number.isFinite(el.duration)?el.duration:el.currentTime;if(candidate>0&&candidate<1e9)updateDuration(el,candidate);}else if(Number.isFinite(el.currentTime))setPosition(el.currentTime);}}
+     onTimeUpdate={event=>{const el=event.currentTarget;if(!probingDuration.current&&Number.isFinite(el.currentTime))setPosition(el.currentTime);if(previewing&&el.currentTime>=end){el.pause();setPreviewing(false);}}}
      onPause={()=>setPreviewing(false)} onEnded={()=>setPreviewing(false)}/>:<div className="editor-no-video">{recordings===null?'Aufnahmen werden geladen …':'Noch keine Aufnahme für dieses Projekt.'}</div>}
     {durationNotice&&<p role="status">{durationNotice}</p>}
    </section>
    <section className="panel editor-controls" aria-label="Video schneiden">
     <div className="editor-section-title"><div><p className="eyebrow">02 / SCHNITT</p><h2>Dein Ausschnitt</h2></div><Scissors size={20}/></div>
-    <p>Ziehe die Regler oder gib die Zeiten in Sekunden ein. Der Ausschnitt muss mindestens 0,1 Sekunden und darf bis zu zehn Minuten lang sein.</p>
+    <p>Spiele die Aufnahme ab und setze die Schnittmarken an der aktuellen Position. Du kannst die Zeiten auch über die Regler oder direkt in Sekunden ändern.</p>
+    <p className="editor-position">Aktuelle Position: <strong>{duration>0?seconds(position):'–:–'}</strong></p>
+    <div className="editor-mark-actions" aria-label="Schnittmarken an der aktuellen Position setzen">
+     <button type="button" className="secondary-action" disabled={!source||!duration||working||refreshing} onClick={()=>markPosition('start')}>Anfang hier setzen</button>
+     <button type="button" className="secondary-action" disabled={!source||!duration||working||refreshing} onClick={()=>markPosition('end')}>Ende hier setzen</button>
+    </div>
+    <p>Der Ausschnitt muss mindestens 0,1 Sekunden und darf bis zu zehn Minuten lang sein.</p>
     <label htmlFor="trim-start">Anfang <strong>{seconds(start)}</strong></label>
     <input id="trim-start" type="range" min={0} max={duration||1} step="0.01" disabled={!duration||working||refreshing} aria-describedby="trim-range-status" aria-valuetext={seconds(start)} value={Number.isFinite(start)?Math.max(0,Math.min(start,duration||1)):0} onChange={e=>setStart(Number(e.target.value))}/>
     <input aria-label="Anfang in Sekunden" aria-describedby="trim-range-status" aria-invalid={duration>0&&!valid} type="number" min="0" max={duration||undefined} step="0.001" disabled={!duration||working||refreshing} value={Number.isFinite(start)?start:''} onChange={e=>setStart(e.target.valueAsNumber)}/>
