@@ -12,7 +12,7 @@ function secretHash(code){if(typeof code!=='string'||!/^[A-Za-z0-9_-]{43}$/.test
 function equalHash(a,b){return typeof a==='string'&&typeof b==='string'&&a.length===64&&b.length===64&&timingSafeEqual(Buffer.from(a,'ascii'),Buffer.from(b,'ascii'));}
 function checkArgs(owner,session,device){if(!HEX.test(owner)||!HEX.test(session)||!UUID.test(device))deny();}
 function bound(row,owner,session,role,device){return row&&row.owner_hash===owner&&row.closed===0&&['camera','prompter'].includes(role)&&row[role+'_session']===session&&row[role+'_device']===device;}
-function authorize(auth,owner,session){return typeof auth==='function'&&auth(owner,session)===true;}
+function authorize(auth,owner,session){try{return typeof auth==='function'&&auth(owner,session)===true;}catch{return false;}}
 function same(row,other){return row&&other&&['room_id','owner_hash','camera_session','camera_device','prompter_session','prompter_device','ticket_hash','secret_epoch','runtime_id','created_wall','created_tick','camera_approved','prompter_approved','closed','camera_next','prompter_next','camera_acked','prompter_acked','camera_last_hash','prompter_last_hash','camera_total','prompter_total'].every(k=>row[k]===other[k]);}
 function failed(db,row){db.prepare('UPDATE studio_signal_rooms SET closed=1 WHERE room_id=?').run(row.room_id);db.prepare('DELETE FROM studio_signal_messages WHERE room_id=?').run(row.room_id);return null;}
 function current(db,row,clock,auth){

@@ -109,3 +109,7 @@ test('browser expiry tombstone commits with room closure and cannot revive on cl
   wall=1023;assert.throws(()=>peekStudioFrameFixture(f.db,camera,clock,auth));
  }finally{f.db.close();}
 });
+
+test('resolver exception fails closed and commits room shutdown',()=>{
+ const f=setup();try{ready(f);assert.throws(()=>studioPairingKeyFixture(f.db,f.camera,f.secret,f.clock,()=>{throw Error('resolver error');}));assert.equal(f.db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,1);assert.throws(()=>f.key(f.camera));}finally{f.db.close();}
+});
