@@ -60,6 +60,19 @@ test('selection mode cannot introduce an unselected web source through the repor
  assert.deepEqual(facts.fakten.map(x=>x.text),['Eine Aussage aus der Quelle.']);
 });
 
+test('fragments refer to the same selected document without borrowing a different query',()=>{
+ const fragment=`${first}#abschnitt`, selectedSources=[{...sources[0],url:fragment}];
+ const report={...selected(),sources:[{url:fragment}],source_excerpts:[{url:fragment,status:'retrieved',text:sourceText}]};
+ const facts=validateFactSheet(base,selectedSources,report,true);
+ assert.equal(facts.fakten.length,1,'fragment-only differences describe the same retrieved document');
+ const selectedQuery=`${first}?edition=1`,otherQuery=`${first}?edition=2`;
+ const querySources=[{...sources[0],url:selectedQuery}];
+ const queryReport={...selected(),sources:[{url:selectedQuery},{url:otherQuery}],source_excerpts:[{url:selectedQuery,status:'retrieved',text:sourceText},{url:otherQuery,status:'retrieved',text:'Eine vollständig andere Edition mit eigenem Wortlaut.'}]};
+ const raw={...base,fakten:[{text:'Ausgewählte Ausgabe',quellen:[selectedQuery],belege:[{text:cited,quelle:selectedQuery}]},{text:'Fremde Ausgabe',quellen:[otherQuery],belege:[{text:'Eine vollständig andere Edition mit eigenem Wortlaut.',quelle:otherQuery}]}]};
+ const result=validateFactSheet(raw,querySources,queryReport,true);
+ assert.deepEqual(result.fakten.map(x=>x.text),['Ausgewählte Ausgabe'],'different query strings remain separate sources');
+});
+
 test('web mode permits an actually retrieved cited web source',()=>{
  const text='Ein Artikel auf einer zweiten geprüften Webseite.';
  const raw={...base,fakten:[...base.fakten,{text:'Weitere Webquelle',quellen:[second],belege:[{text,quelle:second}]}]};
