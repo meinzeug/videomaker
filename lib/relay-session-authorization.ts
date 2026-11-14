@@ -24,13 +24,12 @@ function paired(db:Database.Database,owner:string,r:Request){
  return value??fail('PAIR_REVOKED');
 }
 /** A caller must hold the same DB transaction as the Studio-session authorization. */
-export function beginRelaySession(db:Database.Database,owner:string,session:string,r:Request,c:Clock,authorize:()=>boolean){
- validate(owner,session,r,c);
+export function beginRelaySession(db:Database.Database,owner:string,session:string,r:Request,clock:()=>Clock,authorize:()=>boolean){
  return db.transaction(()=>{
-  if(authorize()!==true)fail('UNAUTHORIZED');paired(db,owner,r);db.exec(schema);
+  if(authorize()!==true)fail('UNAUTHORIZED');const c=clock();validate(owner,session,r,c);paired(db,owner,r);db.exec(schema);
   const old=db.prepare('SELECT * FROM relay_session_challenges WHERE pair_id=? AND role=?').get(r.pairId,r.role) as (ClockRow&{owner_hash:string;session_hash:string;device_id:string;room_id:string;token_hash:string;challenge_id:string;nonce:string})|undefined;
   if(old&&fresh(old,c,CHALLENGE_MS)&&old.owner_hash===owner&&old.session_hash===session&&old.device_id===r.deviceId&&old.room_id===r.roomId&&old.token_hash===r.tokenHash)return {challengeId:old.challenge_id,nonce:old.nonce,created:false};
-  db.prepare('DELETE FROM relay_session_challenges WHERE runtime_id<>? OR created_wall>? OR created_tick>? OR created_wall<=? OR created_tick<=?').run(c.runtimeId,c.wall,c.tick,c.wall-CHALLENGE_MS,c.tick-CHALLENGE_MS);
+  db.prepare('DELETE FROM relay_session_challenges WHERE runtime_id=? AND (created_wall>? OR created_tick>? OR created_wall<=? OR created_tick<=?)').run(c.runtimeId,c.wall,c.tick,c.wall-CHALLENGE_MS,c.tick-CHALLENGE_MS);
   const exists=db.prepare('SELECT 1 FROM relay_session_challenges WHERE pair_id=? AND role=?').get(r.pairId,r.role);
   if(!exists&&((db.prepare('SELECT COUNT(*) AS n FROM relay_session_challenges').get() as {n:number}).n>=MAX_PENDING||(db.prepare('SELECT COUNT(*) AS n FROM relay_session_challenges WHERE owner_hash=?').get(owner) as {n:number}).n>=8))fail('CAPACITY');
   const challengeId=randomUUID(),nonce=randomBytes(32).toString('base64url');
@@ -43,12 +42,12 @@ export function relaySessionMessage(owner:string,session:string,r:Request,challe
  return Buffer.from(`videomaker-relay-session/v1\n${owner}\n${session}\n${r.pairId}\n${r.role}\n${r.deviceId}\n${r.roomId}\n${r.tokenHash}\n${challengeId}\n${nonce}\n`,'utf8');
 }
 export function completeRelaySession(db:Database.Database,owner:string,session:string,r:Request,challengeId:string,signature:Buffer,clock:()=>Clock,authorize:()=>boolean){
- const initial=clock();validate(owner,session,r,initial);if(!uuid(challengeId)||!Buffer.isBuffer(signature)||signature.length<1||signature.length>80)fail('INVALID');
+ if(!uuid(challengeId)||!Buffer.isBuffer(signature)||signature.length<1||signature.length>80)fail('INVALID');
  return db.transaction(()=>{
-  if(authorize()!==true)fail('UNAUTHORIZED');const device=paired(db,owner,r);db.exec(schema);
+  if(authorize()!==true)fail('UNAUTHORIZED');const initial=clock();validate(owner,session,r,initial);const device=paired(db,owner,r);db.exec(schema);
   const proofHash=sha(JSON.stringify([owner,session,r.pairId,r.role,r.deviceId,r.roomId,r.tokenHash,challengeId,signature.toString('base64')]));
   const old=db.prepare('SELECT * FROM relay_session_tokens WHERE pair_id=? AND role=?').get(r.pairId,r.role) as (ClockRow&{challenge_id:string;owner_hash:string;session_hash:string;device_id:string;room_id:string;token_hash:string;proof_hash:string})|undefined;
-  if(old&&old.challenge_id===challengeId&&old.owner_hash===owner&&old.session_hash===session&&old.device_id===r.deviceId&&old.room_id===r.roomId&&old.token_hash===r.tokenHash&&old.proof_hash===proofHash&&fresh(old,initial,TICKET_MS))return {created:false};
+  if(old&&old.challenge_id===challengeId&&old.owner_hash===owner&&old.session_hash===session&&old.device_id===r.deviceId&&old.room_id===r.roomId&&old.token_hash===r.tokenHash&&old.proof_hash===proofHash&&fresh(old,initial,TICKET_MS)){const now=clock();if(!clockValid(now)||!fresh(old,now,TICKET_MS))return fail('EXPIRED');if(authorize()!==true)fail('UNAUTHORIZED');paired(db,owner,r);const final=clock();if(!clockValid(final)||!fresh(old,final,TICKET_MS))return fail('EXPIRED');return {created:false};}
   const pending=db.prepare('SELECT * FROM relay_session_challenges WHERE pair_id=? AND role=? AND challenge_id=? AND owner_hash=? AND session_hash=? AND device_id=? AND room_id=? AND token_hash=?').get(r.pairId,r.role,challengeId,owner,session,r.deviceId,r.roomId,r.tokenHash) as (ClockRow&{nonce:string})|undefined;
   if(!pending||!fresh(pending,initial,CHALLENGE_MS))return fail('EXPIRED');
   let valid=false;try{const key=createPublicKey({key:device.publicKey,format:'der',type:'spki'});valid=verify('sha256',relaySessionMessage(owner,session,r,challengeId,pending.nonce),{key,dsaEncoding:'der'},signature);}catch{/* malformed proof fails closed */}
@@ -56,19 +55,41 @@ export function completeRelaySession(db:Database.Database,owner:string,session:s
   const now=clock();if(!clockValid(now)||!fresh(pending,now,CHALLENGE_MS))return fail('EXPIRED');if(authorize()!==true)fail('UNAUTHORIZED');paired(db,owner,r);
   db.prepare(`INSERT INTO relay_session_tokens VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pair_id,role) DO UPDATE SET challenge_id=excluded.challenge_id,owner_hash=excluded.owner_hash,session_hash=excluded.session_hash,device_id=excluded.device_id,room_id=excluded.room_id,token_hash=excluded.token_hash,proof_hash=excluded.proof_hash,runtime_id=excluded.runtime_id,created_wall=excluded.created_wall,created_tick=excluded.created_tick`).run(r.pairId,r.role,challengeId,owner,session,r.deviceId,r.roomId,r.tokenHash,proofHash,now.runtimeId,now.wall,now.tick);
   db.prepare('DELETE FROM relay_session_challenges WHERE pair_id=? AND role=? AND challenge_id=?').run(r.pairId,r.role,challengeId);
+  if(authorize()!==true)return fail('UNAUTHORIZED');paired(db,owner,r);const final=clock();if(!clockValid(final)||!fresh(pending,final,CHALLENGE_MS))return fail('EXPIRED');
   return {created:true};
  }).immediate();
 }
-export function verifyRelaySession(db:Database.Database,owner:string,session:string,r:Request,credential:string,c:Clock,authorize:()=>boolean){
- validate(owner,session,r,c);if(!secret(credential)||!timingSafeEqual(Buffer.from(sha(credential),'hex'),Buffer.from(r.tokenHash,'hex')))return false;
+export function verifyRelaySession(db:Database.Database,owner:string,session:string,r:Request,credential:string,clock:()=>Clock,authorize:()=>boolean){
+ if(!secret(credential)||!hash(r.tokenHash)||!timingSafeEqual(Buffer.from(sha(credential),'hex'),Buffer.from(r.tokenHash,'hex')))return false;
  return db.transaction(()=>{
-  if(authorize()!==true)return false;paired(db,owner,r);
+  if(authorize()!==true)return false;const initial=clock();validate(owner,session,r,initial);paired(db,owner,r);
   const token=db.prepare('SELECT * FROM relay_session_tokens WHERE pair_id=? AND role=? AND owner_hash=? AND session_hash=? AND device_id=? AND room_id=? AND token_hash=?').get(r.pairId,r.role,owner,session,r.deviceId,r.roomId,r.tokenHash) as ClockRow|undefined;
-  return !!token&&fresh(token,c,TICKET_MS);
+  if(!token||!fresh(token,initial,TICKET_MS))return false;
+  const now=clock();if(!clockValid(now)||!fresh(token,now,TICKET_MS)||authorize()!==true)return false;paired(db,owner,r);const final=clock();return clockValid(final)&&fresh(token,final,TICKET_MS);
  }).immediate();
 }
 /** Logout invalidates temporary grants, while the durable device trust remains. */
 export function revokeRelayOwnerSession(db:Database.Database,session:string){
  if(!hash(session)||!db.inTransaction)fail('INVALID');
  for(const table of ['relay_session_tokens','relay_session_challenges'])if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))db.prepare(`DELETE FROM ${table} WHERE session_hash=?`).run(session);
+}
+
+type Participant={session:string;request:Request;credential:string;authorize:()=>boolean};
+/** A room is authorized only while both distinct devices have fresh matching grants. */
+export function verifyRelaySessionPair(db:Database.Database,owner:string,camera:Participant,prompter:Participant,clock:()=>Clock){
+ const c=camera.request,p=prompter.request;
+ if(c.role!=='camera'||p.role!=='prompter'||c.deviceId===p.deviceId||c.pairId!==p.pairId||c.roomId!==p.roomId)return false;
+ if(!secret(camera.credential)||!secret(prompter.credential)||!hash(c.tokenHash)||!hash(p.tokenHash))return false;
+ if(!timingSafeEqual(Buffer.from(sha(camera.credential),'hex'),Buffer.from(c.tokenHash,'hex'))||!timingSafeEqual(Buffer.from(sha(prompter.credential),'hex'),Buffer.from(p.tokenHash,'hex')))return false;
+ return db.transaction(()=>{
+  if(camera.authorize()!==true||prompter.authorize()!==true)return false;
+  const initial=clock();validate(owner,camera.session,c,initial);validate(owner,prompter.session,p,initial);paired(db,owner,c);paired(db,owner,p);
+  const find=db.prepare('SELECT * FROM relay_session_tokens WHERE pair_id=? AND role=? AND owner_hash=? AND session_hash=? AND device_id=? AND room_id=? AND token_hash=?');
+  const cameraToken=find.get(c.pairId,c.role,owner,camera.session,c.deviceId,c.roomId,c.tokenHash) as ClockRow|undefined;
+  const prompterToken=find.get(p.pairId,p.role,owner,prompter.session,p.deviceId,p.roomId,p.tokenHash) as ClockRow|undefined;
+  if(!cameraToken||!prompterToken||!fresh(cameraToken,initial,TICKET_MS)||!fresh(prompterToken,initial,TICKET_MS))return false;
+  if(camera.authorize()!==true||prompter.authorize()!==true)return false;
+  paired(db,owner,c);paired(db,owner,p);const final=clock();
+  return clockValid(final)&&fresh(cameraToken,final,TICKET_MS)&&fresh(prompterToken,final,TICKET_MS);
+ }).immediate();
 }

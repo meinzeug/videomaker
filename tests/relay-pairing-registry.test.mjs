@@ -13,8 +13,8 @@ function fixture(){
 }
 test('both identities prove possession and retry of a completed pairing is idempotent',()=>{
  const f=fixture();try{
-  const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>true);
-  assert.deepEqual(beginRelayPairing(f.db,owner,f.pairId,transcript,time(1001),()=>true),challenge);
+  const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(),()=>true);
+  assert.deepEqual(beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(1001),()=>true),challenge);
   const input=f.prepare(challenge);assert.deepEqual(completeRelayPairing(f.db,owner,input,()=>time(1002),()=>true),{pairId:f.pairId,created:true});
   assert.deepEqual(completeRelayPairing(f.db,owner,input,()=>time(1003),()=>true),{pairId:f.pairId,created:false});
   assert.throws(()=>completeRelayPairing(f.db,owner,{...input,challengeId:randomUUID()},()=>time(1003),()=>true),/PROOF/);
@@ -28,7 +28,7 @@ test('both identities prove possession and retry of a completed pairing is idemp
 test('wrong proof, different roles, expiry and revoked session never create a pairing',()=>{
  for(const mode of ['bad_signature','role_swap','expiry','restart','logout']){
   const f=fixture();try{
-   const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>true),input=f.prepare(challenge);
+   const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(),()=>true),input=f.prepare(challenge);
    if(mode==='bad_signature')input.camera.signature=Buffer.alloc(64);
    if(mode==='role_swap')[input.camera.signature,input.prompter.signature]=[input.prompter.signature,input.camera.signature];
    let calls=0;const clock=()=>{calls++;return mode==='expiry'?time(61000):mode==='restart'?time(1001,1001,randomUUID()):time(1001);};
@@ -42,14 +42,14 @@ test('wrong proof, different roles, expiry and revoked session never create a pa
 test('revoking a pair or device is permanent, owner-bound and never removes user data',()=>{
  for(const mode of ['pair','device']){
   const f=fixture();try{
-   const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>true),input=f.prepare(challenge);
+   const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(),()=>true),input=f.prepare(challenge);
    completeRelayPairing(f.db,owner,input,()=>time(1001),()=>true);
    assert.throws(()=>revokeRelayPairing(f.db,other,f.pairId,1002,()=>true),/MISSING/);
    if(mode==='pair')assert.equal(revokeRelayPairing(f.db,owner,f.pairId,1002,()=>true),true);
    else assert.equal(revokeRelayDevice(f.db,owner,f.camera.deviceId,1002,()=>true),true);
    assert.equal(f.db.prepare('SELECT revoked_at FROM relay_pair_links WHERE pair_id=?').get(f.pairId).revoked_at,1002);
    assert.throws(()=>completeRelayPairing(f.db,owner,input,()=>time(1003),()=>true),/CONFLICT/);
-   assert.throws(()=>beginRelayPairing(f.db,owner,f.pairId,transcript,time(1003),()=>true),/CONFLICT/);
+   assert.throws(()=>beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(1003),()=>true),/CONFLICT/);
    assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_devices').get().n,2);
   }finally{f.db.close();}
  }
@@ -60,10 +60,10 @@ test('authorization must explicitly return true before and after proof verificat
   const f=fixture();try{
    if(mode==='false'||mode==='throw'){
     const authorization=()=>{if(mode==='throw')throw Error('UNAUTHORIZED');return false;};
-    assert.throws(()=>beginRelayPairing(f.db,owner,f.pairId,transcript,time(),authorization),/UNAUTHORIZED/);
+    assert.throws(()=>beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(),authorization),/UNAUTHORIZED/);
     assert.equal(f.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='relay_pair_links'").get(),undefined);
    }else{
-    const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>true),input=f.prepare(challenge);let checks=0;
+    const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(),()=>true),input=f.prepare(challenge);let checks=0;
     assert.throws(()=>completeRelayPairing(f.db,owner,input,()=>time(1001),()=>++checks===1),/UNAUTHORIZED/);
     assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM relay_pair_links').get().n,0);
     assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM relay_pair_devices').get().n,0);
@@ -77,7 +77,7 @@ test('concurrent independent processes commit one pairing and an exact retry onl
  const dir=mkdtempSync(join(tmpdir(),'relay-pair-race-')),file=join(dir,'fixture.sqlite'),f=fixture();f.db.close();f.db=new Database(file,{timeout:10000});
  const children=[];
  try{
-  const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,time(),()=>true),input=f.prepare(challenge);
+  const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(),()=>true),input=f.prepare(challenge);
   const serialized={...input,camera:{...input.camera,publicKey:input.camera.publicKey.toString('base64'),signature:input.camera.signature.toString('base64')},prompter:{...input.prompter,publicKey:input.prompter.publicKey.toString('base64'),signature:input.prompter.signature.toString('base64')}};
   const run=()=>new Promise((resolve,reject)=>{const child=fork('tests/fixtures/relay-pairing-race-worker.mjs',[file],{execArgv:['--experimental-strip-types'],stdio:['ignore','ignore','pipe','ipc']});children.push(child);let ready=false;child.on('message',value=>{if(value==='ready'){ready=true;resolve({child,result:new Promise((done,fail)=>{child.once('message',done);child.once('error',fail);})});}});child.once('error',reject);child.once('exit',code=>{if(!ready)reject(Error('worker exited '+code));});});
   const workers=await Promise.all([run(),run()]);workers.forEach(({child})=>child.send({owner,input:serialized,clock:time(1001)}));
@@ -90,4 +90,23 @@ test('pairing transcript matches the Android role-bound test vector',()=>{
  const pair='00000000-0000-4000-8000-000000000001',challenge='00000000-0000-4000-8000-000000000002',camera='00000000-0000-4000-8000-000000000003',prompter='00000000-0000-4000-8000-000000000004',nonce='A'.repeat(43),owner='a'.repeat(64),transcript='c'.repeat(64);
  const expected=`videomaker-relay-pair/v1\n${owner}\n${pair}\n${challenge}\n${nonce}\n${transcript}\n${camera}\n1da57ee8fb4654e9343dffaa2f1925e7158a3a07dd61bb2fa411741a5097f664\n${prompter}\nff6d15f7d14324b2dac093e20f6b5562de82494d758ffa1890ab486b1e3b4b62\ncamera\n`;
  assert.equal(relayPairingMessage(owner,pair,challenge,nonce,transcript,camera,Buffer.from('camera-key'),prompter,Buffer.from('prompter-key'),'camera').toString(),expected);
+});
+
+test('pairing challenge expiry during the final commit preparation rolls back everything',()=>{
+ const f=fixture();try{
+  const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(),()=>true),input=f.prepare(challenge);let reads=0;
+  assert.throws(()=>completeRelayPairing(f.db,owner,input,()=>time(++reads<3?1001:61001),()=>true),/EXPIRED/);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_links').get().n,0);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_devices').get().n,0);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_challenges').get().n,1);
+ }finally{f.db.close();}
+});
+
+test('a different runtime cannot delete an unrelated pending pairing challenge',()=>{
+ const f=fixture();try{
+  const first=beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(),()=>true);
+  const otherRuntime=randomUUID();beginRelayPairing(f.db,owner,randomUUID(),transcript,()=>time(1001,1001,otherRuntime),()=>true);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM relay_pair_challenges').get().n,2);
+  assert.equal(completeRelayPairing(f.db,owner,f.prepare(first),()=>time(1002),()=>true).created,true);
+ }finally{f.db.close();}
 });

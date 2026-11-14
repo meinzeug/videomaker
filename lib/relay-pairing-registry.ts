@@ -33,20 +33,21 @@ export const RELAY_PAIRING_SCHEMA=`
 `;
 /** Called only inside the authenticated caller's immediate transaction. */
 function requireAuthorization(db:Database.Database,owner:string,authorize:()=>boolean){if(!db.inTransaction||!hash(owner))fail('INVALID');if(authorize()!==true)fail('UNAUTHORIZED');}
-export function beginRelayPairing(db:Database.Database,owner:string,pairId:string,transcriptHash:string,clock:Clock,authorize:()=>boolean){
- checkClock(clock);if(!uuid(pairId)||!hash(transcriptHash))return fail('INVALID');
+export function beginRelayPairing(db:Database.Database,owner:string,pairId:string,transcriptHash:string,clockSource:()=>Clock,authorize:()=>boolean){
+ if(!uuid(pairId)||!hash(transcriptHash))return fail('INVALID');
  return db.transaction(()=>{
-  requireAuthorization(db,owner,authorize);db.exec(RELAY_PAIRING_SCHEMA);
+  requireAuthorization(db,owner,authorize);let clock=clockSource();checkClock(clock);db.exec(RELAY_PAIRING_SCHEMA);
   const existing=db.prepare('SELECT owner_hash,transcript_hash,revoked_at FROM relay_pair_links WHERE pair_id=?').get(pairId) as {owner_hash:string;transcript_hash:string;revoked_at:number|null}|undefined;
-  if(existing){if(existing.owner_hash!==owner||existing.transcript_hash!==transcriptHash||existing.revoked_at!==null)fail('CONFLICT');return {paired:true as const};}
+  if(existing){if(existing.owner_hash!==owner||existing.transcript_hash!==transcriptHash||existing.revoked_at!==null)fail('CONFLICT');requireAuthorization(db,owner,authorize);return {paired:true as const};}
   const old=db.prepare('SELECT * FROM relay_pair_challenges WHERE pair_id=?').get(pairId) as {owner_hash:string;transcript_hash:string;challenge_id:string;nonce:string;runtime_id:string;created_wall:number;created_tick:number}|undefined;
   if(old&&old.owner_hash!==owner||old&&old.transcript_hash!==transcriptHash)fail('CONFLICT');
-  if(old&&fresh(old,clock))return {paired:false as const,challengeId:old.challenge_id,nonce:old.nonce};
+  if(old&&fresh(old,clock)){requireAuthorization(db,owner,authorize);clock=clockSource();checkClock(clock);if(fresh(old,clock))return {paired:false as const,challengeId:old.challenge_id,nonce:old.nonce};}
   if(old)db.prepare('DELETE FROM relay_pair_challenges WHERE pair_id=?').run(pairId);
-  db.prepare('DELETE FROM relay_pair_challenges WHERE runtime_id<>? OR created_wall>? OR created_tick>? OR created_wall<=? OR created_tick<=?').run(clock.runtimeId,clock.wall,clock.tick,clock.wall-TTL,clock.tick-TTL);
+  db.prepare('DELETE FROM relay_pair_challenges WHERE runtime_id=? AND (created_wall>? OR created_tick>? OR created_wall<=? OR created_tick<=?)').run(clock.runtimeId,clock.wall,clock.tick,clock.wall-TTL,clock.tick-TTL);
   if((db.prepare('SELECT count(*) AS n FROM relay_pair_challenges').get() as {n:number}).n>=MAX_PENDING||(db.prepare('SELECT count(*) AS n FROM relay_pair_challenges WHERE owner_hash=?').get(owner) as {n:number}).n>=4)fail('CAPACITY');
   const challengeId=randomUUID(),nonce=randomBytes(32).toString('base64url');
   db.prepare('INSERT INTO relay_pair_challenges VALUES(?,?,?,?,?,?,?,?)').run(pairId,challengeId,owner,transcriptHash,nonce,clock.runtimeId,clock.wall,clock.tick);
+  requireAuthorization(db,owner,authorize);const final=clockSource();checkClock(final);if(!fresh({runtime_id:clock.runtimeId,created_wall:clock.wall,created_tick:clock.tick},final))return fail('EXPIRED');
   return {paired:false as const,challengeId,nonce};
  }).immediate();
 }
@@ -66,7 +67,7 @@ export function completeRelayPairing(db:Database.Database,owner:string,input:Com
    if(!proof||proof.challenge_id!==input.challengeId||proof.proof_hash!==proofHash)fail('PROOF');
    const devices=db.prepare('SELECT device_id,owner_hash,public_key,revoked_at FROM relay_pair_devices WHERE device_id IN (?,?)').all(input.camera.deviceId,input.prompter.deviceId) as {device_id:string;owner_hash:string;public_key:Buffer;revoked_at:number|null}[];
    if(existing.owner_hash!==owner||existing.camera_id!==input.camera.deviceId||existing.prompter_id!==input.prompter.deviceId||existing.transcript_hash!==input.transcriptHash||existing.revoked_at!==null||devices.length!==2||devices.some(d=>d.owner_hash!==owner||d.revoked_at!==null||!d.public_key.equals(d.device_id===input.camera.deviceId?input.camera.publicKey:input.prompter.publicKey)))fail('CONFLICT');
-   return {pairId:input.pairId,created:false};
+   requireAuthorization(db,owner,authorize);return {pairId:input.pairId,created:false};
   }
   const row=db.prepare('SELECT * FROM relay_pair_challenges WHERE pair_id=? AND challenge_id=? AND owner_hash=? AND transcript_hash=?').get(input.pairId,input.challengeId,owner,input.transcriptHash) as {nonce:string;runtime_id:string;created_wall:number;created_tick:number}|undefined;
   let now=clock();checkClock(now);if(!row||!fresh(row,now))return fail('EXPIRED');
@@ -85,6 +86,7 @@ export function completeRelayPairing(db:Database.Database,owner:string,input:Com
   db.prepare('INSERT INTO relay_pair_links(pair_id,owner_hash,camera_id,prompter_id,transcript_hash,created_at) VALUES(?,?,?,?,?,?)').run(input.pairId,owner,input.camera.deviceId,input.prompter.deviceId,input.transcriptHash,now.wall);
   db.prepare('INSERT INTO relay_pair_completions(pair_id,challenge_id,proof_hash) VALUES(?,?,?)').run(input.pairId,input.challengeId,proofHash);
   db.prepare('DELETE FROM relay_pair_challenges WHERE pair_id=?').run(input.pairId);
+  requireAuthorization(db,owner,authorize);const final=clock();checkClock(final);if(!fresh(row,final))return fail('EXPIRED');
   return {pairId:input.pairId,created:true};
  }).immediate();
 }
