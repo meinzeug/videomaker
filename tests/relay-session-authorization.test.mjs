@@ -106,8 +106,22 @@ test('a foreign runtime cannot delete another pending device challenge',()=>{
  const f=fixture();try{
   const original=f.make(),credential=randomBytes(32).toString('base64url');
   const request={...f.request,role:'prompter',deviceId:f.prompter.deviceId,tokenHash:createHash('sha256').update(credential).digest('hex')};
-  beginRelaySession(f.db,owner,otherSession,request,()=>clock(1011,1011,randomUUID()),()=>true);
+  const otherRuntime=randomUUID();beginRelaySession(f.db,owner,otherSession,request,()=>clock(1011,1011,otherRuntime),()=>true);
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_session_challenges').get().n,2);
   assert.equal(completeRelaySession(f.db,owner,session,f.request,original.challenge.challengeId,original.signature,()=>clock(1020),()=>true).created,true);
+ }finally{f.db.close();}
+});
+
+test('begin never returns a challenge that expired while rechecking authorization',()=>{
+ const f=fixture();try{
+  const first=f.make().challenge;let ticks=0;
+  const next=beginRelaySession(f.db,owner,session,f.request,()=>clock(++ticks===1?1020:61001),()=>true);
+  assert.equal(next.created,true);assert.notEqual(next.challengeId,first.challengeId);
+ }finally{f.db.close();}
+});
+test('a new challenge that expires before commit is rolled back',()=>{
+ const f=fixture();try{
+  let ticks=0;assert.throws(()=>beginRelaySession(f.db,owner,session,f.request,()=>clock(++ticks===1?1020:61011),()=>true),/EXPIRED/);
+  assert.equal(f.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='relay_session_challenges'").get(),undefined);
  }finally{f.db.close();}
 });

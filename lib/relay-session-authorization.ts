@@ -26,14 +26,19 @@ function paired(db:Database.Database,owner:string,r:Request){
 /** A caller must hold the same DB transaction as the Studio-session authorization. */
 export function beginRelaySession(db:Database.Database,owner:string,session:string,r:Request,clock:()=>Clock,authorize:()=>boolean){
  return db.transaction(()=>{
-  if(authorize()!==true)fail('UNAUTHORIZED');const c=clock();validate(owner,session,r,c);paired(db,owner,r);db.exec(schema);
+  if(authorize()!==true)fail('UNAUTHORIZED');let c=clock();validate(owner,session,r,c);paired(db,owner,r);db.exec(schema);
   const old=db.prepare('SELECT * FROM relay_session_challenges WHERE pair_id=? AND role=?').get(r.pairId,r.role) as (ClockRow&{owner_hash:string;session_hash:string;device_id:string;room_id:string;token_hash:string;challenge_id:string;nonce:string})|undefined;
-  if(old&&fresh(old,c,CHALLENGE_MS)&&old.owner_hash===owner&&old.session_hash===session&&old.device_id===r.deviceId&&old.room_id===r.roomId&&old.token_hash===r.tokenHash)return {challengeId:old.challenge_id,nonce:old.nonce,created:false};
+  if(old&&fresh(old,c,CHALLENGE_MS)&&old.owner_hash===owner&&old.session_hash===session&&old.device_id===r.deviceId&&old.room_id===r.roomId&&old.token_hash===r.tokenHash){
+   if(authorize()!==true)fail('UNAUTHORIZED');paired(db,owner,r);c=clock();validate(owner,session,r,c);
+   if(fresh(old,c,CHALLENGE_MS))return {challengeId:old.challenge_id,nonce:old.nonce,created:false};
+  }
   db.prepare('DELETE FROM relay_session_challenges WHERE runtime_id=? AND (created_wall>? OR created_tick>? OR created_wall<=? OR created_tick<=?)').run(c.runtimeId,c.wall,c.tick,c.wall-CHALLENGE_MS,c.tick-CHALLENGE_MS);
   const exists=db.prepare('SELECT 1 FROM relay_session_challenges WHERE pair_id=? AND role=?').get(r.pairId,r.role);
   if(!exists&&((db.prepare('SELECT COUNT(*) AS n FROM relay_session_challenges').get() as {n:number}).n>=MAX_PENDING||(db.prepare('SELECT COUNT(*) AS n FROM relay_session_challenges WHERE owner_hash=?').get(owner) as {n:number}).n>=8))fail('CAPACITY');
   const challengeId=randomUUID(),nonce=randomBytes(32).toString('base64url');
   db.prepare(`INSERT INTO relay_session_challenges VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pair_id,role) DO UPDATE SET challenge_id=excluded.challenge_id,owner_hash=excluded.owner_hash,session_hash=excluded.session_hash,device_id=excluded.device_id,room_id=excluded.room_id,token_hash=excluded.token_hash,nonce=excluded.nonce,runtime_id=excluded.runtime_id,created_wall=excluded.created_wall,created_tick=excluded.created_tick`).run(r.pairId,r.role,challengeId,owner,session,r.deviceId,r.roomId,r.tokenHash,nonce,c.runtimeId,c.wall,c.tick);
+  if(authorize()!==true)fail('UNAUTHORIZED');paired(db,owner,r);const final=clock();validate(owner,session,r,final);
+  if(!fresh({runtime_id:c.runtimeId,created_wall:c.wall,created_tick:c.tick},final,CHALLENGE_MS))return fail('EXPIRED');
   return {challengeId,nonce,created:true};
  }).immediate();
 }
