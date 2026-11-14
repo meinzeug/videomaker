@@ -3,6 +3,7 @@ import { cookies, headers } from 'next/headers';
 import db from './db';
 import { revokeSession, sessionRevoked } from './session-revocations';
 import type Database from 'better-sqlite3';
+import { sameOriginPolicy } from './origin-policy';
 
 const name = 'kontrakurs_session';
 function signature(value: string) { return createHmac('sha256', process.env.SESSION_SECRET || '').update(value).digest('base64url'); }
@@ -44,7 +45,5 @@ export function sessionAuthorized(database:Database.Database,value:string) {
 }
 export async function sameOrigin(req: Request) {
   const origin=req.headers.get('origin'); const h=await headers();
-  const host=h.get('x-forwarded-host') || h.get('host');
-  if (!origin || !host) return false;
-  try { return new URL(origin).host === host; } catch { return false; }
+  return sameOriginPolicy(origin,h.get('host'),h.get('x-forwarded-host'),process.env.VIDEOMAKER_PUBLIC_ORIGIN);
 }
