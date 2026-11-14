@@ -2,7 +2,8 @@ import { authorized, sameOrigin } from '@/lib/auth';
 import db from '@/lib/db';
 import { parseManualScript } from '@/lib/manual';
 import { recordingPath, type Recording } from '@/lib/recordings';
-import { existsSync, unlinkSync } from 'node:fs';
+import { CAMERA_PROJECT_CLAIMS_SCHEMA, assertCameraProjectDeletable, CameraProjectClaimError } from '@/lib/camera-project-claims';
+import {PROJECT_RECORDING_DELETION_SCHEMA,queueProjectRecordingDeletions,drainProjectRecordingDeletions} from '@/lib/project-recording-deletions';
 import { NextResponse } from 'next/server';
 
 export async function PATCH(req:Request,{params}:{params:Promise<{id:string}>}) {
@@ -21,15 +22,21 @@ export async function DELETE(req:Request,{params}:{params:Promise<{id:string}>})
  if(!await authorized() || !await sameOrigin(req))return NextResponse.json({error:'Nicht erlaubt'},{status:403});
  const {id}=await params;
  try {
-  const recordings=db().prepare('SELECT id,mime FROM project_recordings WHERE project_id=?').all(id) as Pick<Recording,'id'|'mime'>[];
-  for(const item of recordings){const file=recordingPath(item.id,item.mime);if(existsSync(file))unlinkSync(file);}
-  db().transaction(()=>{
-   db().prepare('DELETE FROM project_recordings WHERE project_id=?').run(id);
-   db().prepare('DELETE FROM project_images WHERE project_id=?').run(id);
-   db().prepare('DELETE FROM image_jobs WHERE project_id=?').run(id);
-   db().prepare('DELETE FROM project_channels WHERE project_id=?').run(id);
-   db().prepare('DELETE FROM projects WHERE id=?').run(id);
-  })();
+  const database=db();database.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);database.exec(PROJECT_RECORDING_DELETION_SCHEMA);
+  database.transaction(()=>{
+   // Hold the write lock through the guard, durable cleanup jobs and DB delete.
+   // Actual files stay untouched until this transaction has committed.
+   assertCameraProjectDeletable(database,id);
+   const recordings=database.prepare('SELECT id,mime FROM project_recordings WHERE project_id=?').all(id) as Pick<Recording,'id'|'mime'>[];
+   queueProjectRecordingDeletions(database,recordings,recordingPath);
+   database.prepare('DELETE FROM project_recordings WHERE project_id=?').run(id);
+   database.prepare('DELETE FROM project_images WHERE project_id=?').run(id);
+   database.prepare('DELETE FROM image_jobs WHERE project_id=?').run(id);
+   database.prepare('DELETE FROM project_channels WHERE project_id=?').run(id);
+   database.prepare('DELETE FROM projects WHERE id=?').run(id);
+  }).immediate();
+  try {if(drainProjectRecordingDeletions(database,recordingPath)>0)return NextResponse.json({ok:true,cleanupPending:true});}
+  catch(error){console.error('Aufnahmebereinigung wird später erneut versucht:',error);return NextResponse.json({ok:true,cleanupPending:true});}
   return NextResponse.json({ok:true});
- } catch(error) {console.error('Skript konnte nicht gelöscht werden:',error);return NextResponse.json({error:'Skript und Aufnahmen konnten nicht gelöscht werden.'},{status:500});}
+ } catch(error) {if(error instanceof CameraProjectClaimError)return NextResponse.json({error:error.message},{status:409});console.error('Skript konnte nicht gelöscht werden:',error);return NextResponse.json({error:'Skript und Aufnahmen konnten nicht gelöscht werden.'},{status:500});}
 }

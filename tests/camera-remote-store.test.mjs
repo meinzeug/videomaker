@@ -8,16 +8,17 @@ import {join} from 'node:path';
 import {cameraRemoteEnabled} from '../lib/camera-remote-feature.ts';
 import {parseBootUptime,cameraRemoteClock} from '../lib/camera-remote-clock.ts';
 import {CAMERA_LIMITS,ensureCameraRemoteSchema,parseCameraHeartbeat,parseCameraRequest,queueCameraRequest as queue,receiveCameraHeartbeat as receive,listCameraDevices as list} from '../lib/camera-remote-store.ts';
+import {cameraUploadIdFor,recordCameraVerifiedUpload,resolveCameraFailure,claimCameraProject} from '../lib/camera-project-claims.ts';
 const runtime='00000000-0000-4000-8000-000000000099';
 const clock=(wall,tick=wall,runtimeId=runtime)=>({wall,tick,runtimeId});
 const asClock=(value)=>typeof value==='number'?clock(value):value;
-const receiveCameraHeartbeat=(db,item,now,owner='a'.repeat(64),limits)=>receive(db,item,asClock(now),owner,limits);
+const receiveCameraHeartbeat=(db,item,now,owner='a'.repeat(64),limits,deviceAuthenticated=false)=>receive(db,item,asClock(now),owner,limits,deviceAuthenticated);
 const queueCameraRequest=(db,id,item,now,limits)=>queue(db,id,item,asClock(now),limits);
 const listCameraDevices=(db,now,limits)=>list(db,asClock(now),limits).devices;
 const setup=()=>{const db=new Database(':memory:');db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY)');ensureCameraRemoteSchema(db);return db;};
 const deviceId='00000000-0000-4000-8000-000000000001',otherDevice='00000000-0000-4000-8000-000000000002',projectId='00000000-0000-4000-8000-000000000003',takeId='00000000-0000-4000-8000-000000000004';
 let sequence=0;
-const heartbeat=(patch={})=>parseCameraHeartbeat({id:deviceId,sequence:++sequence,name:'Kamera',capability:'remote-record-v1',phase:'idle',recordingId:null,projectId:null,ack:[],...patch});
+const heartbeat=(patch={})=>parseCameraHeartbeat({id:deviceId,sequence:++sequence,name:'Kamera',capability:'remote-record-v1',phase:'idle',recordingId:null,projectId:null,ack:[],...(['ready','partial'].includes(patch.phase)?{sizeBytes:42,sha256:'a'.repeat(64)}:{}),...patch});
 const start=(patch={})=>parseCameraRequest({id:randomUUID(),type:'record_start',recordingId:takeId,projectId,...patch});
 test('camera routes are disabled by default and cannot be enabled in production',()=>{
  assert.equal(cameraRemoteEnabled('development',undefined),false);
@@ -69,12 +70,56 @@ test('queue is idempotent, bound to the project and visible status comes only fr
 test('expired commands are not redelivered or assumed unexecuted without device evidence',()=>{
  const db=setup();db.prepare('INSERT INTO projects(id) VALUES(?)').run(projectId);receiveCameraHeartbeat(db,heartbeat(),1000);
  const command=start();queueCameraRequest(db,deviceId,command,1100);
+ assert.equal(receiveCameraHeartbeat(db,heartbeat(),1150)[0].id,command.id); // response may have been lost
  assert.equal(receiveCameraHeartbeat(db,heartbeat(),11101).length,0);
  assert.equal(queueCameraRequest(db,deviceId,command,11101).result,'server_expired');
  assert.throws(()=>queueCameraRequest(db,deviceId,start({recordingId:randomUUID()}),11102),/früherer Start/);
  receiveCameraHeartbeat(db,heartbeat({ack:[{id:command.id,result:'expired'}]}),11200);
  assert.equal(queueCameraRequest(db,deviceId,start({recordingId:randomUUID()}),11201).created,true);
  db.close();
+});
+test('a start known never delivered expires atomically and releases camera and project',()=>{
+ const db=setup();db.prepare('INSERT INTO projects(id) VALUES(?)').run(projectId);receiveCameraHeartbeat(db,heartbeat(),1000);
+ const command=start();queueCameraRequest(db,deviceId,command,1100);
+ receiveCameraHeartbeat(db,heartbeat(),11101);
+ const row=listCameraDevices(db,11101)[0];assert.equal(row.lastCommand.neverDelivered,1);assert.equal(row.pendingStart,false);
+ assert.notEqual(db.prepare('SELECT closed_at FROM camera_project_claims WHERE recording_id=?').get(takeId).closed_at,null);
+ receiveCameraHeartbeat(db,heartbeat({ack:[{id:command.id,result:'accepted'}]}),11101);
+ assert.equal(queueCameraRequest(db,deviceId,command,11101).result,'server_expired'); // impossible forged ACK does not change proof
+ assert.equal(queueCameraRequest(db,deviceId,start({recordingId:randomUUID()}),11102).created,true);
+ db.close();
+});
+test('pre-migration commands with unknown delivery remain blocked after expiry',()=>{
+ const db=setup();db.prepare('INSERT INTO projects(id) VALUES(?)').run(projectId);receiveCameraHeartbeat(db,heartbeat(),1000);const id=randomUUID();
+ db.transaction(()=>{
+  db.prepare("INSERT INTO camera_remote_commands(id,device_id,type,recording_id,project_id,result,created_at,expires_at,runtime_id,created_tick,expires_tick) VALUES(?,?,'record_start',?,?,'queued',?,?,?,?,?)").run(id,deviceId,takeId,projectId,1100,11090,runtime,1100,11090);
+  claimCameraProject(db,takeId,deviceId,projectId,1100);
+ }).immediate();
+ receiveCameraHeartbeat(db,heartbeat(),11101);const state=listCameraDevices(db,11101)[0];
+ assert.equal(state.lastCommand.result,'server_expired');assert.equal(state.lastCommand.neverDelivered,0);assert.equal(state.pendingStart,true);
+ assert.equal(db.prepare('SELECT closed_at FROM camera_project_claims WHERE recording_id=?').get(takeId).closed_at,null);
+ assert.throws(()=>queueCameraRequest(db,deviceId,start({recordingId:randomUUID()}),11102),/früherer Start/);db.close();
+});
+test('a confirmed incomplete take can be explicitly released only when device is not recording',()=>{
+ const db=setup();db.prepare('INSERT INTO projects(id) VALUES(?)').run(projectId);receiveCameraHeartbeat(db,heartbeat(),1000);
+ const command=start();queueCameraRequest(db,deviceId,command,1100);receiveCameraHeartbeat(db,heartbeat(),1150);
+ receiveCameraHeartbeat(db,heartbeat({phase:'recording',recordingId:takeId,projectId,ack:[{id:command.id,result:'accepted'}]}),1200);
+ assert.throws(()=>resolveCameraFailure(db,deviceId,takeId,projectId,'a'.repeat(64),clock(1201)),/laufenden/);
+ receiveCameraHeartbeat(db,heartbeat({phase:'partial',recordingId:takeId,projectId}),1300);
+ receiveCameraHeartbeat(db,heartbeat(),1400);
+ assert.throws(()=>resolveCameraFailure(db,deviceId,takeId,randomUUID(),'a'.repeat(64),clock(1401)),/unvollständiger/);
+ assert.throws(()=>resolveCameraFailure(db,deviceId,takeId,projectId,'a'.repeat(64),clock(11400)),/nicht erreichbar/);
+ assert.equal(resolveCameraFailure(db,deviceId,takeId,projectId,'a'.repeat(64),clock(1402)).created,true);
+ assert.equal(resolveCameraFailure(db,deviceId,takeId,projectId,'a'.repeat(64),clock(1403)).created,false);
+ assert.equal(db.prepare('SELECT phase FROM camera_project_manual_resolutions WHERE recording_id=?').get(takeId).phase,'partial');
+ assert.throws(()=>db.prepare('DELETE FROM camera_project_manual_resolutions').run(),/cannot be deleted/);db.close();
+});
+test('a ready recording cannot be manually released based on an earlier partial report',()=>{
+ const db=setup();db.prepare('INSERT INTO projects(id) VALUES(?)').run(projectId);receiveCameraHeartbeat(db,heartbeat(),1000);
+ const command=start();queueCameraRequest(db,deviceId,command,1100);receiveCameraHeartbeat(db,heartbeat(),1150);
+ receiveCameraHeartbeat(db,heartbeat({phase:'partial',recordingId:takeId,projectId}),1200);
+ receiveCameraHeartbeat(db,heartbeat({phase:'ready',recordingId:takeId,projectId}),1300);receiveCameraHeartbeat(db,heartbeat(),1400);
+ assert.throws(()=>resolveCameraFailure(db,deviceId,takeId,projectId,'a'.repeat(64),clock(1401)),/unvollständiger/);db.close();
 });
 test('other session cannot acknowledge a command; stale sessions and missing projects are refused',()=>{
  const db=setup();receiveCameraHeartbeat(db,heartbeat(),1000);
@@ -90,6 +135,16 @@ test('out-of-order reports cannot resurrect an outdated recording status',()=>{
  receiveCameraHeartbeat(db,heartbeat({phase:'ready',recordingId:takeId,projectId}),1100);
  assert.throws(()=>receiveCameraHeartbeat(db,recording,1200),/Veraltete/);
  assert.equal(listCameraDevices(db,1200)[0].phase,'ready');db.close();
+});
+test('a verified upload releases the claim even when a confirmed READY is followed by idle',()=>{
+ const db=setup();db.prepare('INSERT INTO projects(id) VALUES(?)').run(projectId);receiveCameraHeartbeat(db,heartbeat(),1000);
+ const command=start();queueCameraRequest(db,deviceId,command,1100);
+ receiveCameraHeartbeat(db,heartbeat({phase:'recording',recordingId:takeId,projectId,ack:[{id:command.id,result:'accepted'}]}),1200);
+ receiveCameraHeartbeat(db,heartbeat({phase:'ready',recordingId:takeId,projectId}),1300,'a'.repeat(64),undefined,true);
+ receiveCameraHeartbeat(db,heartbeat(),1400);
+ const before=db.prepare('SELECT closed_at FROM camera_project_claims WHERE recording_id=?').get(takeId);assert.equal(before.closed_at,null);
+ db.transaction(()=>recordCameraVerifiedUpload(db,takeId,projectId,cameraUploadIdFor(takeId,projectId),'a'.repeat(64),42,1500)).immediate();
+ assert.equal(db.prepare('SELECT closed_at FROM camera_project_claims WHERE recording_id=?').get(takeId).closed_at,1500);db.close();
 });
 test('a partial file remains distinct from a complete local recording',()=>{
  const db=setup();receiveCameraHeartbeat(db,heartbeat({phase:'partial',recordingId:takeId,projectId:null}),1000);
@@ -151,6 +206,7 @@ test('stored command identity and decided results cannot be replaced, deleted or
  assert.throws(()=>replace.run(null,command.id,deviceId,'record_start',randomUUID(),projectId,1200,11190,runtime,1200,11190),/already exists/);
  assert.throws(()=>replace.run(null,randomUUID(),deviceId,'record_start',takeId,projectId,1200,11190,runtime,1200,11190),/already exists/);
  assert.throws(()=>db.prepare('UPDATE camera_remote_commands SET recording_id=? WHERE id=?').run(randomUUID(),command.id),/invalid camera command change/);
+ receiveCameraHeartbeat(db,heartbeat(),1250);
  receiveCameraHeartbeat(db,heartbeat({ack:[{id:command.id,result:'accepted'}]}),1300);
  assert.throws(()=>db.prepare("UPDATE camera_remote_commands SET result='queued' WHERE id=?").run(command.id),/invalid camera command change/);
  assert.throws(()=>db.prepare('DELETE FROM camera_remote_commands WHERE id=?').run(command.id),/cannot be deleted/);
@@ -159,6 +215,7 @@ test('stored command identity and decided results cannot be replaced, deleted or
 test('only a terminal error tied to the accepted take releases an uncertain start',()=>{
  const db=setup();db.prepare('INSERT INTO projects(id) VALUES(?)').run(projectId);receiveCameraHeartbeat(db,heartbeat(),1000);
  const command=start();queueCameraRequest(db,deviceId,command,1100);
+ receiveCameraHeartbeat(db,heartbeat(),1150);
  receiveCameraHeartbeat(db,heartbeat({phase:'error',ack:[{id:command.id,result:'accepted'}]}),1200);
  receiveCameraHeartbeat(db,heartbeat(),1300);
  assert.throws(()=>queueCameraRequest(db,deviceId,start({recordingId:randomUUID()}),1301),/früherer Start/);
@@ -188,6 +245,7 @@ test('command quotas refuse new IDs while preserving exact retries and earlier d
  const db=setup(),limits={...CAMERA_LIMITS,commandsPerDevice:2,commandsTotal:4};db.prepare('INSERT INTO projects(id) VALUES(?)').run(projectId);
  for(const id of [deviceId,otherDevice])receiveCameraHeartbeat(db,heartbeat({id}),1000,'a'.repeat(64),limits);
  const first=start();queueCameraRequest(db,deviceId,first,1100,limits);
+ receiveCameraHeartbeat(db,heartbeat(),1150);
  receiveCameraHeartbeat(db,heartbeat({ack:[{id:first.id,result:'rejected'}]}),1200);
  assert.equal(queueCameraRequest(db,deviceId,first,1201,limits).created,false);
  assert.throws(()=>queueCameraRequest(db,deviceId,start({recordingId:randomUUID()}),1202,limits),/grenze/);
@@ -204,7 +262,7 @@ test('a start reserves the last device and global slot for its first matching st
  receiveCameraHeartbeat(db,heartbeat({phase:'recording',recordingId:takeId,projectId,ack:[{id:first.id,result:'accepted'}]}),1200);
  const stop=start({type:'record_stop',projectId:null});assert.equal(queueCameraRequest(db,deviceId,stop,1300,limits).created,true);
  assert.equal(queueCameraRequest(db,deviceId,stop,1301,limits).created,false);
- assert.equal(db.prepare('SELECT count(*) AS n FROM camera_remote_commands').get().n,2);db.close();
+ assert.equal(db.prepare('SELECT count(*) AS n FROM camera_remote_commands').get().n,1);db.close();
 });
 test('a reserved first stop survives a later reduction of configured quotas',()=>{
  const db=setup(),original={...CAMERA_LIMITS,commandsPerDevice:2,commandsTotal:2},reduced={...original,commandsPerDevice:1,commandsTotal:1};
@@ -223,12 +281,13 @@ test('racing starts cannot consume another take’s reserved stop slot',async()=
  receiveCameraHeartbeat(db,heartbeat({id:winner.id,phase:'recording',recordingId:winner.take,projectId,ack:[{id:winner.cmd.id,result:'accepted'}]}),1200);
  assert.equal(queueCameraRequest(db,winner.id,start({type:'record_stop',recordingId:winner.take,projectId:null}),1300,limits).created,true);db.close();
 });
-test('known integration blocker: rejected stop may exhaust finite immutable history',()=>{
+test('an expired or rejected stop delivery retries the same intent without consuming command quota',()=>{
  const db=setup(),limits={...CAMERA_LIMITS,commandsPerDevice:2,commandsTotal:2};db.prepare('INSERT INTO projects(id) VALUES(?)').run(projectId);receiveCameraHeartbeat(db,heartbeat(),1000);
  const command=start();queueCameraRequest(db,deviceId,command,1100,limits);
  receiveCameraHeartbeat(db,heartbeat({phase:'recording',recordingId:takeId,projectId,ack:[{id:command.id,result:'accepted'}]}),1200);
- const stop=start({type:'record_stop',projectId:null});queueCameraRequest(db,deviceId,stop,1300,limits);
- receiveCameraHeartbeat(db,heartbeat({phase:'recording',recordingId:takeId,projectId,ack:[{id:stop.id,result:'rejected'}]}),1400);
- assert.throws(()=>queueCameraRequest(db,deviceId,start({type:'record_stop',projectId:null}),1401,limits),/grenze/);
+ const stop=start({type:'record_stop',projectId:null});const queued=queueCameraRequest(db,deviceId,stop,1300,limits);
+ const retry=receiveCameraHeartbeat(db,heartbeat({phase:'recording',recordingId:takeId,projectId,ack:[{id:queued.id,result:'expired'}]}),1400);
+ assert.equal(retry[0].id,queued.id);
+ assert.equal(queueCameraRequest(db,deviceId,start({type:'record_stop',projectId:null}),1401,limits).id,queued.id);
  assert.equal(listCameraDevices(db,1402)[0].phase,'recording');db.close();
 });

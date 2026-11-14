@@ -1,7 +1,8 @@
 import { authorized, sameOrigin } from '@/lib/auth';
 import db from '@/lib/db';
 import { isRecordingId, parseRange, recordingPath, type Recording } from '@/lib/recordings';
-import { createReadStream, existsSync, statSync, unlinkSync } from 'node:fs';
+import {PROJECT_RECORDING_DELETION_SCHEMA,queueProjectRecordingDeletions,drainProjectRecordingDeletions} from '@/lib/project-recording-deletions';
+import { createReadStream, statSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { NextResponse } from 'next/server';
 
@@ -34,9 +35,17 @@ export async function DELETE(req:Request,{params}:Context) {
  if(!await authorized()||!await sameOrigin(req))return NextResponse.json({error:'Nicht erlaubt'},{status:403});
  const {id,recordingId}=await params;
  if(!isRecordingId(recordingId))return NextResponse.json({error:'Aufnahme nicht gefunden'},{status:404});
- const item=db().prepare('SELECT * FROM project_recordings WHERE project_id=? AND id=?').get(id,recordingId) as Recording|undefined;
- if(!item)return NextResponse.json({error:'Aufnahme nicht gefunden'},{status:404});
- try{const file=recordingPath(item.id,item.mime);if(existsSync(file))unlinkSync(file);db().prepare('DELETE FROM project_recordings WHERE id=? AND project_id=?').run(recordingId,id);}
- catch{return NextResponse.json({error:'Aufnahme konnte nicht gelöscht werden.'},{status:500});}
- return NextResponse.json({ok:true});
+ try{
+  const database=db();database.exec(PROJECT_RECORDING_DELETION_SCHEMA);
+  const removed=database.transaction(()=>{
+   const item=database.prepare('SELECT id,mime FROM project_recordings WHERE project_id=? AND id=?').get(id,recordingId) as Pick<Recording,'id'|'mime'>|undefined;
+   if(!item)return false;
+   queueProjectRecordingDeletions(database,[item],recordingPath);
+   database.prepare('DELETE FROM project_recordings WHERE id=? AND project_id=?').run(recordingId,id);
+   return true;
+  }).immediate();
+  if(!removed)return NextResponse.json({error:'Aufnahme nicht gefunden'},{status:404});
+  try{const pending=drainProjectRecordingDeletions(database,recordingPath);return NextResponse.json(pending?{ok:true,cleanupPending:true}:{ok:true});}
+  catch{console.error('Aufnahmebereinigung wird später erneut versucht.');return NextResponse.json({ok:true,cleanupPending:true});}
+ }catch{return NextResponse.json({error:'Aufnahme konnte nicht gelöscht werden.'},{status:500});}
 }

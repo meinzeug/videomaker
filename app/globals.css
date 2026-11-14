@@ -74,3 +74,4 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .sidebar{overflow-y:auto;overscroll-behavior:contain}.sidebar nav .side-nav-group{padding:14px 12px 3px;color:#aaaab1;font-size:10px;letter-spacing:.07em}.side-bottom{flex-shrink:0}
 .logout-progress{position:fixed;z-index:100;inset:0;display:grid;place-items:center;background:#090a0eb8;backdrop-filter:blur(8px);color:#fff;font-weight:600}
 @media(prefers-reduced-transparency:reduce){.logout-progress{background:#15161b}}
+.camera-preview{margin-top:20px}.camera-preview video{display:block;width:100%;max-width:480px;max-height:55vh;aspect-ratio:16/9;object-fit:contain;background:#080808;border:1px solid #35363a;border-radius:8px;margin-top:12px}.camera-preview video[hidden]{display:none}

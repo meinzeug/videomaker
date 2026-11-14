@@ -4,6 +4,7 @@ import { isRecordingId, MAX_RECORDING_SIZE, recordingPath, recordingsDir, type R
 import { recordingFileReceipt } from '@/lib/recording-receipt';
 import {ensureRecordingIntent,linkRecordingDurably,syncDirectory} from '@/lib/recording-upload-intent';
 import {acquireRecordingUpload,cleanupStaleRecordingUploads,readRecordingChunk,recordingFreeBytes,requireRecordingSpace} from '@/lib/recording-upload-guard';
+import {CAMERA_PROJECT_CLAIMS_SCHEMA,CameraUploadGateError,cameraUploadIdFor,ensureCameraClaimUploadMappings,lockAndValidateCameraUpload,releaseCameraUploadLock,recordCameraVerifiedUpload} from '@/lib/camera-project-claims';
 import { createHash } from 'node:crypto';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -22,7 +23,7 @@ export async function GET(_req:Request,{params}:Context) {
 }
 
 /** A receipt describes bytes read from the stored file, not merely the request. */
-async function existingReceipt(item:Recording, projectId:string, mime:string, length:number, expectedHash:string|null, heartbeat:()=>void) {
+async function existingReceipt(item:Recording, projectId:string, mime:string, length:number, expectedHash:string|null, heartbeat:()=>void, cameraRecordingId:string|null) {
  if(item.project_id!==projectId||item.mime!==mime||(length>0&&item.size!==length))return NextResponse.json({error:'Aufnahme-ID bereits für andere Daten vergeben.'},{status:409});
  let receipt;
  try {receipt=await recordingFileReceipt(recordingPath(item.id,item.mime),item.size,heartbeat);}
@@ -35,6 +36,14 @@ async function existingReceipt(item:Recording, projectId:string, mime:string, le
  if(!db().prepare('SELECT 1 FROM projects WHERE id=?').get(projectId))return NextResponse.json({error:'Skript wurde gelöscht.'},{status:404});
  if(!current||current.project_id!==item.project_id||current.mime!==item.mime||current.size!==item.size||current.created_at!==item.created_at)return NextResponse.json({error:'Aufnahme wurde während der Prüfung verändert.'},{status:409});
  if(expectedHash&&receipt.sha256!==expectedHash)return NextResponse.json({error:'Aufnahme-ID bereits für andere Daten vergeben.'},{status:409});
+ // A verified upload releases a remote project claim only if the same device
+ // has also reported this exact take locally finished. ACK alone is insufficient.
+ const database=db();
+ database.transaction(()=>{
+  if((database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('camera_project_claims','camera_project_upload_receipts','camera_remote_devices')").get() as {n:number}).n!==3)return;
+  const stillPresent=database.prepare('SELECT 1 FROM project_recordings WHERE id=? AND project_id=? AND mime=? AND size=? AND created_at=?').get(item.id,projectId,item.mime,item.size,item.created_at);
+  if(stillPresent&&cameraRecordingId)recordCameraVerifiedUpload(database,cameraRecordingId,projectId,item.id,receipt.sha256,receipt.sizeBytes,Date.now());
+ }).immediate();
  return NextResponse.json({id:item.id,projectId,...receipt},{headers:{'Cache-Control':'no-store'}});
 }
 
@@ -42,11 +51,15 @@ export async function POST(req:Request,{params}:Context) {
  if(!await authorized()||!await sameOrigin(req))return NextResponse.json({error:'Nicht erlaubt'},{status:403});
  const {id}=await params;
  const recordingId=(req.headers.get('x-recording-id') || '').toLowerCase();
+ const rawCameraRecordingId=req.headers.get('x-camera-recording-id');
+ const cameraRecordingId=rawCameraRecordingId===null?null:rawCameraRecordingId.toLowerCase();
  const mime=(req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
  const length=Number(req.headers.get('content-length') || 0);
  const rawHash=req.headers.get('x-content-sha256');
  const expectedHash=rawHash===null?null:rawHash.trim().toLowerCase();
  if(!isRecordingId(recordingId)||!['video/webm','video/mp4'].includes(mime)||!req.body||!Number.isSafeInteger(length)||length<0||
+    (cameraRecordingId!==null&&(!isRecordingId(cameraRecordingId)||cameraUploadIdFor(cameraRecordingId,id)!==recordingId))||
+    (cameraRecordingId!==null&&(expectedHash===null||length<=0))||
     (expectedHash!==null&&(!/^[0-9a-f]{64}$/.test(expectedHash)||length<=0)))
   return NextResponse.json({error:'Ungültige Aufnahme.'},{status:400});
  if(length>MAX_RECORDING_SIZE)return NextResponse.json({error:'Die Aufnahme ist größer als 1 GB.'},{status:413});
@@ -56,6 +69,10 @@ export async function POST(req:Request,{params}:Context) {
  catch {return NextResponse.json({error:'Upload-Schutz ist auf diesem Server nicht verfügbar.'},{status:503});}
  if(!lease)return NextResponse.json({error:'Zu viele Uploads laufen. Bitte später erneut versuchen.'},{status:429,headers:{'Retry-After':'10'}});
  try {
+ try{
+  const database=db();database.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);ensureCameraClaimUploadMappings(database);lease.check();
+  lockAndValidateCameraUpload(database,lease.token,recordingId,cameraRecordingId,id,length,expectedHash,lease.check);
+ }catch(error){if(error instanceof CameraUploadGateError)return NextResponse.json({code:error.gateCode,error:error.message},{status:409});console.error('Kamera-Aufnahmenachweis konnte nicht geprüft werden:',error);return NextResponse.json({error:'Aufnahmenachweis konnte nicht geprüft werden.'},{status:503});}
  const candidates=db().prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').all(recordingId) as Recording[];
  if(candidates.length>1)return NextResponse.json({error:'Mehrdeutige Aufnahme-ID.'},{status:409});
  const existing=candidates[0];
@@ -70,7 +87,7 @@ export async function POST(req:Request,{params}:Context) {
    if(size!==existing.size)return NextResponse.json({error:'Aufnahme-ID bereits für andere Daten vergeben.'},{status:409});
    const digest=incoming.digest('hex');
    if(expectedHash&&digest!==expectedHash)return NextResponse.json({error:'Prüfsumme stimmt nicht. Die Aufnahme wurde nicht übernommen.'},{status:422});
-   return await existingReceipt(existing,id,mime,size,digest,lease.check);
+   return await existingReceipt(existing,id,mime,size,digest,lease.check,cameraRecordingId);
   } catch(error) {
    if(error instanceof Error&&['UPLOAD_TIMEOUT','UPLOAD_LEASE_LOST'].includes(error.message))return NextResponse.json({error:'Upload unterbrochen. Bitte erneut versuchen.'},{status:408});
    return NextResponse.json({error:'Die Aufnahme wurde nicht vollständig übertragen.'},{status:400});
@@ -150,7 +167,7 @@ export async function POST(req:Request,{params}:Context) {
   lease.check();
   const saved=db().prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').get(recordingId) as Recording|undefined;
   if(!saved)return NextResponse.json({error:'Aufnahme konnte nicht bestätigt werden.'},{status:500});
-  const response=await existingReceipt(saved,id,mime,length,expectedHash ?? incomingReceipt.sha256,lease.check);
+  const response=await existingReceipt(saved,id,mime,length,expectedHash ?? incomingReceipt.sha256,lease.check,cameraRecordingId);
   lease.check();
   if(response.status!==200)return response;
   const receipt=await response.json();
@@ -165,5 +182,5 @@ export async function POST(req:Request,{params}:Context) {
   console.error('Aufnahme konnte nicht gespeichert werden:',error);
   return NextResponse.json({error:'Speichern fehlgeschlagen. Bitte Speicherplatz und Verbindung prüfen und erneut versuchen.'},{status:500});
  } finally {if(temporary)await rm(temporary,{force:true}).catch(()=>{});}
- } finally {try{lease.release();}catch{/* A timed-out lease cannot authorize a receipt. */}}
+ } finally {try{releaseCameraUploadLock(db(),lease.token);}catch{/* A stale lock remains fail-closed until a safe retry. */}try{lease.release();}catch{/* A timed-out lease cannot authorize a receipt. */}}
 }
