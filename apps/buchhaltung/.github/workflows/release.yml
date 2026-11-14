@@ -1,0 +1,133 @@
+name: Release
+
+# Ein Tag vX.Y.Z (Button in bump.yml oder bun run release:patch|minor|major) veröffentlicht diese
+# Version: erst die komplette CI (übersprungen, wenn die CI auf main denselben Code schon geprüft hat,
+# siehe https://github.com/firsttris/workflows#tested-on-main), dann der gemeinsame Docker-Release
+# aus firsttris/workflows. Der prüft den Tag gegen package.json, pusht :x.y.z, :x.y und :latest auf
+# Docker Hub und GHCR (amd64 und arm64), aktualisiert die Beschreibung auf Docker Hub und legt
+# danach das GitHub-Release an, mit der Erweiterung „Haben für Mein ELSTER“ als ZIP. Ein Release Candidate vX.Y.Z-rc.N pusht stattdessen :x.y.z-rc.N und
+# :next, wird ein Pre-release auf GitHub und lässt :latest und die Beschreibung auf Docker Hub stehen.
+# Von Hand auf main gestartet: dieselben Prüfungen, dann das Image als :edge; kein Release.
+# Das Backup-Image tristanteu/haben-backup (deploy/backup) und das Datenbank-Image tristanteu/haben-db
+# (deploy/db) erscheinen mit denselben Tags, damit App, Backup und Datenbank zur selben Postgres-Version
+# passen; das GitHub-Release legt nur der Lauf der App an.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Standard für alle Jobs; Jobs, die mehr brauchen, setzen eigene permissions
+permissions:
+  contents: read
+
+jobs:
+  tested:
+    uses: firsttris/workflows/.github/workflows/tested-on-main.yml@5011fb6bf2b7423d211ecffa82218ba067fb5fed # main
+    permissions:
+      actions: read
+      contents: read
+
+  checks:
+    needs: tested
+    if: needs.tested.outputs.tested != 'true'
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      packages: read # der Image-Test der CI liest den Build-Cache, schreibt ihn aber nicht
+
+  # Die Erweiterung „Haben für Mein ELSTER“ als ZIP fürs GitHub-Release, im Format der anderen Erweiterungen
+  # (Artefakt extension mit <name>-chrome-<version>.zip): so kann browser-extension-stores.yml aus firsttris/workflows
+  # sie später auch in den Chrome Web Store bringen
+  erweiterung:
+    needs: [tested, checks]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.tested.result == 'success' && needs.checks.result != 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      # Baut die Erweiterung (TypeScript mit Vite) und packt dist/ mit der Version aus dem Tag
+      - run: bun scripts/elster-helfer/paket.ts "$GITHUB_REF_NAME" "$RUNNER_TEMP"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: extension
+          path: ${{ runner.temp }}/haben-fuer-mein-elster-chrome-*.zip
+          if-no-files-found: error
+
+  docker:
+    needs: [tested, checks, erweiterung]
+    # Die Prüfungen liefen durch oder waren nicht nötig; ohne Tag (Start von Hand, :edge) fehlt die Erweiterung
+    if: ${{ !cancelled() && needs.tested.result == 'success' && needs.checks.result != 'failure' && needs.erweiterung.result != 'failure' }}
+    uses: firsttris/workflows/.github/workflows/docker-release.yml@5011fb6bf2b7423d211ecffa82218ba067fb5fed # main
+    with:
+      image: tristanteu/haben
+      # Docker Hub erlaubt höchstens 100 Zeichen
+      description: "Selbst gehostete Buchhaltung für Freiberufler, GmbH und UG: E-Rechnung, Bank, EÜR, Bilanz, ELSTER"
+      dockerfile: Containerfile
+      ghcr: true
+      # Nur das GitHub-Release eines Tags lädt es; :edge legt kein Release an
+      release-artifact: extension
+    secrets: inherit
+    permissions:
+      contents: write
+      packages: write
+
+  # Nur eine fertige Version (kein Release Candidate, kein :edge): Issues mit `Umgesetzt #…` seit der vorigen
+  # fertigen Version bekommen einen Kommentar und werden geschlossen (scripts/board/release.ts); das Board
+  # schiebt ihre Karten dann selbst nach „Erledigt“
+  issues-schliessen:
+    needs: docker
+    if: ${{ !cancelled() && needs.docker.result == 'success' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Tags und Historie für den Bereich seit der vorigen fertigen Version
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun scripts/board/release.ts "$GITHUB_REF_NAME"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-backup:
+    needs: [tested, checks]
+    if: ${{ !cancelled() && needs.tested.result == 'success' && needs.checks.result != 'failure' }}
+    uses: firsttris/workflows/.github/workflows/docker-release.yml@5011fb6bf2b7423d211ecffa82218ba067fb5fed # main
+    with:
+      image: tristanteu/haben-backup
+      description: "Backup für Haben: pg_dump und Belegdateien, verschlüsselt mit restic"
+      dockerfile: deploy/backup/Containerfile
+      context: deploy/backup
+      ghcr: true
+      ghcr-image: firsttris/haben-backup
+      readme: deploy/backup/README.md
+      github-release: false
+    secrets: inherit
+    permissions:
+      contents: write
+      packages: write
+
+  docker-db:
+    needs: [tested, checks]
+    if: ${{ !cancelled() && needs.tested.result == 'success' && needs.checks.result != 'failure' }}
+    uses: firsttris/workflows/.github/workflows/docker-release.yml@5011fb6bf2b7423d211ecffa82218ba067fb5fed # main
+    with:
+      image: tristanteu/haben-db
+      description: "Datenbank für Haben: PostgreSQL, das ältere Datenbestände beim Start selbst mit pg_upgrade anhebt"
+      dockerfile: deploy/db/Containerfile
+      context: deploy/db
+      ghcr: true
+      ghcr-image: firsttris/haben-db
+      readme: deploy/db/README.md
+      github-release: false
+    secrets: inherit
+    permissions:
+      contents: write
+      packages: write

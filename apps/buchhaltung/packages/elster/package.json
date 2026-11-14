@@ -1,0 +1,23 @@
+{
+  "name": "@haben/elster",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "exports": {
+    ".": "./src/index.ts",
+    "./felder": "./src/felder.ts"
+  },
+  "scripts": {
+    "typecheck": "bun --bun tsc -p ."
+  },
+  "dependencies": {
+    "@haben/core": "workspace:*",
+    "fast-xml-parser": "^5.11.2",
+    "koffi": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "fflate": "^0.8.3"
+  }
+}

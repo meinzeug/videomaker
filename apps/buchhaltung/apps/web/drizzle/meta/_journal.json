@@ -1,0 +1,1609 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1790901724479,
+      "tag": "0000_init",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790901743688,
+      "tag": "0001_festschreibung",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790927346286,
+      "tag": "0002_rechnungen",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790927347215,
+      "tag": "0003_rechnungen_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790929673156,
+      "tag": "0004_belege",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790929673958,
+      "tag": "0005_belege_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790931225690,
+      "tag": "0006_bank",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790931226531,
+      "tag": "0007_bank_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790934298339,
+      "tag": "0008_ustva_berechnet",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790937308403,
+      "tag": "0009_lexoffice",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790937316408,
+      "tag": "0010_lexoffice_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790939030751,
+      "tag": "0011_offene_posten",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790944536031,
+      "tag": "0012_steuerfaelle",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790947012959,
+      "tag": "0013_anlagen",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790947013909,
+      "tag": "0014_anlagen_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1790950641131,
+      "tag": "0015_privatnutzung",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790950650831,
+      "tag": "0016_privatnutzung_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790956560832,
+      "tag": "0017_wiederkehrend",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790956561819,
+      "tag": "0018_wiederkehrend_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790977050408,
+      "tag": "0019_mahnwesen",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790977051468,
+      "tag": "0020_mahnwesen_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790978165099,
+      "tag": "0021_bankabruf",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1790978166128,
+      "tag": "0022_bankabruf_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790980650596,
+      "tag": "0023_jahreserklaerungen",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790980651683,
+      "tag": "0024_jahreserklaerungen_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791008160288,
+      "tag": "0025_finanzamt",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1791008161331,
+      "tag": "0026_finanzamt_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1791010050513,
+      "tag": "0027_postfach",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1791010051566,
+      "tag": "0028_postfach_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1791011214814,
+      "tag": "0029_einkommensteuer",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1791011215893,
+      "tag": "0030_einkommensteuer_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1791015408845,
+      "tag": "0031_postfach_auto",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1791015409920,
+      "tag": "0032_postfach_auto_audit",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1791028310159,
+      "tag": "0033_vast",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791028311270,
+      "tag": "0034_vast_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791030685648,
+      "tag": "0035_berechtigung",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791030686757,
+      "tag": "0036_berechtigung_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791033226570,
+      "tag": "0037_fristen_kalender",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1791033462703,
+      "tag": "0038_mail",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1791033463827,
+      "tag": "0039_mail_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1791034424416,
+      "tag": "0040_rechnung_mail",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1791052026778,
+      "tag": "0041_pauschalen",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1791052027982,
+      "tag": "0042_pauschalen_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1791053964010,
+      "tag": "0043_angebote",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1791053965411,
+      "tag": "0044_angebote_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1791085997766,
+      "tag": "0045_artikel",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1791085998959,
+      "tag": "0046_artikel_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1791086518673,
+      "tag": "0047_logo",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1791086519850,
+      "tag": "0048_logo_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1791087482305,
+      "tag": "0049_datev_export",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1791087958755,
+      "tag": "0050_belege_mail",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1791087959950,
+      "tag": "0051_belege_mail_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1791088707377,
+      "tag": "0052_sprache",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1791089452052,
+      "tag": "0053_abschlag",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1791091090238,
+      "tag": "0054_paragraph13b",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1791091806525,
+      "tag": "0055_kassenbuch",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1791091807738,
+      "tag": "0056_kassenbuch_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1791499223515,
+      "tag": "0057_indizes",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1791499250117,
+      "tag": "0058_sperren_audit",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1791787069354,
+      "tag": "0059_elster_datenschutz",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1792132905843,
+      "tag": "0060_bruttopreise",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1792132915868,
+      "tag": "0061_bruttopreise_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1792143704423,
+      "tag": "0062_hash_kette",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1792143714003,
+      "tag": "0063_hash_kette_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1792177147569,
+      "tag": "0064_siegel_nebenbuecher",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1792180964792,
+      "tag": "0065_hauptbuch_sperren",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1792505173699,
+      "tag": "0066_backup_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1792527315747,
+      "tag": "0067_mcp_zugang",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1792645385800,
+      "tag": "0068_kontozweck",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1792645895382,
+      "tag": "0069_splitbuchung",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1792645896700,
+      "tag": "0070_splitbuchung_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1792646919534,
+      "tag": "0071_ausbuchungen",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1792646920907,
+      "tag": "0072_ausbuchungen_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1792647655617,
+      "tag": "0073_zahlungsdienstleister",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1792648547399,
+      "tag": "0074_fremdwaehrung",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1792648548829,
+      "tag": "0075_fremdwaehrung_bestand",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1792648898677,
+      "tag": "0076_umrechnungskurse",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1792648920674,
+      "tag": "0077_umrechnungskurse_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1792855969847,
+      "tag": "0078_angebot_abschlag",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1792860271955,
+      "tag": "0079_mailvorlagen",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1793095633952,
+      "tag": "0080_sevdesk",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1793095638634,
+      "tag": "0081_sevdesk_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1793341797322,
+      "tag": "0082_steueranteil_je_zahlung",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1793555867344,
+      "tag": "0083_enable_banking",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1793555869147,
+      "tag": "0084_enable_banking_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1793728669147,
+      "tag": "0085_textbausteine",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1793728670647,
+      "tag": "0086_textbausteine_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1793815070647,
+      "tag": "0087_abruf_ab",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1793901470647,
+      "tag": "0088_positionsbeschreibung",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1793987870647,
+      "tag": "0089_artikeltext",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1793987930647,
+      "tag": "0090_akzentfarbe",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1793987990647,
+      "tag": "0091_nummernformat",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1793988050647,
+      "tag": "0092_kontoinhaber",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1793988110647,
+      "tag": "0093_kundennummer",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1793988170647,
+      "tag": "0094_kontaktrollen",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1793988230647,
+      "tag": "0095_rechtsform",
+      "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1793988290647,
+      "tag": "0096_rechtsform_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1793988350647,
+      "tag": "0097_jahresabschluss",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1793988410647,
+      "tag": "0098_jahresabschluss_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1793988470647,
+      "tag": "0099_koerperschaft",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1793988530647,
+      "tag": "0100_koerperschaft_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1793988590647,
+      "tag": "0101_kontenrahmen_kapg",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1793988650647,
+      "tag": "0102_externe_referenz",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1793988710647,
+      "tag": "0103_ausschuettung",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1793988770647,
+      "tag": "0104_ausschuettung_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1793988830647,
+      "tag": "0105_belege_externe_referenz",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1793988831647,
+      "tag": "0106_eigene_seiten",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1793988832647,
+      "tag": "0107_eigene_seiten_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1793988833647,
+      "tag": "0108_beleg_storno",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1793988834647,
+      "tag": "0109_beleg_storno_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1793988894647,
+      "tag": "0110_standard_einleitung",
+      "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1793988954647,
+      "tag": "0111_registerangaben",
+      "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1793989014647,
+      "tag": "0112_geschaeftsfuehrer",
+      "breakpoints": true
+    },
+    {
+      "idx": 113,
+      "version": "7",
+      "when": 1793989074647,
+      "tag": "0113_ausschuettung_geschaeftsjahr",
+      "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1793989134647,
+      "tag": "0114_sepa_ueberweisung",
+      "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1793989194647,
+      "tag": "0115_sepa_ueberweisung_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1793989254647,
+      "tag": "0116_restlaufzeiten",
+      "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1793989314647,
+      "tag": "0117_restlaufzeiten_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1793989374647,
+      "tag": "0118_ustva_zeitraum",
+      "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1793989434647,
+      "tag": "0119_ustva_zeitraum_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1793989494647,
+      "tag": "0120_dauerfrist",
+      "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1793989554647,
+      "tag": "0121_dauerfrist_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1793989614647,
+      "tag": "0122_skonto",
+      "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1793989674647,
+      "tag": "0123_mail_from_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1793989734647,
+      "tag": "0124_rechnungsanhaenge",
+      "breakpoints": true
+    },
+    {
+      "idx": 125,
+      "version": "7",
+      "when": 1793989794647,
+      "tag": "0125_rechnungsanhaenge_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1793989854647,
+      "tag": "0126_lohn",
+      "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1793989914647,
+      "tag": "0127_lohn_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1793989974647,
+      "tag": "0128_beleg_aufteilung",
+      "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1793990034647,
+      "tag": "0129_beleg_aufteilung_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 130,
+      "version": "7",
+      "when": 1793990094647,
+      "tag": "0130_zusammenfassende_meldung",
+      "breakpoints": true
+    },
+    {
+      "idx": 131,
+      "version": "7",
+      "when": 1793990154647,
+      "tag": "0131_zusammenfassende_meldung_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1793990214647,
+      "tag": "0132_lohn_buchungen",
+      "breakpoints": true
+    },
+    {
+      "idx": 133,
+      "version": "7",
+      "when": 1793990274647,
+      "tag": "0133_lohnsteuer_anmeldung",
+      "breakpoints": true
+    },
+    {
+      "idx": 134,
+      "version": "7",
+      "when": 1793990334647,
+      "tag": "0134_lohnsteuer_anmeldung_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1793990394647,
+      "tag": "0135_lohnsteuerbescheinigung",
+      "breakpoints": true
+    },
+    {
+      "idx": 136,
+      "version": "7",
+      "when": 1793990454647,
+      "tag": "0136_lohnsteuerbescheinigung_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 137,
+      "version": "7",
+      "when": 1793990514647,
+      "tag": "0137_ustva_offener_posten",
+      "breakpoints": true
+    },
+    {
+      "idx": 138,
+      "version": "7",
+      "when": 1793990574647,
+      "tag": "0138_ustva_offener_posten_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 139,
+      "version": "7",
+      "when": 1793990634647,
+      "tag": "0139_sv_meldeportal",
+      "breakpoints": true
+    },
+    {
+      "idx": 140,
+      "version": "7",
+      "when": 1793990694647,
+      "tag": "0140_sv_meldeportal_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 141,
+      "version": "7",
+      "when": 1793990754647,
+      "tag": "0141_afa_methoden",
+      "breakpoints": true
+    },
+    {
+      "idx": 142,
+      "version": "7",
+      "when": 1793990814647,
+      "tag": "0142_afa_methoden_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 143,
+      "version": "7",
+      "when": 1793990874647,
+      "tag": "0143_ig_lieferung_erwerb",
+      "breakpoints": true
+    },
+    {
+      "idx": 144,
+      "version": "7",
+      "when": 1793990934647,
+      "tag": "0144_dauerbelege",
+      "breakpoints": true
+    },
+    {
+      "idx": 145,
+      "version": "7",
+      "when": 1793990994647,
+      "tag": "0145_dauerbelege_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 146,
+      "version": "7",
+      "when": 1793991054647,
+      "tag": "0146_kasse_rechnung",
+      "breakpoints": true
+    },
+    {
+      "idx": 147,
+      "version": "7",
+      "when": 1793991114647,
+      "tag": "0147_kasse_rechnung_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 148,
+      "version": "7",
+      "when": 1793991174647,
+      "tag": "0148_zugaenge",
+      "breakpoints": true
+    },
+    {
+      "idx": 149,
+      "version": "7",
+      "when": 1793991234647,
+      "tag": "0149_zugaenge_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 150,
+      "version": "7",
+      "when": 1793991294647,
+      "tag": "0150_rabatte_zahlungsplan",
+      "breakpoints": true
+    },
+    {
+      "idx": 151,
+      "version": "7",
+      "when": 1793991354647,
+      "tag": "0151_rabatte_zahlungsplan_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 152,
+      "version": "7",
+      "when": 1793991414647,
+      "tag": "0152_steuerzahlungen",
+      "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1793991474647,
+      "tag": "0153_darlehen_einfuhrumsatzsteuer",
+      "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "7",
+      "when": 1793991534647,
+      "tag": "0154_darlehen_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1794038665699,
+      "tag": "0155_kontakt_telefon",
+      "breakpoints": true
+    },
+    {
+      "idx": 156,
+      "version": "7",
+      "when": 1794038978694,
+      "tag": "0156_nummernkreis_durchlaufend",
+      "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "7",
+      "when": 1794049128102,
+      "tag": "0157_sevdesk_auftragsarchiv",
+      "breakpoints": true
+    },
+    {
+      "idx": 158,
+      "version": "7",
+      "when": 1794049129193,
+      "tag": "0158_auftragsarchiv_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 159,
+      "version": "7",
+      "when": 1794052062727,
+      "tag": "0159_sevdesk_einzelzahlungen",
+      "breakpoints": true
+    },
+    {
+      "idx": 160,
+      "version": "7",
+      "when": 1794143973721,
+      "tag": "0160_referenzen",
+      "breakpoints": true
+    },
+    {
+      "idx": 161,
+      "version": "7",
+      "when": 1794152789662,
+      "tag": "0161_direkt_kategorie",
+      "breakpoints": true
+    },
+    {
+      "idx": 162,
+      "version": "7",
+      "when": 1794153660213,
+      "tag": "0162_artikelnummer",
+      "breakpoints": true
+    },
+    {
+      "idx": 163,
+      "version": "7",
+      "when": 1794162703842,
+      "tag": "0163_angebotsanhaenge",
+      "breakpoints": true
+    },
+    {
+      "idx": 164,
+      "version": "7",
+      "when": 1794162711010,
+      "tag": "0164_angebotsanhaenge_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 165,
+      "version": "7",
+      "when": 1794163938088,
+      "tag": "0165_standardanhaenge",
+      "breakpoints": true
+    },
+    {
+      "idx": 166,
+      "version": "7",
+      "when": 1794163939634,
+      "tag": "0166_standardanhaenge_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 167,
+      "version": "7",
+      "when": 1794173387706,
+      "tag": "0167_iban_entscheidung",
+      "breakpoints": true
+    },
+    {
+      "idx": 168,
+      "version": "7",
+      "when": 1794173389065,
+      "tag": "0168_iban_entscheidung_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 169,
+      "version": "7",
+      "when": 1794174634491,
+      "tag": "0169_iban_bestaetigen",
+      "breakpoints": true
+    },
+    {
+      "idx": 170,
+      "version": "7",
+      "when": 1794179698103,
+      "tag": "0170_personenkonten",
+      "breakpoints": true
+    },
+    {
+      "idx": 171,
+      "version": "7",
+      "when": 1794183376797,
+      "tag": "0171_personenkonten_export",
+      "breakpoints": true
+    },
+    {
+      "idx": 172,
+      "version": "7",
+      "when": 1794183379278,
+      "tag": "0172_personenkonten_export_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 173,
+      "version": "7",
+      "when": 1794205205976,
+      "tag": "0173_briefkopf_profile",
+      "breakpoints": true
+    },
+    {
+      "idx": 174,
+      "version": "7",
+      "when": 1794205212728,
+      "tag": "0174_briefkopf_profile_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 175,
+      "version": "7",
+      "when": 1794205214480,
+      "tag": "0175_firma_akzentfarbe_entfernt",
+      "breakpoints": true
+    },
+    {
+      "idx": 176,
+      "version": "7",
+      "when": 1794215219801,
+      "tag": "0176_bank_verrechnung",
+      "breakpoints": true
+    },
+    {
+      "idx": 177,
+      "version": "7",
+      "when": 1794215221215,
+      "tag": "0177_bank_verrechnung_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 178,
+      "version": "7",
+      "when": 1794219438126,
+      "tag": "0178_kasse_bareinnahme",
+      "breakpoints": true
+    },
+    {
+      "idx": 179,
+      "version": "7",
+      "when": 1794221931406,
+      "tag": "0179_sepa_mandate",
+      "breakpoints": true
+    },
+    {
+      "idx": 180,
+      "version": "7",
+      "when": 1794221934136,
+      "tag": "0180_sepa_mandate_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 181,
+      "version": "7",
+      "when": 1794222067454,
+      "tag": "0181_lastschrift_zahlungsart",
+      "breakpoints": true
+    },
+    {
+      "idx": 182,
+      "version": "7",
+      "when": 1794222120910,
+      "tag": "0182_lastschrift_dateien",
+      "breakpoints": true
+    },
+    {
+      "idx": 183,
+      "version": "7",
+      "when": 1794222122909,
+      "tag": "0183_lastschrift_dateien_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 184,
+      "version": "7",
+      "when": 1794222165745,
+      "tag": "0184_ruecklastschrift",
+      "breakpoints": true
+    },
+    {
+      "idx": 185,
+      "version": "7",
+      "when": 1794233718895,
+      "tag": "0185_oidc_gruppen",
+      "breakpoints": true
+    },
+    {
+      "idx": 186,
+      "version": "7",
+      "when": 1794233720283,
+      "tag": "0186_oidc_gruppen_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 187,
+      "version": "7",
+      "when": 1794243934633,
+      "tag": "0187_oidc_uebernahme_ersetzt",
+      "breakpoints": true
+    },
+    {
+      "idx": 188,
+      "version": "7",
+      "when": 1794251557018,
+      "tag": "0188_briefpapier",
+      "breakpoints": true
+    },
+    {
+      "idx": 189,
+      "version": "7",
+      "when": 1794251557631,
+      "tag": "0189_briefpapier_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 190,
+      "version": "7",
+      "when": 1794270841658,
+      "tag": "0190_mail_graph",
+      "breakpoints": true
+    },
+    {
+      "idx": 191,
+      "version": "7",
+      "when": 1794305446619,
+      "tag": "0191_journal_basis",
+      "breakpoints": true
+    },
+    {
+      "idx": 192,
+      "version": "7",
+      "when": 1794325051228,
+      "tag": "0192_journal_ab",
+      "breakpoints": true
+    },
+    {
+      "idx": 193,
+      "version": "7",
+      "when": 1794335823476,
+      "tag": "0193_store_berichte",
+      "breakpoints": true
+    },
+    {
+      "idx": 194,
+      "version": "7",
+      "when": 1794335824905,
+      "tag": "0194_store_berichte_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 195,
+      "version": "7",
+      "when": 1794338142258,
+      "tag": "0195_bank_konto_ausschliessen",
+      "breakpoints": true
+    },
+    {
+      "idx": 196,
+      "version": "7",
+      "when": 1794338143826,
+      "tag": "0196_bank_konto_ausschliessen_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 197,
+      "version": "7",
+      "when": 1794339221959,
+      "tag": "0197_external_import",
+      "breakpoints": true
+    },
+    {
+      "idx": 198,
+      "version": "7",
+      "when": 1794339223322,
+      "tag": "0198_external_import_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 199,
+      "version": "7",
+      "when": 1794347835610,
+      "tag": "0199_belegvorlagen",
+      "breakpoints": true
+    },
+    {
+      "idx": 200,
+      "version": "7",
+      "when": 1794347836251,
+      "tag": "0200_belegvorlagen_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 201,
+      "version": "7",
+      "when": 1794374936950,
+      "tag": "0201_truncate_sperre_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 202,
+      "version": "7",
+      "when": 1794377084390,
+      "tag": "0202_company_loeschen_sperre",
+      "breakpoints": true
+    },
+    {
+      "idx": 203,
+      "version": "7",
+      "when": 1794400327111,
+      "tag": "0203_spende",
+      "breakpoints": true
+    },
+    {
+      "idx": 204,
+      "version": "7",
+      "when": 1794465587819,
+      "tag": "0204_firmendaten_gespeichert",
+      "breakpoints": true
+    },
+    {
+      "idx": 205,
+      "version": "7",
+      "when": 1794473880659,
+      "tag": "0205_eigene_seiten_neuer_tab",
+      "breakpoints": true
+    },
+    {
+      "idx": 206,
+      "version": "7",
+      "when": 1794478207206,
+      "tag": "0206_ansprechpartner",
+      "breakpoints": true
+    },
+    {
+      "idx": 207,
+      "version": "7",
+      "when": 1794478209986,
+      "tag": "0207_ansprechpartner_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 208,
+      "version": "7",
+      "when": 1794485637316,
+      "tag": "0208_beleg_verrechnung",
+      "breakpoints": true
+    },
+    {
+      "idx": 209,
+      "version": "7",
+      "when": 1794487529169,
+      "tag": "0209_verrechnung_settlement",
+      "breakpoints": true
+    },
+    {
+      "idx": 210,
+      "version": "7",
+      "when": 1794500484900,
+      "tag": "0210_eigene_konten",
+      "breakpoints": true
+    },
+    {
+      "idx": 211,
+      "version": "7",
+      "when": 1794500486424,
+      "tag": "0211_eigene_konten_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 212,
+      "version": "7",
+      "when": 1794515383003,
+      "tag": "0212_import_zahlungsbezug",
+      "breakpoints": true
+    },
+    {
+      "idx": 213,
+      "version": "7",
+      "when": 1794515385011,
+      "tag": "0213_import_zahlungsbezug_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 214,
+      "version": "7",
+      "when": 1794516197537,
+      "tag": "0214_abschlag_steuerzeitpunkt",
+      "breakpoints": true
+    },
+    {
+      "idx": 215,
+      "version": "7",
+      "when": 1794517251891,
+      "tag": "0215_leistungen",
+      "breakpoints": true
+    },
+    {
+      "idx": 216,
+      "version": "7",
+      "when": 1794517254764,
+      "tag": "0216_leistungen_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 217,
+      "version": "7",
+      "when": 1794518748085,
+      "tag": "0217_jahresvermerk",
+      "breakpoints": true
+    },
+    {
+      "idx": 218,
+      "version": "7",
+      "when": 1794521593045,
+      "tag": "0218_zeichen_navigation",
+      "breakpoints": true
+    },
+    {
+      "idx": 219,
+      "version": "7",
+      "when": 1794524285491,
+      "tag": "0219_grundstuecksleistung_aufbewahrung",
+      "breakpoints": true
+    },
+    {
+      "idx": 220,
+      "version": "7",
+      "when": 1794555341075,
+      "tag": "0220_eigene_konten_belege",
+      "breakpoints": true
+    },
+    {
+      "idx": 221,
+      "version": "7",
+      "when": 1794562424324,
+      "tag": "0221_leistungen_rechnung",
+      "breakpoints": true
+    },
+    {
+      "idx": 222,
+      "version": "7",
+      "when": 1794562426655,
+      "tag": "0222_leistungen_abgerechnet_sperre",
+      "breakpoints": true
+    },
+    {
+      "idx": 223,
+      "version": "7",
+      "when": 1794575514495,
+      "tag": "0223_anzahlung_bilanz",
+      "breakpoints": true
+    },
+    {
+      "idx": 224,
+      "version": "7",
+      "when": 1794575516087,
+      "tag": "0224_anzahlung_rechtsform",
+      "breakpoints": true
+    },
+    {
+      "idx": 225,
+      "version": "7",
+      "when": 1794597893345,
+      "tag": "0225_sevdesk_buchungskonten",
+      "breakpoints": true
+    },
+    {
+      "idx": 226,
+      "version": "7",
+      "when": 1794597894109,
+      "tag": "0226_sevdesk_buchungskonten_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 227,
+      "version": "7",
+      "when": 1794601897072,
+      "tag": "0227_gutschrift_erstattet_bezahltes",
+      "breakpoints": true
+    },
+    {
+      "idx": 228,
+      "version": "7",
+      "when": 1794605361767,
+      "tag": "0228_zuordnung_aufhebung_datum",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,197 @@
+# Dokumentation als Website: https://haben.app/
+# Quelle ist docs/, gebaut mit Zensical (.github/workflows/docs.yml), dem Nachfolger von
+# MkDocs Material; es liest diese Datei unverändert (https://zensical.org/docs/setup/basics/).
+# Lokal: pip install -r requirements-docs.txt && zensical serve
+site_name: Haben
+site_description: >-
+  Haben, die Open-Source-Buchhaltung für Freiberufler, Selbstständige, Kleinunternehmer, GmbH und UG,
+  selbst gehostet: E-Rechnung (ZUGFeRD, XRechnung), Bankabgleich, EÜR oder Bilanz mit E-Bilanz,
+  Umsatzsteuer-Voranmeldung und Jahreserklärungen per ELSTER. Alternative zu Lexware Office und sevDesk.
+site_url: https://haben.app/
+repo_url: https://github.com/firsttris/haben
+repo_name: firsttris/haben
+edit_uri: edit/main/docs/
+copyright: >-
+  Lizenz AGPL-3.0 · Keine Steuerberatung. ELSTER und ERiC sind Angebote der
+  Finanzverwaltung; dieses Projekt steht in keiner Verbindung zu ihr.
+
+docs_dir: docs
+# Seiten als rechnungen.html statt rechnungen/: so stimmen die relativen Bildpfade
+# der <img>-Tags, die auch auf GitHub funktionieren müssen
+use_directory_urls: false
+exclude_docs: |
+  banner.svg
+# Hintergrund zu umgesetzten Entscheidungen; erreichbar über die Links in architektur.md und aus Code-Kommentaren
+not_in_nav: |
+  adr/*.md
+
+nav:
+  - Start: index.md
+  - Übersicht: ueberblick.md
+  - Betrieb:
+      - Installation: installation.md
+      - Synology: synology.md
+      - TrueNAS SCALE: truenas.md
+      - Unraid: unraid.md
+      - Coolify: coolify.md
+      - Plesk: plesk.md
+      - Konfiguration: installation-konfiguration.md
+      - Anbindungen: installation-anbindungen.md
+      - Single Sign-on: installation-sso.md
+      - Backup und Updates: installation-backup.md
+      - Häufige Probleme: installation-probleme.md
+  - Einrichten:
+      - Erste Schritte: einrichtung.md
+      - ELSTER einrichten: einrichtung-elster.md
+      - E-Mail-Versand: einrichtung-email.md
+      - Zugang für die Steuerberatung: steuerberatung.md
+      - Barrierefreiheit und Tastatur: barrierefreiheit.md
+  - Verkauf:
+      - Rechnungen und E-Rechnung: rechnungen.md
+      - Zahlung und Mahnung: rechnungen-zahlung.md
+      - Angebote: angebote.md
+      - Kontakte: kontakte.md
+      - Leistungen und Zeiteinträge: leistungen.md
+      - Eigene Belegvorlagen: belegvorlagen.md
+  - Ausgaben und Bank:
+      - Belege: belege.md
+      - Belege aus dem Ausland: belege-ausland.md
+      - Belege bezahlen: belege-bezahlen.md
+      - Pauschalen: pauschalen.md
+      - Kassenbuch: kasse.md
+      - Anlagen und AfA: anlagen.md
+      - Bankimport und Abgleich: bank.md
+      - Zahlungsdienstleister: bank-zahlungsdienstleister.md
+      - Steuerzahlungen und Darlehen: bank-steuern-darlehen.md
+  - Steuern und Auswertungen:
+      - Umsatzsteuer-Voranmeldung: umsatzsteuer.md
+      - Jahreserklärungen: jahreserklaerung.md
+      - Auswertungen und Jahresexport: auswertungen.md
+      - Fristen: fristen.md
+      - Finanzamt: finanzamt.md
+      - Lohn: lohn.md
+      - Abgabe an ELSTER: elster-abgabe.md
+      - Mein ELSTER mit Erweiterung: elster-mit-erweiterung.md
+      - Mein ELSTER mit KI-Assistent: elster-mit-assistent.md
+  - GmbH und UG:
+      - GmbH und UG: gmbh.md
+      - Abschluss für GmbH und UG: gmbh-abschluss.md
+  - Umzug und Import:
+      - Umzug aus Lexoffice: lexoffice.md
+      - Umzug aus sevDesk: sevdesk.md
+      - Umzug aus BuchhaltungsButler: buchhaltungsbutler.md
+      - Umzug aus Accountable: accountable.md
+      - Umzug aus WISO EÜR & Kasse: wiso.md
+      - CSV-Import: csv-import.md
+      - Belegimport: belegimport.md
+  - Schnittstellen:
+      - KI-Assistenten (MCP): ki-assistenten.md
+      - REST-API: api.md
+      - Eigene Seiten: eigene-seiten.md
+  - Hintergrund:
+      - Buchhaltung in Haben: buchhaltung.md
+      - Buchungssätze: buchhaltung-buchungssaetze.md
+      - Architektur: architektur.md
+      - Datenmodell: architektur-datenmodell.md
+      - Anmeldung und SSO-Modus: architektur-anmeldung.md
+      - Agentic Engineering: agentic-engineering.md
+      - Entwicklung: entwicklung.md
+      - Mitwirken: mitwirken.md
+      - Roadmap: roadmap.md
+      - Lohn (Plan): lohn-plan.md
+
+theme:
+  name: material
+  # Vorschaubild beim Teilen eines Links (overrides/main.html)
+  custom_dir: overrides
+  language: de
+  logo: assets/icon.svg
+  favicon: assets/favicon.png
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    # Folgt der Systemeinstellung, umschaltbar wie in der App
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Dunkles Design
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Helles Design
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - toc.follow
+    - content.code.copy
+    - content.action.edit
+    - content.tabs.link
+
+extra_css:
+  - assets/stylesheets/extra.css
+  - assets/stylesheets/startseite.css
+
+plugins:
+  # Zensical setzt viele MkDocs-Plugins selbst um, git-revision-date-localized (Änderungsdatum
+  # unter der Seite) noch nicht: dort „Planned“, nicht gelistete Plugins ignoriert es stillschweigend
+  # (https://zensical.org/docs/compatibility/mkdocs/plugins/). Das Datum schreibt bis dahin die
+  # eigene Erweiterung unter markdown_extensions. Die Suche ist eingebaut; ihre Sprache kommt aus
+  # theme.language, `lang` hier würde ignoriert.
+  - search
+
+markdown_extensions:
+  # Änderungsdatum aus git unter jeder Seite (scripts/doku-aenderungsdatum, über requirements-docs.txt)
+  - haben_doku_aenderungsdatum
+  - admonition
+  # Hinweise im Stil von GitHub (> [!NOTE]) als Kasten, auf GitHub wie auf der Website
+  # (https://zensical.org/docs/authoring/admonitions/#github-callouts); ohne das stand „[!NOTE]“ als Text im Zitat
+  - pymdownx.quotes:
+      callouts: true
+  # Deutsche Titel der Kästen statt „Note“, „Important“ (scripts/doku-hinweise, über requirements-docs.txt)
+  - haben_doku_hinweise
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      permalink_title: Link zu diesem Abschnitt
+      # Umlaute in Ankern behalten, damit #umsatzsteuer-voranmeldung-prüfen wie auf GitHub funktioniert
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/firsttris/haben
+      name: Quellcode auf GitHub
+    - icon: fontawesome/brands/docker
+      link: https://hub.docker.com/r/tristanteu/haben
+      name: Image auf Docker Hub

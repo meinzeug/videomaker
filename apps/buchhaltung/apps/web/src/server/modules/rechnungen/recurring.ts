@@ -1,0 +1,312 @@
+import { INTERNAL_ERROR, isUniqueViolation, UserError, userMessage } from "../../errors.ts";
+import {
+  addMonthsAnchored,
+  dueDates,
+  fillPlaceholders,
+  invoiceDueDate,
+  PAYMENT_METHODS,
+  PRICE_MODES,
+  servicePeriodFor,
+  TAX_TREATMENT_KEYS,
+  type RecurringInterval,
+  type ServicePeriodMode,
+  type SkontoStufe,
+  type UnitLabel,
+} from "@haben/core";
+import { and, asc, desc, eq, lte } from "drizzle-orm";
+import { z } from "zod";
+import { withActor } from "../../db/actor.ts";
+import { db, schema, type Tx } from "../../db/index.ts";
+import { draftLineSchema } from "./draft-line.ts";
+import { defaultSkonto } from "./skonto.ts";
+import { contactRoleProblem, loadCompany, validMandateOn, type Company } from "../stammdaten/index.ts";
+import { createDraft, effectivePriceMode, finalizeInvoice } from "./invoices.ts";
+import { sendInvoiceMailWithTemplate } from "./invoice-mail.ts";
+import { MailError } from "../mail/index.ts";
+
+export type RecurringInvoice = typeof schema.recurringInvoices.$inferSelect;
+
+export class RecurringError extends UserError {}
+
+/** Wer die Rechnungen eines Laufs im Audit-Log angelegt hat */
+export const RECURRING_ACTOR = "system:wiederkehrend";
+
+const isoDate = z.iso.date();
+
+export const recurringInputSchema = z.object({
+  name: z.string().trim().min(1, "Bezeichnung fehlt").max(200),
+  active: z.boolean(),
+  contactId: z.uuid(),
+  format: z.enum(["zugferd", "xrechnung-cii", "xrechnung-ubl"]),
+  paymentTermDays: z.number().int().min(0).max(120),
+  /** Einleitung über den Positionen; Platzhalter wie bei den Positionen */
+  intro: z.string().max(2000).default(""),
+  note: z.string().max(2000),
+  propertyRetention: z.boolean().default(false),
+  taxTreatment: z.enum(TAX_TREATMENT_KEYS),
+  exemptionReason: z.string().trim().max(300),
+  /** Einzelpreise netto oder brutto inkl. USt */
+  priceMode: z.enum(PRICE_MODES).default("netto"),
+  lines: z.array(draftLineSchema).min(1, "Mindestens eine Position").max(200),
+  intervalMonths: z.union([z.literal(1), z.literal(3), z.literal(6), z.literal(12)]),
+  nextDate: isoDate,
+  endDate: isoDate.nullable(),
+  servicePeriod: z.enum(["laufend", "vorher", "keiner"]),
+  mode: z.enum(["entwurf", "festschreiben"]),
+  /** Nur mit festschreiben wirksam */
+  sendByMail: z.boolean().default(false),
+  /** Überweisung oder Lastschrift (#445); fehlt = Überweisung */
+  paymentMethod: z.enum(PAYMENT_METHODS).default("ueberweisung"),
+});
+
+export type RecurringInput = z.input<typeof recurringInputSchema>;
+
+function values(raw: RecurringInput) {
+  const input = recurringInputSchema.parse(raw);
+  if (input.endDate && input.endDate < input.nextDate) throw new RecurringError("Das Enddatum liegt vor dem nächsten Termin.");
+  return {
+    ...input,
+    exemptionReason: input.taxTreatment === "regulaer" ? "" : input.exemptionReason,
+    priceMode: effectivePriceMode(input),
+    sendByMail: input.mode === "festschreiben" && input.sendByMail,
+    anchorDay: Number(input.nextDate.slice(8, 10)),
+    updatedAt: new Date(),
+  };
+}
+
+export async function listRecurring() {
+  return db
+    .select({
+      recurring: schema.recurringInvoices,
+      contactName: schema.contacts.name,
+    })
+    .from(schema.recurringInvoices)
+    .innerJoin(schema.contacts, eq(schema.contacts.id, schema.recurringInvoices.contactId))
+    .orderBy(desc(schema.recurringInvoices.active), asc(schema.recurringInvoices.nextDate));
+}
+
+export async function getRecurring(id: string) {
+  const [recurring] = await db.select().from(schema.recurringInvoices).where(eq(schema.recurringInvoices.id, id));
+  if (!recurring) return null;
+  const invoices = await db
+    .select({
+      id: schema.invoices.id,
+      number: schema.invoices.number,
+      status: schema.invoices.status,
+      issueDate: schema.invoices.issueDate,
+      gross: schema.invoices.gross,
+      recurringDate: schema.invoices.recurringDate,
+    })
+    .from(schema.invoices)
+    .where(eq(schema.invoices.recurringId, id))
+    .orderBy(desc(schema.invoices.recurringDate));
+  return { recurring, invoices };
+}
+
+/** Vorlagen gehören zu Kunden; ein Lieferant oder ein unbekannter Kontakt passt nicht */
+async function checkCustomer(tx: Tx, contactId: string) {
+  const problem = await contactRoleProblem(tx, contactId, "kunde");
+  if (problem) throw new RecurringError(problem);
+}
+
+export async function createRecurring(actor: string, input: RecurringInput): Promise<RecurringInvoice> {
+  return withActor(actor, async (tx) => {
+    const row = values(input);
+    await checkCustomer(tx, row.contactId);
+    const [created] = await tx.insert(schema.recurringInvoices).values(row).returning();
+    return created!;
+  });
+}
+
+export async function updateRecurring(actor: string, id: string, input: RecurringInput): Promise<RecurringInvoice> {
+  return withActor(actor, async (tx) => {
+    const row = values(input);
+    const [previous] = await tx
+      .select({ contactId: schema.recurringInvoices.contactId })
+      .from(schema.recurringInvoices)
+      .where(eq(schema.recurringInvoices.id, id))
+      .for("update");
+    if (!previous) throw new RecurringError("Vorlage nicht gefunden.");
+    // Nur ein neuer Kunde wird geprüft: ein Kontakt, der inzwischen kein Kunde mehr ist, bleibt an der Vorlage
+    if (row.contactId !== previous.contactId) await checkCustomer(tx, row.contactId);
+    const [updated] = await tx
+      .update(schema.recurringInvoices)
+      .set({ ...row, lastError: null })
+      .where(eq(schema.recurringInvoices.id, id))
+      .returning();
+    return updated!;
+  });
+}
+
+/** Löschen nur, solange keine Rechnung daraus entstanden ist; sonst deaktivieren */
+export async function deleteRecurring(actor: string, id: string): Promise<void> {
+  await withActor(actor, async (tx) => {
+    const [used] = await tx.select({ id: schema.invoices.id }).from(schema.invoices).where(eq(schema.invoices.recurringId, id)).limit(1);
+    if (used) throw new RecurringError("Aus der Vorlage sind schon Rechnungen entstanden. Deaktiviere sie stattdessen.");
+    await tx.delete(schema.recurringInvoices).where(eq(schema.recurringInvoices.id, id));
+  });
+}
+
+/**
+ * Rechnung zu einem Termin: Leistungszeitraum und Platzhalter aus der Vorlage. Sprache und Skonto kommen wie beim
+ * Anlegen im Editor aus Kunde und Firmendaten, zum Zeitpunkt der Rechnung.
+ */
+export function invoiceForDate(
+  recurring: RecurringInvoice,
+  date: string,
+  language: "de" | "en" = "de",
+  skonto: SkontoStufe[] = [],
+  sepaMandateId: string | null = null,
+) {
+  const period = servicePeriodFor(date, recurring.intervalMonths as RecurringInterval, recurring.servicePeriod as ServicePeriodMode);
+  const reference = period ?? { from: date, to: date };
+  return {
+    contactId: recurring.contactId,
+    issueDate: date,
+    serviceFrom: period?.from ?? null,
+    serviceTo: period?.to ?? null,
+    paymentTermDays: recurring.paymentTermDays,
+    skonto,
+    format: recurring.format,
+    intro: fillPlaceholders(recurring.intro, reference),
+    note: fillPlaceholders(recurring.note, reference),
+    propertyRetention: recurring.propertyRetention,
+    taxTreatment: recurring.taxTreatment,
+    exemptionReason: recurring.exemptionReason,
+    priceMode: recurring.priceMode,
+    language,
+    paymentMethod: recurring.paymentMethod,
+    sepaMandateId,
+    lines: recurring.lines.map((line) => ({
+      description: fillPlaceholders(line.description, reference),
+      // Vorlagen von vor dem Feld haben keinen Text
+      detail: fillPlaceholders(line.detail ?? "", reference),
+      itemNumber: line.itemNumber ?? "",
+      quantity: line.quantity,
+      unit: line.unit as UnitLabel,
+      unitPrice: line.unitPrice,
+      taxRate: line.taxRate as 1900 | 700 | 0,
+    })),
+  };
+}
+
+/**
+ * Mandat für die Rechnung eines Termins: das jüngste, das am Einzugstag (Fälligkeit) gilt. Ohne gültiges Mandat entsteht
+ * keine Rechnung; der Fehler steht an der Vorlage und der Termin wird beim nächsten Lauf nachgeholt. Liegt der Einzugstag
+ * eines nachgeholten Termins schon zurück, zählt das am Tag des Laufs gültige Mandat; sonst bliebe die Vorlage mit einem
+ * nach diesem Tag unterschriebenen Mandat für immer stehen. Den Einzugstag prüft dann das Festschreiben.
+ */
+async function mandateForRun(recurring: RecurringInvoice, date: string, today: string, bundesland: Company["bundesland"]): Promise<string> {
+  const dueDate = invoiceDueDate(date, recurring.paymentTermDays, bundesland);
+  const mandate = (await validMandateOn(recurring.contactId, dueDate)) ?? (dueDate < today ? await validMandateOn(recurring.contactId, today) : null);
+  if (mandate) return mandate.id;
+  const [contact] = await db.select({ name: schema.contacts.name }).from(schema.contacts).where(eq(schema.contacts.id, recurring.contactId));
+  throw new RecurringError(`Kein gültiges Lastschriftmandat für ${contact?.name ?? "den Kunden"} am ${dueDate.split("-").reverse().join(".")}`);
+}
+
+export interface RunResult {
+  created: number;
+  finalized: number;
+  /** per E-Mail an den Kunden geschickt */
+  mailed: number;
+  errors: string[];
+}
+
+/** Meldung für lastError: Fachfehler und Eingabefehler im Klartext, alles andere nur ins Server-Log */
+function describe(error: unknown): string {
+  const message = userMessage(error);
+  if (message === undefined) console.error("Wiederkehrende Rechnung:", error);
+  return message ?? INTERNAL_ERROR;
+}
+
+async function runOne(recurring: RecurringInvoice, today: string, result: RunResult): Promise<void> {
+  const interval = recurring.intervalMonths as RecurringInterval;
+  const dates = dueDates(recurring.nextDate, interval, recurring.anchorDay, today, recurring.endDate);
+  let lastError: string | null = null;
+  // Sprache und Skonto aus dem Kontakt, wie beim Anlegen im Editor
+  const [contact] = await db
+    .select({ language: schema.contacts.language, skonto: schema.contacts.skonto })
+    .from(schema.contacts)
+    .where(eq(schema.contacts.id, recurring.contactId));
+  const company = await loadCompany();
+  // Bei Lastschrift kein Skonto: eingezogen wird der volle Betrag
+  const skonto = recurring.paymentMethod === "lastschrift" ? [] : defaultSkonto(company, contact, recurring.paymentTermDays);
+  for (const date of dates) {
+    const [existing] = await db
+      .select({ id: schema.invoices.id })
+      .from(schema.invoices)
+      .where(and(eq(schema.invoices.recurringId, recurring.id), eq(schema.invoices.recurringDate, date)));
+    if (existing) continue;
+    const mandateId = recurring.paymentMethod === "lastschrift" ? await mandateForRun(recurring, date, today, company.bundesland) : null;
+    let draftId: string;
+    try {
+      const draft = await createDraft(RECURRING_ACTOR, invoiceForDate(recurring, date, contact?.language, skonto, mandateId), {
+        recurringId: recurring.id,
+        recurringDate: date,
+      });
+      draftId = draft.id;
+      result.created++;
+    } catch (error) {
+      // Gleichzeitiger Lauf hat den Termin schon angelegt
+      if (isUniqueViolation(error, "invoices_recurring_date")) continue;
+      throw error;
+    }
+    if (recurring.mode === "festschreiben") {
+      try {
+        await finalizeInvoice(RECURRING_ACTOR, draftId);
+        result.finalized++;
+      } catch (error) {
+        // Entwurf bleibt stehen, damit nichts verloren geht
+        lastError = `Rechnung vom ${date} als Entwurf angelegt, Festschreiben fehlgeschlagen: ${describe(error)}`;
+        result.errors.push(`${recurring.name}: ${lastError}`);
+        continue;
+      }
+      if (recurring.sendByMail) {
+        try {
+          const sent = await sendInvoiceMailWithTemplate(RECURRING_ACTOR, draftId);
+          if (sent.ok) result.mailed++;
+          else throw new MailError(sent.error ?? "unbekannter Fehler");
+        } catch (error) {
+          // Die Rechnung ist festgeschrieben; nur der Versand fehlt, von Hand auf der Rechnungsseite nachholbar
+          lastError = `Rechnung vom ${date} festgeschrieben, E-Mail nicht gesendet: ${describe(error)}`;
+          result.errors.push(`${recurring.name}: ${lastError}`);
+        }
+      }
+    }
+  }
+  const last = dates.at(-1);
+  const nextDate = last ? addMonthsAnchored(last, interval, recurring.anchorDay) : recurring.nextDate;
+  const ended = recurring.endDate !== null && nextDate > recurring.endDate;
+  await withActor(RECURRING_ACTOR, (tx) =>
+    tx
+      .update(schema.recurringInvoices)
+      .set({ nextDate, active: !ended, lastRunAt: new Date(), lastError })
+      .where(eq(schema.recurringInvoices.id, recurring.id)),
+  );
+}
+
+/**
+ * Legt für alle fälligen Termine Rechnungen an, verpasste werden nachgeholt (je Termin mit seinem Datum).
+ * Je Termin entsteht höchstens eine Rechnung (eindeutiger Index), auch wenn zwei Läufe gleichzeitig starten.
+ */
+export async function runDueRecurring(today: string): Promise<RunResult> {
+  const result: RunResult = { created: 0, finalized: 0, mailed: 0, errors: [] };
+  const due = await db
+    .select()
+    .from(schema.recurringInvoices)
+    .where(and(eq(schema.recurringInvoices.active, true), lte(schema.recurringInvoices.nextDate, today)));
+
+  for (const recurring of due) {
+    try {
+      await runOne(recurring, today, result);
+    } catch (error) {
+      // Der Lauf geht mit der nächsten Vorlage weiter; nextDate bleibt, schon angelegte Termine überspringt der nächste Lauf
+      const lastError = describe(error);
+      result.errors.push(`${recurring.name}: ${lastError}`);
+      await withActor(RECURRING_ACTOR, (tx) =>
+        tx.update(schema.recurringInvoices).set({ lastRunAt: new Date(), lastError }).where(eq(schema.recurringInvoices.id, recurring.id)),
+      ).catch((e: unknown) => console.error("Wiederkehrende Rechnung: Fehler nicht gespeichert", e));
+    }
+  }
+  return result;
+}

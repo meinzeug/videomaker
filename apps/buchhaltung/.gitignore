@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.output/
+.vinxi/
+.tanstack/
+.nitro/
+*.log
+.env
+.env.*
+!.env.example
+data/
+coverage/
+
+# Temporäre Worktrees von Claude Code (z. B. für das TDD-Review)
+.claude/worktrees/
+test-results/
+playwright-report/
+
+# Dokumentation (zensical build); .cache/ hat zwar eine eigene .gitignore, Biome liest aber nur diese hier
+site/
+.cache/
+# Tests der Erweiterung für das Änderungsdatum (scripts/doku-aenderungsdatum)
+__pycache__/

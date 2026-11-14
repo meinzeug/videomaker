@@ -1,0 +1,400 @@
+import { appPath } from "../../../lib/app-path.ts";
+import { discountFromColumns, formatEuro, TAX_TREATMENTS, type UnitLabel } from "@haben/core";
+import { Link, createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { useState } from "react";
+import { Icon } from "../../../components/Icon.tsx";
+import { InvoiceAttachments } from "../../../components/InvoiceAttachments.tsx";
+import { InvoiceEditor } from "../../../components/InvoiceEditor.tsx";
+import { QuoteChoices } from "../../../components/QuoteChoices.tsx";
+import { QuotePlan } from "../../../components/QuotePlan.tsx";
+import { BillingStatus, QuoteStatus } from "../../../components/QuoteStatus.tsx";
+import { SendMailForm } from "../../../components/SendMail.tsx";
+import { formatDate, formatDateTime } from "../../../lib/format.ts";
+import { NoticeBanner } from "../../../components/NoticeBanner.tsx";
+import { useAction } from "../../../lib/use-action.ts";
+import { copyQuoteFn, decideQuote, getQuoteDetail, invoiceFromQuote } from "../../../server/functions/quotes.ts";
+import { OutcomeStatus } from "../../../components/Status.tsx";
+
+export const Route = createFileRoute("/_app/angebote/$id")({
+  loader: ({ params }) => getQuoteDetail({ data: params.id }),
+  head: ({ loaderData }) => ({
+    meta: [{ title: `${loaderData?.quote.number ? `Angebot ${loaderData.quote.number}` : "Angebotsentwurf"} · Haben` }],
+  }),
+  component: QuotePage,
+});
+
+type Detail = Awaited<ReturnType<typeof getQuoteDetail>>;
+function QuotePage() {
+  const data = Route.useLoaderData();
+  const { quote } = data;
+  const draftAction = useAction();
+  if (quote.status === "draft") {
+    return (
+      <InvoiceEditor
+        key={`${quote.id}-${String(quote.updatedAt)}`}
+        action={draftAction}
+        id={quote.id}
+        kind="angebot"
+        initial={{
+          contactId: quote.contactId,
+          contactPersonId: quote.contactPersonId,
+          issueDate: quote.issueDate,
+          validUntil: quote.validUntil,
+          serviceFrom: quote.serviceFrom,
+          serviceTo: quote.serviceTo,
+          paymentTermDays: 0,
+          format: "zugferd",
+          intro: quote.intro,
+          note: quote.note,
+          buyerOrderReference: quote.buyerOrderReference,
+          sellerOrderReference: quote.sellerOrderReference,
+          despatchAdviceReference: quote.despatchAdviceReference,
+          taxTreatment: quote.taxTreatment,
+          exemptionReason: quote.exemptionReason,
+          priceMode: quote.priceMode,
+          language: quote.language,
+          discount: discountFromColumns(quote.discountPercent, quote.discountAmount),
+          paymentPlan: quote.paymentPlan,
+          paymentPlanInConfirmation: quote.paymentPlanInConfirmation,
+          lines: data.lines.map((line) => ({
+            description: line.description,
+            detail: line.detail,
+            itemNumber: line.itemNumber,
+            quantity: line.quantity,
+            unit: line.unit as UnitLabel,
+            unitPrice: line.unitPrice,
+            taxRate: line.taxRate as 1900 | 700 | 0,
+            discount: discountFromColumns(line.discountPercent, line.discountAmount),
+            kind: line.kind,
+          })),
+        }}
+        planTemplates={data.planTemplates}
+        contactPersons={data.contactPersons}
+        contacts={data.contacts}
+        seller={data.company}
+        sellerIssues={data.sellerIssues}
+        letterIssues={data.letterIssues}
+        issues={data.issues}
+        numberCounters={data.numberCounters}
+        numberRunning={data.numberRunning}
+        numberFormat={data.numberFormat}
+        corrects={null}
+        bundesland={data.bundesland}
+        kleinunternehmer={data.kleinunternehmer}
+        articles={data.articles}
+        textBlocks={data.textBlocks}
+        attachments={<InvoiceAttachments kind="angebot" ownerId={quote.id} attachments={data.attachments} editable />}
+      />
+    );
+  }
+  return <FinalQuote data={data} />;
+}
+
+function FinalQuote({ data }: { data: Detail }) {
+  const { quote, invoice, listStatus, billing } = data;
+  /** Festgeschriebene, nicht stornierte Abschläge: erst dann ergibt eine Schlussrechnung Sinn */
+  const finalAbschlaege = billing.filter((b) => b.variant === "abschlag" && b.status === "final" && !b.cancelled);
+  const router = useRouter();
+  const navigate = useNavigate();
+  const decide = useServerFn(decideQuote);
+  const toInvoice = useServerFn(invoiceFromQuote);
+  const copy = useServerFn(copyQuoteFn);
+  const { busy, notice, run } = useAction();
+  const [mailing, setMailing] = useState(false);
+  const [mailNotice, setMailNotice] = useState<string | null>(null);
+  const buyer = quote.buyer as { name: string } | null;
+  // Auswahl optionaler und alternativer Positionen; fest, sobald eine Rechnung zum Angebot festgeschrieben ist
+  const hasChoices = data.lines.some((l) => l.kind !== null);
+  const choicesLocked = billing.some((b) => b.status === "final" && !b.cancelled);
+  const [chosen, setChosen] = useState<number[]>(data.choices);
+  const choicesChanged = chosen.length !== data.choices.length || chosen.some((p) => !data.choices.includes(p));
+  /** Auswahl, die mit Annahme und Rechnung gespeichert wird; null = unverändert lassen */
+  const choices = hasChoices && !choicesLocked ? chosen : null;
+
+  const setDecision = (decision: "angenommen" | "abgelehnt" | null) =>
+    run(async () => {
+      await decide({ data: { id: quote.id, decision, choices: decision === "angenommen" ? choices : null } });
+      await router.invalidate();
+    });
+
+  const onInvoice = (variant: "abschlag" | "schluss" | null = null) =>
+    run(async () => {
+      const created = await toInvoice({ data: { id: quote.id, variant, choices } });
+      await navigate({ to: "/rechnungen/$id", params: { id: created.id } });
+    });
+
+  const onPlanRow = (planRow: number) =>
+    run(async () => {
+      const created = await toInvoice({ data: { id: quote.id, variant: "abschlag", choices, planRow } });
+      await navigate({ to: "/rechnungen/$id", params: { id: created.id } });
+    });
+
+  const onCopy = () =>
+    run(async () => {
+      const created = await copy({ data: quote.id });
+      await navigate({ to: "/angebote/$id", params: { id: created.id } });
+    });
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <div className="eyebrow">
+            <Link to="/angebote">Angebote</Link> › Angebot
+          </div>
+          {/* Status neben der Überschrift wie bei der Rechnung: bleibt mit dem stehenden Kopf sichtbar */}
+          <div className="title-with-status">
+            <h1>Angebot {quote.number}</h1>
+            <QuoteStatus quote={{ listStatus, validUntil: quote.validUntil, invoiceNumber: invoice?.number ?? null }} />
+          </div>
+        </div>
+        <div className="actions">
+          <a className="btn" href={appPath(`/api/angebot/${quote.id}?download`)}>
+            PDF herunterladen
+          </a>
+          <button type="button" className="btn" onClick={() => void onCopy()} disabled={busy}>
+            Kopieren
+          </button>
+        </div>
+      </div>
+
+      <NoticeBanner notice={notice} />
+
+      <div className="grid-main">
+        <section aria-label="PDF">
+          <iframe className="pdf-frame" src={appPath(`/api/angebot/${quote.id}#view=Fit`)} title={`PDF des Angebots ${quote.number}`} />
+          <a className="btn pdf-open" href={appPath(`/api/angebot/${quote.id}`)} target="_blank" rel="noreferrer">
+            PDF öffnen
+          </a>
+        </section>
+        <div className="stack">
+          <section className="card" aria-labelledby="answer-heading">
+            <h2 id="answer-heading">
+              Antwort des Kunden <QuoteStatus inline quote={{ listStatus, validUntil: quote.validUntil }} />
+            </h2>
+            {invoice ? (
+              <p style={{ margin: 0 }}>
+                Abgerechnet mit{" "}
+                <Link to="/rechnungen/$id" params={{ id: invoice.id }}>
+                  {invoice.number ? `Rechnung ${invoice.number}` : "einem Rechnungsentwurf"}
+                </Link>
+                .
+              </p>
+            ) : (
+              <>
+                <p className="small muted" style={{ margin: 0 }}>
+                  {listStatus === "abgelaufen"
+                    ? `Das Angebot ist seit dem ${formatDate(quote.validUntil)} abgelaufen. Nimmt der Kunde trotzdem an, kannst du es weiter abrechnen.`
+                    : listStatus === "abgelehnt"
+                      ? "Als abgelehnt markiert."
+                      : "Nimmt der Kunde an, entsteht aus dem Angebot ein Rechnungsentwurf mit denselben Positionen, den du vor dem Festschreiben noch anpassen kannst."}
+                </p>
+                <div className="actions" style={{ flexWrap: "wrap" }}>
+                  {quote.decision !== null && (
+                    <button type="button" className="btn" onClick={() => void setDecision(null)} disabled={busy}>
+                      Antwort zurücknehmen
+                    </button>
+                  )}
+                  {quote.decision !== "abgelehnt" && (
+                    <>
+                      <button type="button" className="btn" onClick={() => void onInvoice("abschlag")} disabled={busy}>
+                        Abschlagsrechnung erstellen
+                      </button>
+                      {finalAbschlaege.length > 0 ? (
+                        <button type="button" className="btn btn-primary" onClick={() => void onInvoice("schluss")} disabled={busy}>
+                          Schlussrechnung erstellen
+                        </button>
+                      ) : (
+                        <button type="button" className="btn btn-primary" onClick={() => void onInvoice()} disabled={busy}>
+                          Rechnung erstellen
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {quote.decision === null && (
+                    <div className="actions" style={{ flexBasis: "100%", alignItems: "center", gap: 8 }}>
+                      <span className="small muted">Nur markieren:</span>
+                      <button type="button" className="btn btn-sm" onClick={() => void setDecision("angenommen")} disabled={busy}>
+                        Angenommen
+                      </button>
+                      <button type="button" className="btn btn-sm btn-danger" onClick={() => void setDecision("abgelehnt")} disabled={busy}>
+                        Abgelehnt
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+            {quote.decision === "angenommen" && (
+              <div className="actions" style={{ flexWrap: "wrap" }}>
+                <a className="btn btn-sm" href={appPath(`/api/dokument/auftragsbestaetigung/${quote.id}`)} target="_blank" rel="noreferrer">
+                  Auftragsbestätigung (PDF)
+                </a>
+                <a className="btn btn-sm" href={appPath(`/api/dokument/lieferschein-angebot/${quote.id}`)} target="_blank" rel="noreferrer">
+                  Lieferschein (PDF)
+                </a>
+              </div>
+            )}
+          </section>
+
+          {hasChoices && (
+            <>
+              <QuoteChoices
+                lines={data.lines.map((l) => ({ position: l.position, description: l.description, kind: l.kind, net: l.net }))}
+                chosen={chosen}
+                onChange={setChosen}
+                locked={choicesLocked}
+              />
+              {quote.decision === "angenommen" && !invoice && !choicesLocked && choicesChanged && (
+                <div className="actions">
+                  <button type="button" className="btn" onClick={() => void setDecision("angenommen")} disabled={busy}>
+                    Auswahl speichern
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {data.plan && (
+            <QuotePlan
+              plan={data.plan}
+              taxed={quote.taxTreatment === "regulaer"}
+              canBill={quote.decision !== "abgelehnt" && !invoice}
+              busy={busy}
+              onAbschlag={(row) => void onPlanRow(row)}
+              onSchluss={() => void onInvoice("schluss")}
+            />
+          )}
+
+          {billing.length > 0 && (
+            <section className="card" aria-labelledby="billing-heading">
+              <h2 id="billing-heading">Rechnungen zu diesem Angebot</h2>
+              {billing.map((b) => (
+                <div key={b.id} className="history-row">
+                  <span style={{ minWidth: 0 }}>
+                    <Link to="/rechnungen/$id" params={{ id: b.id }}>
+                      {b.variant === "abschlag" ? "Abschlagsrechnung" : b.variant === "schluss" ? "Schlussrechnung" : "Rechnung"} {b.number ?? "(Entwurf)"}
+                    </Link>
+                    <span className="small muted" style={{ display: "block" }}>
+                      {formatDate(b.issueDate)} · <span className="amount">{formatEuro(b.gross)}</span>
+                    </span>
+                  </span>
+                  <BillingStatus cancelled={b.cancelled} final={b.status === "final"} />
+                </div>
+              ))}
+              {finalAbschlaege.length > 0 && (
+                <p className="small muted" style={{ margin: 0 }}>
+                  Abgerechnet in Abschlägen: {formatEuro(finalAbschlaege.reduce((s, b) => s + b.gross, 0))} von {formatEuro(quote.gross)}
+                </p>
+              )}
+            </section>
+          )}
+
+          <section className="card" aria-labelledby="facts-heading">
+            <h2 id="facts-heading">Angaben</h2>
+            <dl className="facts">
+              <dt>Kunde</dt>
+              <dd>{buyer?.name ?? "–"}</dd>
+              <dt>Angebotsdatum</dt>
+              <dd>{formatDate(quote.issueDate)}</dd>
+              <dt>Gültig bis</dt>
+              <dd>{formatDate(quote.validUntil)}</dd>
+              <dt>Netto</dt>
+              <dd className="amount">{formatEuro(quote.net)}</dd>
+              <dt>Umsatzsteuer</dt>
+              <dd className="amount">{formatEuro(quote.tax)}</dd>
+              <dt>Brutto</dt>
+              <dd className="amount" style={{ fontWeight: 600 }}>
+                {formatEuro(quote.gross)}
+              </dd>
+              {quote.priceMode === "brutto" && (
+                <>
+                  <dt>Preise</dt>
+                  <dd>brutto, inklusive Umsatzsteuer</dd>
+                </>
+              )}
+              {quote.taxTreatment !== "regulaer" && (
+                <>
+                  <dt>Besteuerung</dt>
+                  <dd>{TAX_TREATMENTS[quote.taxTreatment].label}</dd>
+                </>
+              )}
+              <dt>Festgeschrieben</dt>
+              <dd>{quote.lockedAt ? formatDateTime(quote.lockedAt) : "–"}</dd>
+              {quote.decidedAt && (
+                <>
+                  <dt>Antwort</dt>
+                  <dd>{formatDateTime(quote.decidedAt)}</dd>
+                </>
+              )}
+            </dl>
+          </section>
+
+          <InvoiceAttachments kind="angebot" ownerId={quote.id} attachments={data.attachments} editable={false} />
+
+          <section className="card" aria-labelledby="mail-heading">
+            <h2 id="mail-heading">Per E-Mail</h2>
+            {data.mails.length > 0 ? (
+              data.mails.map((m) => (
+                <div key={m.id} className="history-row">
+                  <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+                    An {m.recipient}
+                    <span className="small muted" style={{ display: "block" }}>
+                      {formatDateTime(m.createdAt)}
+                      {!m.ok && ` · ${m.error}`}
+                    </span>
+                    {m.attachments.length > 0 && (
+                      <span className="small muted" style={{ display: "block" }}>
+                        Anhang: {m.attachments.join(", ")}
+                      </span>
+                    )}
+                  </span>
+                  <OutcomeStatus ok={m.ok}>{m.ok ? "Gesendet" : "Fehlgeschlagen"}</OutcomeStatus>
+                </div>
+              ))
+            ) : (
+              <p className="small muted" style={{ margin: 0 }}>
+                Noch nicht per E-Mail versendet.
+              </p>
+            )}
+            {mailNotice && (
+              <div className="banner banner-ok" role="status">
+                {mailNotice}
+              </div>
+            )}
+            {mailing ? (
+              <SendMailForm
+                kind="angebot"
+                id={quote.id}
+                onDone={(message) => {
+                  setMailing(false);
+                  setMailNotice(message);
+                  void router.invalidate();
+                }}
+              />
+            ) : (
+              <div className="actions">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    setMailNotice(null);
+                    setMailing(true);
+                  }}
+                >
+                  {data.mails.some((m) => m.ok) ? "Erneut senden" : "Angebot senden"}
+                </button>
+              </div>
+            )}
+          </section>
+
+          <div className="banner banner-info">
+            <Icon name="info" />
+            <span>Angebote werden nicht gebucht. Als Handelsbrief bleibt das PDF unverändert und steht im Jahresarchiv.</span>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}

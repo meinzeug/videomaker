@@ -1,0 +1,33 @@
+import { describe, expect, it } from "vitest";
+import { feldname, formatWert } from "./vast.ts";
+
+describe("formatWert", () => {
+  it("zeigt Beträge in Euro und Datumsangaben als Datum", () => {
+    expect(formatWert(["Teilleistung", "Betrag"], "22000.20")).toMatch(/^22\.000,20\s€$/);
+    expect(formatWert(["Bruttoarbeitslohn"], "1000.00")).toMatch(/^1\.000,00\s€$/);
+    expect(formatWert(["Leistung", "Beginn"], "20100112")).toBe("12.01.2010");
+    expect(formatWert(["Eingangsdatum"], "01.03.2026 00:00:00")).toBe("01.03.2026");
+    expect(formatWert(["Eingangsdatum"], "01.03.2026 14:12:00")).toBe("01.03.2026 14:12:00");
+  });
+
+  it("lässt Schlüssel, Monate und IdNr unverändert", () => {
+    expect(formatWert(["Krankenversicherung", "Beitragsart"], "01")).toBe("01");
+    expect(formatWert(["Krankenversicherung", "Beginn"], "01")).toBe("01");
+    expect(formatWert(["LeistungsEmpfaenger", "IdNr"], "65929970489")).toBe("65929970489");
+    expect(formatWert(["Steuerklasse"], "3")).toBe("3");
+  });
+});
+
+describe("feldname", () => {
+  it("setzt Umlaute und zusammengesetzte Namen zurück", () => {
+    expect(feldname("LeistungsEmpfaenger")).toBe("Leistungsempfänger");
+    expect(feldname("Waehrung")).toBe("Währung");
+    expect(feldname("BeitragsArt")).toBe("Beitragsart");
+  });
+
+  it("lässt Abkürzungen und Wörter mit „ue“ im Wortinneren stehen", () => {
+    expect(feldname("IdNr")).toBe("IdNr");
+    expect(feldname("Steuerbetrag")).toBe("Steuerbetrag");
+    expect(feldname("Betrag")).toBe("Betrag");
+  });
+});

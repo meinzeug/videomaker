@@ -1,0 +1,180 @@
+import { z } from "zod/mini";
+import { roundHalfAwayFromZero, taxIncluded, taxOf, type BasisPoints, type Cents } from "./money.ts";
+import { discountBasis, discountedLineAmount, netOf, splitDocumentDiscount, type Discount, type DocumentAllowance } from "./rabatt.ts";
+
+/** Mengen als ganze Tausendstel: 152 Std. = 152000, 0,5 Tage = 500. */
+export type Millis = number;
+
+export const TAX_RATES = [1900, 700, 0] as const;
+
+/** Unterstützte Steuersätze in Basispunkten */
+export type TaxRate = (typeof TAX_RATES)[number];
+
+export const UNITS = {
+  "Std.": "HUR",
+  Tag: "DAY",
+  Monat: "MON",
+  "Stk.": "H87",
+  "Psch.": "LS",
+  km: "KMT",
+} as const;
+
+export type UnitLabel = keyof typeof UNITS;
+
+export const invoiceLineInputSchema = z.object({
+  description: z.string().check(z.trim(), z.minLength(1, "Beschreibung fehlt"), z.maxLength(500)),
+  quantity: z.int().check(z.minimum(1), z.maximum(1_000_000_000)),
+  unit: z.enum(Object.keys(UNITS) as [UnitLabel, ...UnitLabel[]]),
+  unitPrice: z.int().check(z.minimum(-100_000_000_00), z.maximum(100_000_000_00)),
+  taxRate: z.literal(TAX_RATES),
+});
+
+export type InvoiceLineInput = z.infer<typeof invoiceLineInputSchema>;
+
+/**
+ * Höchstlänge der mehrzeiligen Beschreibung unter der Bezeichnung einer Position (BT-154), für Rechnung, Angebot,
+ * wiederkehrende Rechnung und Artikel gleich, damit der Text auf jedem Weg zwischen ihnen hindurchpasst
+ */
+export const LINE_DETAIL_MAX = 2000;
+
+/**
+ * Höchstlänge der Artikelnummer (BT-155) in Position und Artikelkatalog gleich, damit die Nummer auf beiden Wegen
+ * hindurchpasst: beim Einfügen aus dem Katalog und beim Speichern einer Position als Artikel. EN 16931 nennt keine Grenze.
+ */
+export const ITEM_NUMBER_MAX = 50;
+
+export interface TaxBreakdown {
+  rate: BasisPoints;
+  base: Cents;
+  tax: Cents;
+}
+
+export interface InvoiceTotals {
+  net: Cents;
+  tax: Cents;
+  gross: Cents;
+  /** Je Steuersatz, absteigend nach Satz */
+  taxes: TaxBreakdown[];
+}
+
+/**
+ * Preise netto (Standard, B2B) oder brutto inklusive Umsatzsteuer (Endpreise für Privatkunden).
+ * Im Brutto-Modus sind Einzelpreis und Zeilenbetrag brutto; die Steuer wird je Satz herausgerechnet.
+ */
+export const PRICE_MODES = ["netto", "brutto"] as const;
+
+/** Zahlungsart einer Rechnung (#445): Überweisung durch den Kunden oder Einzug per SEPA-Lastschrift */
+export const PAYMENT_METHODS = ["ueberweisung", "lastschrift"] as const;
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+export type PriceMode = (typeof PRICE_MODES)[number];
+
+/** Zeilenbetrag: Menge × Einzelpreis, kaufmännisch gerundet; netto oder brutto wie der Einzelpreis */
+export function lineAmount(quantity: Millis, unitPrice: Cents): Cents {
+  return roundHalfAwayFromZero((quantity * unitPrice) / 1000);
+}
+
+/** Summen und das Netto jeder Zeile in Reihenfolge der Eingabe */
+export interface InvoiceCalculation {
+  totals: InvoiceTotals;
+  /** Netto je Zeile nach Positionsrabatt (BT-131); bei Bruttopreisen der Anteil am Netto des Satzes vor dem Gesamtrabatt */
+  lineNets: Cents[];
+  /** Zeilenbetrag nach Positionsrabatt im Preismodus, wie er auf dem Beleg steht */
+  lineAmounts: Cents[];
+  /** Gesamtrabatt je Steuersatz, nur Sätze mit Abzug (BG-20) */
+  allowances: DocumentAllowance[];
+}
+
+type CalculationLine = { quantity: Millis; unitPrice: Cents; taxRate: BasisPoints } & {
+  discount?: Discount | null | undefined;
+  /** Abzugsposition einer Schlussrechnung: vom Gesamtrabatt ausgenommen */
+  deductionOf?: string | null | undefined;
+};
+
+/**
+ * Summen nach EN 16931: Steuer je Steuersatz auf die Summe der Zeilenbeträge, nicht als Summe der
+ * Zeilensteuern.
+ *
+ * Erst der Positionsrabatt je Zeile, dann der Gesamtrabatt je Satz auf die rabattierten Positionen (rabatt.ts).
+ * netto: Bemessungsgrundlage = Summe der Zeilen abzüglich Gesamtrabatt, Steuer darauf.
+ * brutto: Bruttosumme je Satz abzüglich Gesamtrabatt, die Steuer daraus herausgerechnet, Netto ist die Differenz. So stimmt
+ * der Endpreis auf den Cent (9,80 € statt 9,79 € oder 9,81 €). Das Netto vor dem Gesamtrabatt wird auf die Zeilen verteilt,
+ * damit ihre Summe abzüglich des Rabatts exakt die Bemessungsgrundlage ergibt (BR-CO-10, BR-S-08); den Rundungsrest trägt
+ * die betragsmäßig größte Zeile des Satzes. Negierte Zeilen (Storno) ergeben exakt negierte Werte.
+ */
+export function computeInvoice(lines: CalculationLine[], priceMode: PriceMode = "netto", discount: Discount | null = null): InvoiceCalculation {
+  const amounts = lines.map((line) => discountedLineAmount(line));
+  const sums = new Map<BasisPoints, Cents>();
+  lines.forEach((line, i) => {
+    sums.set(line.taxRate, (sums.get(line.taxRate) ?? 0) + amounts[i]!);
+  });
+  const reductions = splitDocumentDiscount(lines, discount);
+  const rates = [...sums.keys()].sort((a, b) => b - a);
+  const taxes = rates.map((rate) => {
+    const sum = sums.get(rate)! - (reductions.get(rate) ?? 0);
+    if (priceMode === "netto") return { rate, base: sum, tax: taxOf(sum, rate) };
+    const tax = taxIncluded(sum, rate);
+    return { rate, base: sum - tax, tax };
+  });
+
+  const lineNets = priceMode === "netto" ? [...amounts] : amounts.map((amount, i) => amount - taxIncluded(amount, lines[i]!.taxRate));
+  if (priceMode === "brutto") {
+    for (const rate of rates) {
+      const indexes = lines.map((line, i) => (line.taxRate === rate ? i : -1)).filter((i) => i >= 0);
+      const rest = netOf(sums.get(rate)!, rate, "brutto") - indexes.reduce((sum, i) => sum + lineNets[i]!, 0);
+      if (rest === 0) continue;
+      const largest = indexes.reduce((best, i) => (Math.abs(amounts[i]!) > Math.abs(amounts[best]!) ? i : best), indexes[0]!);
+      lineNets[largest] = lineNets[largest]! + rest;
+    }
+  }
+
+  const basis = discountBasis(lines);
+  const allowances = taxes.flatMap((t) => {
+    const amount = reductions.get(t.rate) ?? 0;
+    if (amount === 0) return [];
+    return [{ rate: t.rate, basis: basis.get(t.rate) ?? 0, amount, net: netOf(sums.get(t.rate)!, t.rate, priceMode) - t.base }];
+  });
+
+  const net = taxes.reduce((sum, t) => sum + t.base, 0);
+  const tax = taxes.reduce((sum, t) => sum + t.tax, 0);
+  return { totals: { net, tax, gross: net + tax, taxes }, lineNets, lineAmounts: amounts, allowances };
+}
+
+export function computeInvoiceTotals(lines: CalculationLine[], priceMode: PriceMode = "netto", discount: Discount | null = null): InvoiceTotals {
+  return computeInvoice(lines, priceMode, discount).totals;
+}
+
+/** Preis von einem Modus in den anderen umrechnen, z. B. einen Nettoartikel in eine Bruttorechnung */
+export function convertPrice(unitPrice: Cents, taxRate: BasisPoints, from: PriceMode, to: PriceMode): Cents {
+  if (from === to) return unitPrice;
+  return to === "brutto" ? unitPrice + taxOf(unitPrice, taxRate) : unitPrice - taxIncluded(unitPrice, taxRate);
+}
+
+/** Summen aus den gespeicherten Beträgen je Steuersatz */
+export function totalsFromTaxes(rows: TaxBreakdown[]): InvoiceTotals {
+  const taxes = [...rows].sort((a, b) => b.rate - a.rate).map(({ rate, base, tax }) => ({ rate, base, tax }));
+  const net = taxes.reduce((sum, t) => sum + t.base, 0);
+  const tax = taxes.reduce((sum, t) => sum + t.tax, 0);
+  return { net, tax, gross: net + tax, taxes };
+}
+
+/** "152" → 152000, "0,5" → 500, "1.500" → 1500000; null, wenn keine Menge ("1.5" ist mehrdeutig) */
+export function parseQuantity(input: string): Millis | null {
+  const cleaned = input.trim();
+  if (!/^(\d{1,3}(\.\d{3})+|\d+)(,\d{1,3})?$/.test(cleaned)) return null;
+  const [whole = "0", fraction = ""] = cleaned.replace(/\./g, "").split(",");
+  return Number(whole) * 1000 + Number(fraction.padEnd(3, "0"));
+}
+
+const quantityFormat = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 3 });
+
+export function formatQuantity(quantity: Millis): string {
+  return quantityFormat.format(quantity / 1000);
+}
+
+export function formatRate(rate: BasisPoints): string {
+  return `${rate / 100} %`;
+}
+
+/** Standard-Gültigkeit eines Angebots in Tagen */
+export const QUOTE_VALID_DAYS = 30;

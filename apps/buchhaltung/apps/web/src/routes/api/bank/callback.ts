@@ -1,0 +1,41 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { requireUser } from "../../../server/rollen.ts";
+import { BankError } from "../../../server/modules/bank/index.ts";
+import { completeConnection } from "../../../server/modules/bank/index.ts";
+import { appPath } from "../../../lib/app-path.ts";
+
+/** Rückleitung der Bank nach der Freigabe im Enable-Banking-Ablauf; leitet weiter auf /bank */
+export const Route = createFileRoute("/api/bank/callback")({
+  server: {
+    handlers: {
+      GET: async ({ request }) => {
+        const user = await requireUser(request, "inhaber");
+        if (user instanceof Response) return user;
+        const params = new URL(request.url).searchParams;
+        const state = params.get("state");
+        let message: string;
+        let ok = false;
+        if (!state) {
+          message = "Die Rückleitung der Bank ist unvollständig.";
+        } else {
+          try {
+            const result = await completeConnection(user.id, {
+              state,
+              code: params.get("code") ?? undefined,
+              error: params.get("error") ?? undefined,
+              errorDescription: params.get("error_description") ?? undefined,
+            });
+            ({ message, ok } = result);
+          } catch (error) {
+            if (!(error instanceof BankError)) throw error;
+            message = error.message;
+          }
+        }
+        const target = new URL(appPath("/bank"), request.url);
+        target.searchParams.set("abruf", ok ? "ok" : "fehler");
+        target.searchParams.set("meldung", message.slice(0, 500));
+        return new Response(null, { status: 303, headers: { location: `${target.pathname}${target.search}` } });
+      },
+    },
+  },
+});

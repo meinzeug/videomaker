@@ -1,0 +1,476 @@
+---
+title: "Erste Schritte: Konto, Firmendaten, Kontenrahmen"
+description: >-
+  Haben nach der Installation einrichten: Konto und Passkey, Firmendaten, Ist- oder Soll-
+  Versteuerung, SKR03 oder SKR04, Rechnungsnummern und KI-Auslesung.
+---
+
+# Erste Schritte
+
+Wie du Haben auf dem Server installierst, steht in [Installation](installation.md).
+
+## Checkliste
+
+In dieser Reihenfolge kommst du am schnellsten zu einer vollständigen Buchhaltung:
+
+1. Konto anlegen und einen Passkey hinzufügen, siehe [Konto anlegen](#konto-anlegen)
+2. Firmendaten ausfüllen, Rechtsform, Versteuerung und Kontenrahmen wählen, gegebenenfalls Kleinunternehmer einschalten; gibst du nicht monatlich ab, unter Umsatzsteuer den [Voranmeldungszeitraum](umsatzsteuer.md#voranmeldungszeitraum) einstellen
+3. Wenn du aus Lexoffice kommst: Umzug durchführen, siehe [Umzug aus Lexoffice](lexoffice.md). Der Abgleich zeigt dir die letzte Rechnungsnummer
+4. Nächste Rechnungsnummer setzen
+5. Hersteller-ID und ELSTER-Zertifikat **gleich jetzt** beantragen: Beides dauert Tage bis Wochen, siehe [Was du brauchst](einrichtung-elster.md#was-du-brauchst)
+6. Wenn beides da ist: ERiC laden, Hersteller-ID eintragen, Datenschutzhinweise bestätigen, Zertifikat hochladen, eine Voranmeldung mit „Nur prüfen“ und dann als Testübermittlung schicken, siehe [Schritte](einrichtung-elster.md#schritte)
+7. Für die Anlage EÜR Einkunftsart und Art des Betriebs eintragen, siehe [Jahreserklärungen](jahreserklaerung.md)
+8. Bank verbinden (automatischer Abruf) oder ersten Kontoauszug importieren, siehe [Bank](bank.md)
+9. Optional: KI-Auslesung für Belege einschalten, mit Claude oder einem Modell über eine OpenAI-kompatible Schnittstelle (selbst betrieben oder ein Cloud-Dienst wie OpenRouter)
+10. Optional: deine Steuerberatung mit einem [eigenen Zugang](#zugang-für-die-steuerberatung) einladen
+
+> [!IMPORTANT]
+> Rechtsform, Versteuerung, Kontenrahmen und Kleinunternehmerstatus legst du fest, bevor du die erste Rechnung festschreibst oder den ersten Beleg buchst. Die Rechtsform ist ab der ersten Buchung fest, bei GmbH und UG auch der Kontenrahmen. Sobald es im laufenden Jahr Buchungen gibt, sperrt Haben die Umstellung bis zum nächsten Jahreswechsel (siehe [Sperren](#wann-sich-die-einstellungen-ändern-lassen)).
+
+## Konto anlegen
+
+Die folgenden Schritte gelten für den Standardmodus mit lokaler Anmeldung. Läuft Haben im SSO-Modus (`OIDC_ONLY=true`), zeigt `/setup` nur die Schaltfläche zum Einrichten über den Anbieter: Die erste Anmeldung eines Mitglieds der Inhaber-Gruppe richtet Haben ein, ohne Einrichtungscode, Passwort oder Passkey. Siehe [Single Sign-on mit OpenID Connect](installation-sso.md).
+
+Beim ersten Aufruf leitet Haben auf `/setup` weiter. Das erste Konto ist der **Inhaber** mit allen Rechten: Du gibst den Einrichtungscode, Name, E-Mail und ein Passwort mit mindestens 12 Zeichen ein und klickst „Konto anlegen“.
+
+Den Einrichtungscode schreibt Haben beim Start ins Log, solange es noch kein Konto gibt, etwa `Einrichtungscode für https://haben.example.de/setup: K7QM-3XRP-W9TD`. Du findest ihn mit `docker compose logs app` bzw. `journalctl --user -u haben-app`. Er sorgt dafür, dass niemand anderes eine frisch gestartete Instanz zuerst erreicht und das Konto anlegt. Nach jedem Neustart gibt es einen neuen Code; einen festen setzt du mit `HABEN_SETUP_CODE`. Sobald es ein Konto gibt, lehnt Haben jede weitere Registrierung ab („Haben ist bereits eingerichtet. Weitere Zugänge gibt es nur per Einladung.“), und `/setup` leitet auf die Anmeldung um. Der Einrichtungscode gilt nur für dieses erste Konto.
+
+Direkt danach bietet Haben an, einen Passkey hinzuzufügen. Damit meldest du dich künftig ohne Passwort an, etwa mit Fingerabdruck, Gesichtserkennung oder einem Sicherheitsschlüssel. Das Passwort bleibt als Rückfallebene. Du kannst den Schritt mit „Später“ überspringen.
+
+Auf der Anmeldeseite wählst du „Mit Passkey anmelden“. Über „Passwort verwenden“ meldest du dich mit E-Mail und Passwort an. Unterstützt der Browser Passkey-Autofill, schlägt er den Passkey dort auch direkt im Feld E-Mail vor.
+
+Passkeys verwaltest du unter **Einstellungen › Sicherheit › Passkeys**: weitere hinzufügen (z. B. für Handy und Laptop) oder alte nach einer Rückfrage entfernen. Passkeys hängen an der Domain aus `BETTER_AUTH_URL`; bei einem Domainwechsel musst du sie neu anlegen.
+
+## Zugang für die Steuerberatung
+
+Deine Steuerberatung bekommt auf Wunsch einen eigenen Zugang, der nur lesen kann: Auswertungen, Journal, Kontenblätter, Belege und Rechnungen ansehen, Dateien, DATEV-Export und Jahresarchiv herunterladen. Unter **Einstellungen › Sicherheit › Zugänge** erzeugst du einen Einladungslink, der einmal und 72 Stunden gilt; die Steuerberatung legt damit Passwort und Passkey selbst an. Sperren und Entfernen geht an derselben Stelle. Buchen, Festschreiben, Senden an ELSTER, Einstellungen, Zertifikat, Bankzugang und API-Tokens bleiben bei dir. Alles Weitere steht in [Zugang für die Steuerberatung](steuerberatung.md).
+
+## Einstellungen und Darstellung
+
+Die **Einstellungen** (unten links in der Navigation) sind in Bereiche geteilt: **Firma**, **Persönliche Angaben**, **Rechnungen** (Nummernkreis, Nummernformat, Vorlagen für den Zahlungsplan, Standardanhänge für Angebote, Kundennummern), **Beleggestaltung** (Farbe, Logo und Blatt, Briefpapier, Fußzeile, Layouts), **ELSTER** (Zertifikat, ERiC), **E-Mail** (Versand, Belege-Postfach), **Bank** (Kontoabruf, Google Play, App Store), **Sicherheit** (Passkeys, Zugänge), **Fremdwährung** (Umrechnungskurse), **KI-Assistenten und API** (MCP, [REST-API](api.md), Belegauslesung), **Eigene Seiten** ([eigene Werkzeuge im Menü](eigene-seiten.md)) und **Export** (Jahresarchiv, DATEV, Änderungsprotokoll prüfen, Backup). Links aus der App, etwa „Zertifikat hochladen“ in der Übersicht, führen direkt in den passenden Bereich; die Adresse lautet dann z. B. `/einstellungen?bereich=elster`. Darunter öffnet **Dokumentation** diese Seiten in einem neuen Tab.
+
+Ebenfalls unten links wählst du **Farbe** und **Modus**: Wald (Grün, Standard), Ozean, Pflaume oder Graphit, jeweils hell, dunkel oder **System**, das der Einstellung deines Geräts folgt. Die Wahl gilt für diesen Browser und wird dort gespeichert, nicht auf dem Server; auf einem anderen Gerät wählst du sie neu. Rechnungen und PDFs bleiben in jeder Farbe gleich.
+
+Darunter steht die **Version** von Haben, die auf dem Server läuft, verlinkt mit den Versionshinweisen auf GitHub. Nach einem Update siehst du dort, ob der neue Stand angekommen ist.
+
+## Als App installieren
+
+Haben lässt sich auf Handy und Rechner wie eine App installieren (Progressive Web App). Es öffnet sich dann in einem eigenen Fenster ohne Adressleiste und hat ein Symbol auf dem Startbildschirm bzw. im Startmenü.
+
+| Gerät | So geht es |
+| --- | --- |
+| Rechner mit Chrome, Edge oder Brave | Haben öffnen, in der Adressleiste auf das Symbol **Installieren** klicken oder im Menü „App installieren“ wählen |
+| Android | Haben in Chrome öffnen, im Menü **App installieren** bzw. „Zum Startbildschirm hinzufügen“ |
+| Mac mit Safari (ab macOS 14) | Haben in Safari öffnen, **Ablage › Zum Dock hinzufügen**; Haben liegt dann als eigenes Programm im Dock |
+| iPhone und iPad | Haben in Safari öffnen, **Teilen › Zum Home-Bildschirm** |
+
+Die installierte App bringt zwei Kurzbefehle mit, **Beleg hochladen** und **Neue Rechnung**: am Handy lange auf das Symbol drücken, am Rechner mit der rechten Maustaste. Unter Android steht Haben außerdem im **Teilen-Menü**: Ein PDF oder Foto aus einer anderen App teilst du direkt als Beleg ([Belege](belege.md)). Safari auf iPhone und iPad bietet das Teilen an Web-Apps nicht an; dort lädst du Belege in Haben hoch oder nimmst sie mit der Kamera auf.
+
+Die App ist dieselbe Seite wie im Browser und speichert nichts auf dem Gerät zwischen. Sie braucht also eine Verbindung zu deinem Server, und die Anmeldung mit Passkey gilt auch dort. Installieren lässt sich Haben nur über HTTPS, wie es die [Installation](installation.md) einrichtet.
+
+## Firmendaten
+
+Unter **Einstellungen › Firma** hinterlegst du die Angaben, die auf Rechnungen und in der Voranmeldung stehen. Fehlt etwas für ELSTER, zeigt das Formular oben „Für ELSTER fehlt noch: …“.
+
+| Feld | Wofür |
+| --- | --- |
+| Name | Absender auf Rechnungen, Datenlieferant in der Voranmeldung. Pflicht für beides. Steht auch oben in der Navigation unter „Haben“, damit du bei [mehreren Instanzen](installation.md#mehrere-instanzen) siehst, in welcher Firma du gerade bist: am Desktop in bis zu zwei Zeilen, am Handy in einer. Ist er länger als zwei Zeilen, klappt er am Desktop beim Überfahren der Marke nach unten ganz auf |
+| Art des Betriebs bzw. Gegenstand des Unternehmens | z. B. „Softwareentwicklung“; für die Anlage EÜR, bei GmbH und UG für die Gewerbesteuererklärung, siehe [Jahreserklärungen](jahreserklaerung.md) |
+| E-Mail | Absender auf Rechnungen. Pflicht zum Festschreiben einer Rechnung |
+| Straße und Hausnummer, PLZ, Ort | Anschrift auf Rechnungen und in der Voranmeldung. Pflicht für beides; die PLZ hat fünf Ziffern |
+| Bundesland | Nötig, um die Steuernummer ins ELSTER-Format umzurechnen. Pflicht für ELSTER. Bestimmt außerdem die Feiertage für die Fälligkeit von Rechnungen und Voranmeldungen |
+| Steuernummer | So eingeben, wie sie auf dem Bescheid steht (z. B. `21/815/08150`). Haben rechnet sie ins 13-stellige ELSTER-Format um; eine schon 13-stellige Nummer bleibt unverändert. Pflicht für ELSTER; für Rechnungen reicht Steuernummer oder USt-IdNr. |
+| USt-IdNr. | Auf Rechnungen und im E-Rechnungs-XML. Form `DE123456789` |
+| Finanzamt | Name des Finanzamts, steht auf der [Lohnsteuerbescheinigung](lohn.md#lohnsteuerbescheinigung). Das Empfänger-Finanzamt der Voranmeldung leitet Haben aus der Steuernummer ab |
+| Telefon | Auf der Rechnung; für XRechnung Pflicht |
+| Bank, IBAN, BIC | Zahlungsangaben auf der Rechnung. Die IBAN ist Pflicht zum Festschreiben; Eingabe ohne Leerzeichen, Haben entfernt sie aber auch selbst |
+| Kontoinhaber | Nur nötig, wenn das Konto nicht auf den Firmennamen läuft. Steht im GiroCode, in der Fußzeile und in der E-Rechnung (BT-85); leer = Firmenname. Höchstens 70 Zeichen, siehe [GiroCode](rechnungen-zahlung.md#girocode) |
+| Gläubiger-ID | Nur für [SEPA-Lastschriften](kontakte.md#sepa-lastschriftmandate) nötig. Die Bundesbank vergibt sie auf Antrag; 18 Stellen wie `DE98ZZZ09999999999`. Haben prüft die Prüfziffer nach EPC262-08 und speichert sie ohne Leerzeichen |
+| Rechtsform | Einzelunternehmen, GmbH oder UG (haftungsbeschränkt), siehe [unten](#rechtsform-einzelunternehmen-gmbh-oder-ug) |
+| Einkunftsart | Nur im Einzelunternehmen: selbständige Arbeit oder Gewerbebetrieb, für die Anlage EÜR, siehe [Jahreserklärungen](jahreserklaerung.md) |
+| Sitz, Registergericht, Registernummer | Nur GmbH und UG, Abschnitt **Handelsregister und Geschäftsführung**: wie im Registerauszug, etwa „Amtsgericht Bremen“ und „HRB 12345 HB“. Sie gehören in den Jahresabschluss (§ 264 Abs. 1a HGB), stehen auf der [Bilanz zur Hinterlegung](gmbh-abschluss.md#hinterlegung-beim-unternehmensregister-gmbh-und-ug) und auf jedem Geschäftsbrief (siehe [Pflichtangaben einer GmbH oder UG](rechnungen.md#pflichtangaben-einer-gmbh-oder-ug)). Sitz laut Gesellschaftsvertrag; leer = Ort der Anschrift |
+| Geschäftsführer | Nur GmbH und UG: alle Geschäftsführer, einer je Zeile, mit Familiennamen und mindestens einem ausgeschriebenen Vornamen, etwa „Erika Mustermann“ (§ 35a Abs. 1 GmbHG). Stehen im Fuß von Rechnung, Angebot, Mahnung und Lieferschein und unter E-Mails an Kunden |
+| Vorsitz des Aufsichtsrats | Nur, wenn die Gesellschaft einen Aufsichtsrat mit Vorsitz gebildet hat; sonst leer lassen |
+| Kontenrahmen | SKR03 oder SKR04, siehe unten |
+| Standard-Zahlungsziel in Tagen | Vorgabe für neue Rechnungen (0 bis 120 Tage) |
+| Skonto | Vorgabe für neue Rechnungen, bis zu drei Stufen aus Satz und Frist in Tagen, z. B. 2 % in 10 Tagen; am Kunden und in der Rechnung änderbar (siehe [Skonto](rechnungen-zahlung.md#skonto)) |
+| Standardformat für Rechnungen | ZUGFeRD (PDF mit eingebettetem XML), XRechnung (CII) oder XRechnung (UBL). Vorgabe für neue Rechnungen |
+| Standard-Einleitung für Rechnungen, für Angebote | Steht in neuen Rechnungen bzw. Angeboten als Einleitung über den Positionen, etwa eine Anrede oder „Für die erbrachten Leistungen berechne ich Ihnen:“. Im Beleg änderbar; bestehende Belege ändern sich nicht. Leer = keine Einleitung, höchstens 2000 Zeichen |
+| Versteuerung | Ist oder Soll, siehe unten |
+| Kleinunternehmer nach § 19 UStG | Haken setzen, wenn du die Kleinunternehmerregelung nutzt, siehe unten |
+
+Fehlt einer GmbH oder UG etwas davon, zeigt das Formular im Abschnitt **Handelsregister und Geschäftsführung** „Für Rechnungen und Geschäftsbriefe fehlt noch (§ 35a GmbHG): …“, etwa „Geschäftsführer fehlt“ oder bei „E. Mustermann“ den fehlenden ausgeschriebenen Vornamen.
+
+Die Umrechnung der Steuernummer prüft die Länge je Bundesland. Passt sie nicht, meldet Haben zum Beispiel „Steuernummer für Bayern muss 11 Ziffern haben“. Für Hessen setzt Haben die führende `0` der Finanzamtsnummer wie von ELSTER verlangt auf `6`.
+
+Mehr zu den Pflichtangaben auf Rechnungen steht in [Rechnungen](rechnungen.md).
+
+Unter dem Formular steht die Karte **Voranmeldung und EÜR aus dem Journal**. Sie zeigt das Stichjahr, ab dem Haben Voranmeldung und EÜR wie DATEV aus dem Journal rechnet, und ob das laufende Jahr noch aus Rechnungen, Belegen und Zahlungen rechnet. Liegt das Stichjahr nach dem laufenden Jahr, lässt es sich mit **Ab ‹Jahr› aus dem Journal** auf das laufende Jahr vorziehen, solange für das Jahr keine Voranmeldung gesendet ist und sich dadurch keine Zahl ändert; sonst nennt die Karte die Gründe. Zurück geht es nicht. Einzelheiten: [Wie die Kennzahlen entstehen](umsatzsteuer.md#wie-die-kennzahlen-entstehen).
+
+### Zeichen in der Navigation
+
+Unter **Einstellungen › Firma › Zeichen in der Navigation** wählst du, woran du die Firma oben links in der Navigation erkennst. Das hilft vor allem, wenn du [mehrere Firmen als eigene Instanzen](installation.md#mehrere-instanzen) führst.
+
+- **„H“ in der Farbe des Themes:** wie ab Werk.
+- **„H“ in eigener Farbe:** mit dem Farbfeld oder als Hex-Wert `#RRGGBB`. Die Schrift darauf ist weiß oder schwarz, je nachdem, was sich besser liest; so ist das „H“ in jeder Farbe lesbar (Kontrast mindestens 4,5 : 1 nach WCAG). Hebt sich eine sehr dunkle Farbe kaum von der Navigation ab, bekommt die Kachel eine feine helle Kante.
+- **Logo aus der Beleggestaltung:** statt des „H“ steht das [Logo](#logo) der Belege auf weißer Fläche, in einem Quadrat so groß wie das „H“. Am besten wirkt ein quadratisches Bildzeichen; ein breiter Schriftzug wird darin klein. Das geht nur, wenn ein Logo hochgeladen ist, und es ändert sich mit diesem Logo. Wird es entfernt, zeigt die Navigation wieder die eigene Farbe bzw. das „H“ des Themes.
+
+Das Zeichen gilt für alle Zugänge der Instanz, auch für die [Steuerberatung](steuerberatung.md), und hängt nicht an der Beleggestaltung: Ändern sich [Akzentfarbe](#akzentfarbe), Layout oder Logo-Einstellungen der Belege, bleibt die eigene Farbe, und Firmen mit gleich aussehenden Belegen haben trotzdem verschiedene Zeichen. Das Theme (Hell, Dunkel, Farbe der Oberfläche) wählt dagegen jeder Zugang für sich. Die Änderung steht im Änderungsprotokoll.
+
+### Logo
+
+Unter **Einstellungen › Beleggestaltung › Logo und Blatt** oder über das Zahnrad in der [Vorschau](rechnungen.md#vorschau) lädst du dein Logo hoch, als PNG (gern mit transparentem Hintergrund) oder JPEG bis 1 MB.
+
+- Es steht oben im Briefkopf von Rechnungen, Angeboten und Mahnungen, ohne Verzerrung; Größe und Seite stellst du unter [Logo und Blatt](#logo-und-blatt) ein. Es wird sofort gespeichert; **Entfernen** fragt vorher nach.
+- Die Vorschau im Rechnungs- und Angebotseditor zeigt es ebenfalls.
+- Es gilt für alles, was ab dann festgeschrieben wird; schon festgeschriebene PDFs bleiben unverändert.
+- Im Änderungsprotokoll steht, wann sich das Logo geändert hat, mit SHA-256, aber ohne die Bilddaten.
+
+### Akzentfarbe
+
+Unter **Einstellungen › Beleggestaltung › Akzentfarbe** stellst du die Farbe der Spaltenköpfe und Linien ein, etwa passend zu deinem Logo. Ab Werk ist es das Grün `#1F6F5C`.
+
+- Text, Adressen, Beschriftungen, Positionen, dünne Linien und Fußzeile stehen in Grautönen, die Haben aus der Akzentfarbe ableitet: gleiche Helligkeit wie ab Werk, aber mit ihrem Farbton. Bei Blau sind sie leicht bläulich, bei einer grauen Akzentfarbe neutral grau; mit dem Standardgrün bleibt alles wie bisher.
+- Du wählst sie mit dem Farbfeld oder trägst sie als Hex-Wert in der Form `#RRGGBB` ein; **Auf Standard zurücksetzen** stellt das Grün wieder her.
+- Sie gilt für Rechnungen und Angebote, die ab dann festgeschrieben werden, und für die Vorschau im Editor; schon festgeschriebene PDFs bleiben unverändert.
+- Eine Mahnung, Auftragsbestätigung oder ein Lieferschein zu einem älteren Beleg entsteht neu und bekommt deshalb die dann aktuelle Farbe und das aktuelle Logo.
+- Ist die Farbe auf weißem Papier schwer zu lesen (Kontrast unter 4,5 : 1 nach WCAG), weist Haben darauf hin. Speichern geht trotzdem; eine dunklere Variante des Logo-Farbtons liest sich besser.
+- Die Änderung steht im Änderungsprotokoll.
+
+### Logo und Blatt
+
+Unter **Einstellungen › Beleggestaltung › Logo und Blatt** oder über das Zahnrad in der [Vorschau](rechnungen.md#vorschau) legst du fest, wie das Blatt aussieht. Es gilt für alles, was ab dann erzeugt wird, auch für Mahnung, Auftragsbestätigung und Lieferschein zu älteren Belegen; schon festgeschriebene PDFs bleiben unverändert.
+
+| Einstellung | Bedeutung |
+| --- | --- |
+| Schrift | IBM Plex Sans (ab Werk), IBM Plex Serif, Source Sans 3, Figtree, Fira Sans, Inter, Libre Franklin, Literata, Lora oder Nunito Sans; im PDF eingebettet, wie PDF/A es verlangt |
+| Logo S, M, L | Höchstens 12 × 40 mm, 18 × 60 mm (ab Werk) oder 24 × 80 mm; auch L endet über dem Anschriftfeld |
+| Logo links, rechts | Seite im Briefkopf |
+| Falz- und Lochmarken | Striche am linken Rand für den Fensterumschlag nach DIN 5008 |
+| GiroCode | QR-Code für die Überweisung, auf Rechnung und Mahnung |
+| Kundennummer | Nur auf dem Blatt; das XML der E-Rechnung nennt sie weiter |
+| Artikelnummer | Spalte „Art.-Nr.“, sobald eine Position eine Nummer hat; nur auf dem Blatt, das XML der E-Rechnung nennt sie weiter |
+| Spalte USt je Position | Entfällt nur, wenn alle Positionen denselben Steuersatz haben; bei mehreren Sätzen bleibt sie stehen |
+
+Pflichtangaben und Summen lassen sich hier nicht ausblenden; zur Fußzeile auf dem Briefpapier siehe [Briefpapier](#briefpapier).
+
+### Briefpapier
+
+Unter **Einstellungen › Beleggestaltung › Briefpapier** legst du ein Bild hinter den Beleg, etwa deinen gedruckten Briefbogen als Scan.
+
+- Es geht PNG, JPEG oder PDF bis 2 MB, am besten im Format A4 hochkant mit mindestens 1240 × 1754 Pixeln. Ein abweichendes Seitenverhältnis wird beschnitten, damit die Seite voll bedeckt ist.
+- Von einem PDF nimmt Haben die erste Seite und wandelt sie mit 200 dpi in ein Bild um, denn die Belege sind PDF/A-3 und können kein PDF einbetten. Beschädigte Dateien und Bilder im Farbraum CMYK lehnt Haben ab, weil sich aus ihnen kein PDF/A erzeugen lässt; speichere sie als RGB.
+- **Erste Seite** (ab Werk) oder **Alle Seiten** legt fest, wo es erscheint. Die Vorschau zeigt es genauso, auf jeder Seite des Belegs.
+- Logo und Falzmarken liegen über dem Bild. Hat dein Briefbogen schon ein Logo, entferne das hochgeladene.
+- Trägt dein Briefbogen auch den Fuß, schalte **Fußzeile steht auf dem Briefpapier** ein. Haben fragt nach, denn dann druckt es nur noch die Seitenzahl: Steuernummer oder USt-IdNr. muss auf dem Briefpapier stehen (§ 14 Abs. 4 Nr. 2 UStG), bei Reverse Charge und innergemeinschaftlicher Lieferung die USt-IdNr. (§ 14a UStG), bei GmbH und UG auch die Angaben nach § 35a GmbHG. Prüfen kann Haben das im Bild nicht. Entfernst du das Briefpapier (nach einer Rückfrage), druckt Haben die Fußzeile wieder.
+- Jedes neu erzeugte PDF enthält das Bild, schon festgeschriebene PDFs bleiben unverändert. Im Änderungsprotokoll steht, wann es sich geändert hat, mit SHA-256, aber ohne die Bilddaten.
+
+### Fußzeile
+
+Unter **Einstellungen › Beleggestaltung › Fußzeile** schaltest du von der automatischen Fußzeile auf eigene Spalten um. Ab Werk setzt Haben sie aus den Firmendaten zusammen: Kontakt, Bank, Steuernummern.
+
+- Du wählst zwei bis vier Spalten mit je höchstens fünf Zeilen und schreibst freien Text mit Platzhaltern: `{firma}`, `{strasse}`, `{plz}`, `{ort}`, `{email}`, `{telefon}`, `{bank}`, `{kontoinhaber}`, `{iban}`, `{bic}`, `{steuernummer}`, `{ustid}`. Unten in der Karte siehst du, wie sie auf dem Blatt steht.
+- Text lässt sich auszeichnen wie in den Belegtexten: markieren und **F**, **K** oder **U** wählen, oder die Zeichen tippen (`*fett*`, `_kursiv_`, `__unterstrichen__`). Das gilt für deinen Text, auch um Platzhalter herum; Zeichen aus den Firmendaten bleiben wörtlich.
+- Fehlt der Wert zu einem Platzhalter, entfällt die ganze Zeile: Ohne Telefonnummer erscheint keine Zeile „Telefon“.
+- Steuernummer oder USt-IdNr. muss auf der Rechnung stehen (§ 14 Abs. 4 Nr. 2 UStG). Haben speichert die Fußzeile nur, wenn `{steuernummer}` oder `{ustid}` vorkommt. Die Pflichtangaben einer GmbH oder UG stehen weiter darunter.
+- Hat deine Firma die genannte Nummer nicht, setzt Haben die vorhandene ans Ende der letzten Spalte. Bei Reverse Charge und innergemeinschaftlicher Lieferung steht die USt-IdNr. immer auf der Rechnung (§ 14a UStG).
+- Bricht eine Zeile um oder sind die Spalten hoch, wächst der untere Rand mit; es steht dann weniger Inhalt auf der Seite.
+- Dein Text wird nicht übersetzt: Auf englischen Belegen steht er so, wie du ihn schreibst.
+- Sie gilt wie die übrige Gestaltung für alles, was ab dann erzeugt wird.
+
+### Layouts
+
+Unter **Einstellungen › Beleggestaltung › Layouts** wählst du je Belegart ein Layout: das eingebaute „Klassisch“ oder ein eigenes, das du hochgeladen hast. Wie man ein Layout schreibt, was Haben beim Hochladen prüft und wie Pakete freigegeben werden, steht unter [Eigene Belegvorlagen](belegvorlagen.md).
+
+Verwendet ein eigenes Layout eine Einstellung der Gestaltung nicht, etwa den GiroCode oder die Falz- und Lochmarken, steht darunter ein Hinweis mit dem Namen des Layouts. Wirkt die Einstellung auf keinen Beleg mehr, ist sie aus; siehe [Einstellungen, die das Layout nicht verwendet](belegvorlagen.md#hochladen-und-zuordnen).
+
+## Persönliche Angaben
+
+Unter **Einstellungen › Persönliche Angaben** stehen die Angaben zu dir als Person, die ELSTER für manche Vorgänge braucht: Anrede, steuerliche Identifikationsnummer (Steuer-ID), Vor- und Nachname, Geburtsdatum, Religion und ausgeübter Beruf. Bei der Zusammenveranlagung kommen das Heiratsdatum und dieselben Angaben zum Ehegatten dazu.
+
+Gebraucht werden sie für [Bankverbindung ändern](finanzamt.md#bankverbindung-ändern) und die Einkommensteuererklärung. Bei GmbH und UG fehlen Veranlagung und Ehegatte; die Angaben zur Person braucht ELSTER dort für Nachrichten, Postfach und Bankverbindung. Haben prüft die Prüfziffer der Steuer-ID. Die Religion bestimmt, ob Kirchensteuer anfällt; Haben nutzt die Religionsschlüssel von ELSTER. Änderungen landen wie die Firmendaten im Audit-Log.
+
+## Rechtsform: Einzelunternehmen, GmbH oder UG
+
+Die Rechtsform bestimmt, wohin Geld zwischen dem Unternehmen und dir gebucht wird und welche Erklärungen Haben anbietet.
+
+| | Einzelunternehmen | GmbH, UG (haftungsbeschränkt) |
+| --- | --- | --- |
+| Geld vom und an den Inhaber | Privateinlage und Privatentnahme | Gesellschafter-Verrechnungskonto: SKR03 0730, SKR04 3510 „Verbindlichkeiten gegenüber Gesellschaftern“, für beide Richtungen |
+| Beleg aus eigenem Geld bezahlt | „Privat bezahlt (Privateinlage)“ | „Vom Gesellschafter ausgelegt (Verrechnungskonto)“ |
+| Bank ohne Rechnung oder Beleg | „Privat (Entnahme oder Einlage)“ | „Gesellschafter (Verrechnungskonto)“ |
+| Kasse | „Einlage“ und „Entnahme“ | „Vom Gesellschafter“ und „An den Gesellschafter“ |
+| Privatanteile, Kfz-Privatnutzung, [Pauschalen](pauschalen.md) | ja | nein |
+| Anlage EÜR, Einkommensteuer, [Belege von ELSTER](jahreserklaerung.md#belege-von-elster), [Herabsetzung der Einkommensteuer-Vorauszahlungen](finanzamt.md#vorauszahlungen-herabsetzen) | ja | nein |
+| [Gesellschafter-Geschäftsführer](lohn.md#was-haben-abrechnet) im Lohn | nein | ja |
+| Voranmeldung, Umsatzsteuererklärung, DATEV-Export | ja | ja |
+| [Manuelle und freie Buchungen](buchhaltung.md#manuelle-und-freie-buchungen) | ab dem Stichjahr | ja |
+| [Saldenvortrag, Eröffnungsbuchung](gmbh-abschluss.md#saldenvortrag-und-eröffnung-gmbh-und-ug) | nein, jedes Jahr beginnt bei null | ja |
+| [Jahresabschluss](gmbh-abschluss.md#jahresabschluss-gmbh-und-ug): Bilanz und GuV (Entwurf), Jahr abschließen | nein | ja |
+| [Körperschaft- und Gewerbesteuer](gmbh-abschluss.md#körperschaft--und-gewerbesteuer-gmbh-und-ug) rechnen, Rückstellungen buchen | nein | ja |
+| [Körperschaft- und Gewerbesteuererklärung](jahreserklaerung.md#körperschaft--und-gewerbesteuererklärung-gmbh-und-ug) an das Finanzamt | nein | ja |
+| [E-Bilanz](gmbh-abschluss.md#e-bilanz-gmbh-und-ug) an das Finanzamt | nein | ja |
+| [Gewinnausschüttung](gmbh-abschluss.md#gewinnausschüttung-gmbh-und-ug) mit Kapitalertragsteuer-Anmeldung | nein | ja |
+
+Eine Kapitalgesellschaft hat kein Privat. Was der Gesellschafter für sie auslegt oder von ihr bekommt, ist eine Verbindlichkeit bzw. Forderung ihm gegenüber; das Verrechnungskonto zeigt den Stand. Ein Privatanteil wäre bei einer GmbH Arbeitslohn oder eine verdeckte Gewinnausschüttung, die Privatnutzung eines Firmenwagens ein Sachbezug in der Lohnabrechnung. Beides bucht Haben deshalb nicht; die Pauschalen ersetzen Ausgaben eines Einzelunternehmers. Erstattet die GmbH dir Reisekosten, lädst du die Abrechnung als Beleg hoch und wählst „Vom Gesellschafter ausgelegt“.
+
+Bilanz und GuV zeigt Haben als Entwurf für die Steuerberatung, rechnet Körperschaft- und Gewerbesteuer samt Rückstellungen und sendet die [E-Bilanz](gmbh-abschluss.md#e-bilanz-gmbh-und-ug) und die [Erklärungen](jahreserklaerung.md#körperschaft--und-gewerbesteuererklärung-gmbh-und-ug) für eine GmbH ohne Beteiligungen, Organschaft und Ausschüttungen. Die laufende Buchhaltung mit Rechnungen, Belegen, Bank und Umsatzsteuer machst du in Haben und gibst den [DATEV-Export](auswertungen.md) an die Steuerberatung. Der Weg zum Abschluss steht in [Issue #213](https://github.com/firsttris/haben/issues/213).
+
+Den Ablauf eines Jahres für eine GmbH oder UG zeigt [GmbH und UG](gmbh.md).
+
+> [!WARNING]
+> **Nur das Kalenderjahr als Wirtschaftsjahr:** Haben rechnet jedes Geschäftsjahr vom 1. Januar bis 31. Dezember. Ein abweichendes Wirtschaftsjahr unterstützt Haben nicht. Das betrifft eine GmbH, UG oder einen im Handelsregister eingetragenen Gewerbetreibenden, die mit dem Finanzamt einen anderen Abschlussstichtag vereinbart haben (§ 4a Abs. 1 Satz 2 Nr. 2 EStG, § 7 Abs. 4 KStG), und das Wirtschaftsjahr von Land- und Forstwirten (Nr. 1). In diesen Fällen wären [Jahresabschluss](gmbh-abschluss.md#jahresabschluss-gmbh-und-ug), [Hinterlegung](gmbh-abschluss.md#hinterlegung-beim-unternehmensregister-gmbh-und-ug), [E-Bilanz](gmbh-abschluss.md#e-bilanz-gmbh-und-ug), Körperschaft- und Gewerbesteuer und der [DATEV-Export](auswertungen.md) falsch. Freiberufler und nicht eingetragene Gewerbetreibende rechnen ohnehin im Kalenderjahr (§ 4a Abs. 1 Satz 1 und Satz 2 Nr. 3 EStG). Für die Umsatzsteuer gilt immer das Kalenderjahr (§ 16 Abs. 1 Satz 2 UStG).
+
+Die Rechtsform lässt sich nur vor der ersten Buchung festlegen. Bei neuen Anzahlungsanforderungen im Bilanzverfahren von GmbH und UG bindet bereits das Festschreiben die Rechtsform, auch ohne Zahlung oder Journalbuchung. Danach sperren App und Datenbank die Änderung, auch über Jahre hinweg: Privatkonten und Gesellschafter-Verrechnungskonto gehören nicht in dieselben Bücher, und eine neue Rechtsform ist ein neues Unternehmen mit eigener Buchhaltung.
+
+> [!IMPORTANT]
+> Das Gesellschafter-Verrechnungskonto ist das Sammelkonto „Verbindlichkeiten gegenüber Gesellschaftern“ aus dem DATEV-Kontenrahmen. Im Abschluss steht sein Saldo je nach Seite unter den Verbindlichkeiten oder Forderungen, jeweils mit dem Vermerk „gegenüber Gesellschaftern“ (§ 42 Abs. 3 GmbHG); welcher Teil länger als ein Jahr läuft, bestätigst du beim [Jahresabschluss](gmbh-abschluss.md#vermerke-unter-der-bilanz). Stimme die Konten vor dem Echtbetrieb mit der Steuerberatung ab.
+
+## Versteuerung: Ist oder Soll
+
+Die Einstellung bestimmt, wann die Umsatzsteuer aus deinen Rechnungen in der Voranmeldung landet.
+
+| | Ist (nach vereinnahmten Entgelten) | Soll (nach vereinbarten Entgelten) |
+| --- | --- | --- |
+| Buchung beim Festschreiben | Forderung an Erlöse und „Umsatzsteuer nicht fällig“ | Forderung an Erlöse und Umsatzsteuer |
+| Umsatzsteuer in der Voranmeldung | im Monat des zugeordneten Zahlungseingangs, bei Teilzahlungen anteilig | im Monat des Rechnungsdatums |
+| Zahlungseingang im Bankabgleich | bucht den Steueranteil von „nicht fällig“ auf „Umsatzsteuer“ um | nur Bank an Forderungen |
+
+Die Vorsteuer aus Belegen zählt in beiden Fällen nach Belegdatum. Bei Ist-Versteuerung ist der Bankabgleich deshalb Pflicht: Ein nicht zugeordneter Zahlungseingang fehlt sonst in der Voranmeldung, und die Vorprüfung warnt davor.
+
+Die Einstellung wirkt auf alles, was danach gebucht wird. Bereits festgeschriebene Rechnungen behalten ihre Buchung. Umstellen lässt sie sich nur, solange es im laufenden Jahr keine Buchungen und keine offenen Rechnungen gibt (siehe [unten](#wann-sich-die-einstellungen-ändern-lassen)). Ob du Ist-Versteuerung nutzen darfst, entscheidet das Finanzamt; das klärst du mit deiner Steuerberatung. Details zur Berechnung stehen in [Umsatzsteuer](umsatzsteuer.md).
+
+## Kontenrahmen: SKR03 oder SKR04
+
+Der Kontenrahmen legt fest, auf welche Kontonummern Haben bucht. Wähle denselben wie in Lexoffice oder bei deiner Steuerberatung. Er wirkt auf alle Buchungen (Rechnungen, Belege, Zahlungen) und auf die Kontonamen im Journal. Jede Buchung speichert den Kontenrahmen, mit dem sie erstellt wurde; ein späterer Wechsel ändert bestehende Buchungen nicht. Wechseln kannst du nur zum Jahresbeginn, bevor im neuen Jahr gebucht wird. Bei GmbH und UG ist der Kontenrahmen ab der ersten Buchung fest, in App und Datenbank (`0101_kontenrahmen_kapg.sql`): Die Bestandskonten tragen ihre Salden vor, und im neuen Kontenrahmen kämen die Vorträge nicht an. Einen Wechsel stellt die Steuerberatung mit einer neuen Eröffnungsbilanz um.
+
+Einige Beispiele:
+
+| Konto | SKR03 | SKR04 |
+| --- | --- | --- |
+| Forderungen | 1400 | 1200 |
+| Erlöse 19 % | 8400 | 4400 |
+| Umsatzsteuer nicht fällig 19 % | 1766 | 3816 |
+| Vorsteuer 19 % | 1576 | 1406 |
+| Verbindlichkeiten | 1600 | 3300 |
+| Bank (alle Bankkonten) | 1200 | 1800 |
+
+Die vollständige Zuordnung, auch die Aufwandskonten der Belegkategorien, steht in `packages/core/src/posting.ts` und ist in [Buchhaltung](buchhaltung.md) beschrieben.
+
+> [!NOTE]
+> Der Code selbst merkt an, dass die Kontenzuordnung vor dem Echtbetrieb mit der Steuerberatung abgeglichen werden sollte. Das gilt besonders für die Aufwandskonten der Belegkategorien.
+
+## Kleinunternehmer
+
+Nutzt du die Kleinunternehmerregelung nach § 19 UStG, setzt du unter **Einstellungen › Firma** den Haken **Kleinunternehmer nach § 19 UStG**. Dann gilt:
+
+| Bereich | Wirkung |
+| --- | --- |
+| Rechnungen | Neue Rechnungen bekommen „Kleinunternehmer nach § 19 UStG“, alle Positionen 0 %, mit dem Hinweis „Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.“ Die Auswahl im Editor ist gesperrt. Eine regulär besteuerte Rechnung lässt sich nicht festschreiben. Siehe [Rechnungen](rechnungen.md#umsatzsteuer-auf-der-rechnung). |
+| Belege | Gebucht ohne Vorsteuerabzug: der Bruttobetrag geht auf das Aufwandskonto. Siehe [Belege](belege.md#als-kleinunternehmer). |
+| Voranmeldung | Die Seite weist darauf hin, dass du in der Regel keine Voranmeldung abgibst. Nötig ist sie nur, wenn du selbst Steuer schuldest, etwa für Leistungen ausländischer Unternehmer an dich (Reverse Charge). |
+| Übersicht | Die Aufgaben „Voranmeldung senden“, zum ELSTER-Zertifikat und zu den Firmendaten für ELSTER entfallen. |
+| EÜR | Die Einnahmen stehen in der Zeile „Betriebseinnahmen als umsatzsteuerlicher Kleinunternehmer“. |
+
+Überschreitest du die Umsatzgrenze, nimmst du den Haken heraus; ab dann gilt die Regelbesteuerung. Ausschalten geht jederzeit, auch mitten im Jahr. Eine Kleinunternehmer-Rechnung lässt sich danach nicht mehr festschreiben. Belege, die vorher ohne Vorsteuerabzug gebucht wurden, bleiben so.
+
+## Mahnwesen
+
+| Feld | Bedeutung |
+|---|---|
+| Basiszinssatz in % | Grundlage der Verzugszinsen. Er ändert sich zum 1. Januar und 1. Juli und wird von der Deutschen Bundesbank veröffentlicht. **Bei der Bundesbank abrufen** fragt den aktuellen Satz im [SDMX-Webservice der Bundesbank](https://statistiken.bundesbank.de/statistiken-de/hilfe-970224?article=bundesbank-sdmx-web-service-api-991208) ab (Zeitreihe BBIN1.M.DE.BBK.BBKBAS2.EUR.ME) und trägt ihn ins Feld ein; er gilt erst nach dem Speichern. Steht der neue Satz Anfang Januar oder Juli noch nicht in der Zeitreihe, sagt Haben das; dann später erneut abrufen oder von Hand eintragen. Leer heißt: keine Verzugszinsen. |
+| Basiszinssatz automatisch abrufen | Aus, bis du den Haken setzt. Dann fragt Haben die Bundesbank nach dem 1. Januar und 1. Juli einmal am Tag, bis der Satz des neuen Halbjahrs in der Zeitreihe steht, und trägt ihn ein; dazwischen fragt Haben nicht, weil sich der Satz nur zu diesen Terminen ändert (§ 247 Abs. 1 BGB). Änderst du den Satz von Hand, prüft der nächste Lauf ihn einmal gegen die Bundesbank und ersetzt ihn durch den veröffentlichten Wert. |
+| Zahlungsfrist in Mahnungen | Tage ab dem Mahndatum, Vorgabe 10 |
+| Gebühr je Stufe | Vorschlag für Zahlungserinnerung, 1. Mahnung und letzte Mahnung, z. B. 0 €, 5 €, 10 € |
+
+Mehr unter [Rechnungen › Mahnwesen](rechnungen-zahlung.md#mahnwesen).
+
+## Privatanteile
+
+Nur im Einzelunternehmen; bei GmbH und UG fehlt der Abschnitt. Unter **Privatanteil Telefon in %** und **Privatanteil Internet in %** legst du fest, welcher Anteil dieser Rechnungen privat ist, z. B. 20 %. Neue Belege der Kategorien übernehmen den Wert; am einzelnen Beleg lässt er sich ändern. Mehr unter [Belege](belege.md#privatanteil).
+
+## Fremdwährung
+
+Rechnest du Belege oder Rechnungen in US-Dollar, Pfund oder einer anderen Währung ab, braucht Haben die Umsatzsteuer-Umrechnungskurse (§ 16 Abs. 6 UStG). Das Bundesministerium der Finanzen veröffentlicht sie monatlich im Datenportal als CSV (Datenlizenz Deutschland – Namensnennung 2.0). Haben ruft sie von selbst ab, sobald du Fremdwährung nutzt: höchstens einmal am Tag und nur, solange die Kurse des Vormonats fehlen. Belege und Rechnungsentwürfe, die auf einen Kurs warten, rechnet es danach um.
+
+Unter **Einstellungen → Fremdwährung** siehst du die gespeicherten Kurse und kannst
+
+- die Kurse sofort abrufen (**Kurse jetzt abrufen**),
+- die CSV-Datei des BMF selbst hochladen, wenn der Server das Internet nicht erreicht,
+- einen Kurs von Hand eintragen, etwa vorläufig für einen Monat, den das BMF noch nicht veröffentlicht hat. Veröffentlicht das BMF den Monat, ersetzt der amtliche Kurs deinen.
+
+Jede Änderung eines Kurses steht im Audit-Log. Gebuchte Belege und festgeschriebene Rechnungen speichern ihren Kurs selbst und ändern sich nicht mehr.
+
+Hat dir das Finanzamt erlaubt, mit dem Tageskurs umzurechnen (§ 16 Abs. 6 Satz 3 UStG), schaltest du in den Firmendaten unter **Fremdwährung** den **Tageskurs** ein. An Beleg und Rechnung trägst du dann Kurs und Kursdatum ein.
+
+## Wann sich die Einstellungen ändern lassen
+
+Kontenrahmen, Versteuerung und Kleinunternehmerstatus gelten für ein ganzes Geschäftsjahr. Haben sperrt deshalb die Umstellung, sobald es im laufenden Kalenderjahr eine Buchung gibt. Das Auswahlfeld ist dann ausgegraut, und darunter steht der Grund. Auch der Server lehnt eine solche Änderung ab, für jeden Zugang, und die Datenbank prüft den Kern der Regel (im laufenden Jahr gebucht) noch einmal selbst.
+
+| Einstellung | Gesperrt, wenn |
+| --- | --- |
+| Kontenrahmen | im laufenden Jahr gebucht wurde |
+| Versteuerung (Ist oder Soll) | im laufenden Jahr gebucht wurde oder Rechnungen noch offen sind; ihre Umsatzsteuer würde sonst doppelt oder gar nicht angemeldet |
+| Kleinunternehmer einschalten | im laufenden Jahr gebucht wurde |
+| Kleinunternehmer ausschalten | nie |
+| Rechtsform | überhaupt schon gebucht wurde oder eine neue Anzahlungsanforderung im Bilanzverfahren festgeschrieben ist |
+
+Umstellen kannst du also nur zum Jahreswechsel, bevor im neuen Jahr die erste Buchung entsteht. Das Vorjahr rechnet danach weiter nach der alten Versteuerung, auch die Umsatzsteuererklärung dafür. Ebenso beim Kleinunternehmerstatus: Wer zum 1. Januar Kleinunternehmer wird, sieht die Voranmeldung für Dezember und die Umsatzsteuererklärung des Vorjahres weiter als Frist und kann sie abgeben; maßgeblich ist der Stand im jeweiligen Monat bzw. Jahr laut Änderungsprotokoll.
+
+Der erste gespeicherte Kleinunternehmerstatus gilt auch für die Zeit vor der Einrichtung. Andere Einstellungen ändern diesen Stand nicht. Wer die Vorgaben vorher schon für Buchungen, festgeschriebene Belege oder gesendete Anmeldungen verwendet hat, behält den damaligen Stand; bewusst gespeicherte Regelbesteuerung und spätere Wechsel bleiben erhalten.
+
+Ins Vorjahr buchen geht nach einem Wechsel nur noch, wo es nicht von der Einstellung abhängt:
+
+- **Kontenrahmen:** In ein Jahr, das im alten Kontenrahmen gebucht ist, bucht Haben nichts mehr, auch keine Gegenbuchung beim Aufheben einer Zuordnung. Ordne Zahlungen des Vorjahres also vor dem Wechsel richtig zu.
+- **Versteuerung:** Eine Rechnung mit Datum im Vorjahr lässt sich nicht mehr festschreiben; ihre Umsatzsteuer stünde sonst doppelt (Soll → Ist) oder gar nicht (Ist → Soll) in den Voranmeldungen. Schreibe Entwürfe des Vorjahres vor dem Wechsel fest oder gib ihnen ein Datum im neuen Jahr.
+
+Kläre einen Wechsel vorher mit deiner Steuerberatung.
+
+Lehnt die Datenbank eine Umstellung ab, weil gleichzeitig gebucht wurde, siehst du ihre Begründung statt „Interner Fehler“.
+
+## Rechnungsnummern
+
+Rechnungsnummern haben ab Werk die Form `JAHR-NNN`, zum Beispiel `2026-034`; das Format lässt sich ändern (siehe unten). Der Zähler beginnt ab Werk jedes Jahr bei 1 oder läuft auf Wunsch weiter (siehe [Zähler](#zähler)); das Jahr kommt aus dem Rechnungsdatum. Eine Nummer vergibt Haben erst beim Festschreiben, in derselben Transaktion wie PDF, XML und Buchung. Schlägt dabei etwas fehl, wird keine Nummer verbraucht. Entwürfe haben noch keine Nummer, deshalb entstehen keine Lücken.
+
+Lückenlos und fortlaufend sollen die Nummern sein, damit das Finanzamt bei einer Prüfung sieht, dass keine Rechnung fehlt.
+
+Unter **Einstellungen › Rechnungen › Rechnungsnummern** siehst du die nächste Nummer des laufenden Jahres, bei durchlaufendem Zähler die nächste überhaupt; **Angebotsnummern** darunter dasselbe für Angebote. Kommst du aus Lexoffice oder sevDesk, trägst du dort die nächste laufende Nummer ein (z. B. `35`, wenn die letzte Rechnung `2026-034` war). Der Wert muss größer sein als die zuletzt vergebene Nummer; zurücksetzen geht nicht. Die letzte Lexoffice-Nummer zeigt dir auch der Abgleich in [Umzug aus Lexoffice](lexoffice.md).
+
+### Nummernformat
+
+Unter **Einstellungen › Rechnungen › Nummernformat** legst du fest, wie Rechnungs- und Angebotsnummern aufgebaut sind, etwa mit eigenem Präfix. Ab Werk sind es `{JJJJ}-{NNN}` (`2026-034`) und `AN-{JJJJ}-{NNN}` (`AN-2026-007`).
+
+| Platzhalter | Wird zu |
+| --- | --- |
+| `{JJJJ}` | Jahr des Rechnungs- bzw. Angebotsdatums, z. B. `2026` |
+| `{JJ}` | dasselbe zweistellig, z. B. `26` |
+| `{MM}` | Monat des Rechnungs- bzw. Angebotsdatums zweistellig, z. B. `10` |
+| `{N}` bis `{NNNNNN}` | laufende Nummer mit mindestens so vielen Stellen, vorne mit Nullen aufgefüllt; mehr Stellen werden nie abgeschnitten |
+
+Beispiele: `RE-{JJJJ}-{NNNN}` ergibt `RE-2026-0034`, `R{JJ}{NNN}` ergibt `R26034`, `RE-{JJJJ}-{MM}-{NNNN}` ergibt `RE-2026-10-0034`.
+
+- Jahr und Monat kommen aus dem Rechnungs- bzw. Angebotsdatum, nicht aus dem Tag des Festschreibens: Eine Rechnung vom 31. Oktober, die du am 2. November festschreibst, heißt `RE-2026-10-…`. Die Überschrift im Editor zeigt die voraussichtliche Nummer schon so.
+- Die laufende Nummer muss genau einmal vorkommen. Beginnt der Zähler jedes Jahr neu, gehört auch das Jahr dazu, erst damit bleibt jede Nummer eindeutig (§ 14 Abs. 4 Nr. 4 UStG); der Monat allein reicht nicht.
+- Außerhalb der Platzhalter gehen Buchstaben, Ziffern, Bindestrich, Unterstrich und Punkt, insgesamt höchstens 30 Zeichen. Leerzeichen und Schrägstrich gehen nicht, weil die Nummer auch im Dateinamen und im Verwendungszweck steht.
+- Unter dem Feld steht ein Beispiel oder, was am Format nicht passt.
+
+#### Zähler
+
+Neben jedem Format wählst du für Rechnungen und Angebote getrennt, wie der Zähler läuft:
+
+| Zähler | Verhalten |
+| --- | --- |
+| beginnt jedes Jahr neu (ab Werk) | Im Januar wieder bei 1: `RE-2026-0412`, dann `RE-2027-0001`. Das Jahr muss im Format stehen. |
+| läuft weiter | Über den Jahreswechsel hinweg: `RE-2026-12-0412`, dann `RE-2027-01-0413`. Das Jahr im Format ist frei, `RE-{NNNN}` geht auch. |
+
+Beides ist zulässig; eine Rechnungsnummer muss nur einmalig sein (UStAE 14.5 Abs. 10). Schaltest du auf **läuft weiter**, zählt Haben hinter der letzten Nummer des jüngsten Jahres weiter; die nächste Nummer kannst du danach unter **Rechnungsnummern** bzw. **Angebotsnummern** setzen, etwa auf die nächste aus sevDesk. Zurück auf **beginnt jedes Jahr neu** geht nur mit dem Jahr im Format; der Zähler des Jahres steht dann, wo er vor dem Umschalten stand. Ergibt das eine schon vergebene Nummer, meldet Haben sie wie bei einem Formatwechsel (unten). Storno und Korrektur zählen im selben Kreis wie Rechnungen.
+- Das Format gilt für alles, was ab dann festgeschrieben wird; schon vergebene Nummern bleiben, wie sie sind. Der Zähler läuft beim Wechsel weiter.
+- Ergibt das neue Format eine Nummer, die es schon gibt, schreibt Haben nicht fest, sondern meldet „Die Nummer … ist schon vergeben“; der Zähler bleibt stehen. Das passiert nur bei sehr ähnlichen Formaten.
+- Der Bankabgleich findet die Nummer im Verwendungszweck in jedem Format.
+- Die Änderung steht wie die übrigen Firmendaten im Änderungsprotokoll.
+
+### Vorlagen für den Zahlungsplan
+
+Unter **Einstellungen › Rechnungen › Vorlagen für den Zahlungsplan** legst du Zahlungspläne an, die du in Angeboten oft brauchst. Ab Werk gibt es **30/40/30** (Anzahlung 30 % bei Auftragserteilung, Abschlag 40 % bei Lieferung, Rest mit der Schlussrechnung bei Abnahme) und **50/50**.
+
+- Jede Vorlage hat einen Namen und Zahlungen mit Bezeichnung, Anteil (Prozent oder fester Betrag) und Fälligkeit als Text. Die letzte Zahlung ist immer der Rest.
+- Im Angebot übernimmt **Vorlage übernehmen** eine Kopie; du passt sie dort an. Spätere Änderungen an der Vorlage ändern kein Angebot.
+- Die Änderung steht wie die übrigen Firmendaten im Änderungsprotokoll.
+
+Wie der Plan im Angebot wirkt, steht unter [Zahlungsplan](angebote.md#zahlungsplan).
+
+### Standardanhänge für Angebote
+
+Unter **Einstellungen › Rechnungen › Standardanhänge für Angebote** hinterlegst du einmal PDF-Dateien, die mit fast jedem Angebot mitgehen, etwa AGB oder eine Widerrufsbelehrung. Es gelten dieselben Regeln wie für [Anhänge am Angebot](angebote.md#anhänge): nur PDF, bis 20 MB, höchstens zehn.
+
+- Jedes **neue Angebot** bekommt sie beim ersten Speichern als Anhänge. Beim Versand sind sie vorausgewählt; im Entwurf nimmst du einen mit **Entfernen** nach einer Rückfrage heraus, wenn er für dieses Angebot nicht passt.
+- Mit dem Festschreiben sind sie wie alle Anhänge mit dem Angebot gesperrt. So bleibt nachvollziehbar, welche Fassung der AGB mit welchem Angebot ging.
+- Änderst du die Standardanhänge später, etwa mit neuen AGB, bekommen erst die danach angelegten Angebote die neue Fassung; bestehende Angebote und Entwürfe bleiben, wie sie sind. **Kopieren** übernimmt die Anhänge des kopierten Angebots, nicht die aktuellen Standardanhänge.
+- Jede Änderung steht im Änderungsprotokoll.
+
+### Kundennummern
+
+Unter **Einstellungen › Rechnungen › Kundennummern** legst du ein Format fest, mit dem Haben beim Anlegen eines Kunden ohne eigene Nummer die nächste Kundennummer vergibt (reine Lieferanten bekommen keine), etwa `K-{NNNN}` → `K-0001`.
+
+- Platzhalter wie beim [Nummernformat](#nummernformat); das Jahr ist hier nicht nötig.
+- **Nächste laufende Nummer** setzt den Zähler (mindestens 1). Nummern, die ein Kontakt schon trägt (von Hand oder aus einem Import), überspringt Haben; lückenlos müssen Kundennummern nicht sein.
+- Bleibt das Format leer, trägst du Kundennummern von Hand ein.
+- Das gilt auch für Kontakte, die über die [REST-API](api.md) angelegt werden.
+
+## ELSTER einrichten
+
+<a id="was-du-brauchst"></a><a id="zertifikatsdatei-statt-elster-secure"></a><a id="hersteller-id-wer-ist-hersteller"></a><a id="open-source-und-die-hersteller-id"></a><a id="warum-lexoffice-ohne-dein-zertifikat-sendet"></a><a id="schritte"></a><a id="welche-eric-version"></a>Zertifikat, Hersteller-ID und ERiC-Version stehen unter [ELSTER einrichten](einrichtung-elster.md).
+
+## E-Mail
+
+<a id="e-mail-über-microsoft-365"></a>Der E-Mail-Versand über SMTP oder Microsoft 365 steht unter [E-Mail-Versand](einrichtung-email.md).
+
+## KI-Auslesung von Belegen
+
+Optional. E-Rechnungen (ZUGFeRD, Factur-X, XRechnung) liest Haben immer selbst aus. Für andere PDFs und Fotos (JPEG, PNG, WebP) kann ein Modell die Felder vorbefüllen: Lieferant, USt-IdNr., Rechnungsnummer, Datum, Fälligkeit, Beträge je Steuersatz und eine vorgeschlagene Kategorie. Dafür gibt es zwei Schnittstellen, eingestellt über Umgebungsvariablen auf dem Server.
+
+| | Claude (Anthropic-API) | OpenAI-kompatibel, selbst betrieben | OpenAI-kompatibel, in der Cloud |
+| --- | --- | --- | --- |
+| Beispiele | Claude-Modelle von Anthropic | Ollama, LM Studio, vLLM, `docker model run` | OpenRouter, OpenAI, andere Anbieter mit OpenAI-kompatibler API |
+| Einschalten | `ANTHROPIC_API_KEY` ([Anbindungen](installation-anbindungen.md#ki-auslesung-anthropic)) | `EXTRACTION_BASE_URL` und `EXTRACTION_MODEL` ([Anbindungen](installation-anbindungen.md#ki-auslesung-über-openai-kompatible-schnittstelle)) | `EXTRACTION_BASE_URL`, `EXTRACTION_MODEL` und `EXTRACTION_API_KEY` ([Anbindungen](installation-anbindungen.md#ki-auslesung-über-openai-kompatible-schnittstelle)) |
+| Wohin der Beleg geht | an Anthropic | nur an deinen Dienst, er verlässt deinen Server nicht | nur an diesen Anbieter (bei OpenRouter auch an den Anbieter des Modells) |
+| PDFs | direkt | lokal in Seitenbilder umgewandelt, höchstens 4 Seiten | lokal in Seitenbilder umgewandelt, höchstens 4 Seiten |
+| Kosten | ein paar Cent je Beleg | Rechenzeit auf deinem Server, mit CPU leicht ein bis mehrere Minuten je Beleg | nach Preisliste des Anbieters und Modells |
+| Genauigkeit | sehr gut, auch bei Fotos und Kassenzetteln | gut bei sauberen PDFs, schwächer bei Fotos und Kassenzetteln | je nach gewähltem Vision-Modell |
+
+Es gilt immer genau ein Dienst: Ist `EXTRACTION_BASE_URL` gesetzt, gehen Belege nur an diese Adresse, auch wenn zusätzlich `ANTHROPIC_API_KEY` gesetzt ist, und bei einem Fehler weicht Haben auf keinen anderen Anbieter aus. Welcher Weg gerade gilt, zeigt **Einstellungen › KI-Assistenten und API › Belegauslesung**. Ohne beides bleibt alles lokal, und du füllst die Felder von Hand aus. In jedem Fall bucht Haben einen Beleg erst, wenn du die Felder bestätigt hast. Weicht die Summe vom Gesamtbetrag ab oder ist die Währung nicht Euro, zeigt Haben einen Hinweis. Mehr in [Belege](belege.md).
+
+### Beispiel: Ollama mit Qwen-VL
+
+Läuft Haben mit Docker Compose und Ollama auf demselben Server:
+
+1. Ollama installieren, so einstellen, dass es für Container erreichbar ist (`OLLAMA_HOST=0.0.0.0:11434`, Port per Firewall nur für den Server freigeben), und ein Vision-Modell laden: `ollama pull qwen2.5vl:7b`.
+2. In `compose.yml` beim Dienst `app` die Zeilen `extra_hosts` mit `host.docker.internal:host-gateway` einkommentieren. Unter Linux kennt der Container `host.docker.internal` sonst nicht; Docker Desktop braucht das nicht.
+3. In `.env` eintragen:
+
+    ```sh
+    EXTRACTION_BASE_URL=http://host.docker.internal:11434/v1
+    EXTRACTION_MODEL=qwen2.5vl:7b
+    ```
+
+4. `docker compose up -d`, dann unter **Einstellungen › KI-Assistenten und API** prüfen, dass „Eigener Dienst (OpenAI-kompatibel)“ mit dem Modell angezeigt wird.
+5. Einen Beleg als Foto hochladen. Er zeigt „Wird ausgelesen“ und danach die Felder; ein Fehler (nicht erreichbar, Zeitüberschreitung, falsches Antwortformat) steht am Beleg.
+
+Mit Podman heißt die Adresse `http://host.containers.internal:11434/v1`. Ollama als eigenen Container neben Haben, Schlüssel und Wartezeit beschreibt [Anbindungen](installation-anbindungen.md#ki-auslesung-über-openai-kompatible-schnittstelle).
+
+### Beispiel: OpenRouter
+
+OpenRouter vermittelt viele Modelle verschiedener Anbieter über eine OpenAI-kompatible Schnittstelle.
+
+1. Bei OpenRouter einen API-Schlüssel anlegen und in der Modellliste ein Vision-Modell wählen (Eingabe „image“), etwa `qwen/qwen2.5-vl-72b-instruct`.
+2. In `.env` eintragen:
+
+    ```sh
+    EXTRACTION_BASE_URL=https://openrouter.ai/api/v1
+    EXTRACTION_MODEL=qwen/qwen2.5-vl-72b-instruct
+    EXTRACTION_API_KEY=sk-or-…
+    ```
+
+3. `docker compose up -d`, dann unter **Einstellungen › KI-Assistenten und API** prüfen, dass „Eigener Dienst (OpenAI-kompatibel)“ mit dem Modell und beim Schlüssel „gesetzt“ angezeigt wird.
+
+Der Beleg geht dann an OpenRouter und an den Anbieter des Modells. Wie lange sie Daten aufbewahren und ob sie damit trainieren, stellst du in deinem OpenRouter-Konto ein. Genauso funktionieren andere Dienste mit OpenAI-kompatibler API, etwa OpenAI selbst mit `https://api.openai.com/v1`.
+
+## Bankkonten
+
+Bankkonten musst du meist nicht von Hand anlegen. Mit dem automatischen Abruf über Enable Banking legt Haben die freigegebenen Konten beim Verbinden an (Einrichtung in [Anbindungen](installation-anbindungen.md#kontoabruf-enable-banking), Ablauf in [Bank](bank.md#automatischer-abruf)). Beim ersten Import eines DKB-CSV oder CAMT.053-Auszugs legt Haben das Konto über die IBAN aus der Datei an. N26-CSV-Dateien enthalten keine eigene IBAN. Dafür legst du das Konto vorher an:
+
+1. Auf der Seite **Bank** „Konto hinzufügen“ wählen.
+2. Name (z. B. „N26 Business“) und IBAN eintragen und „Konto anlegen“.
+3. Beim Import das Konto in der Auswahl „Konto“ wählen und die Datei hochladen.
+
+Name und Zweck eines Kontos (Geschäftskonto, Steuerkonto, Rücklagen, Privatkonto) änderst du auf der Seite **Bank** mit **Name und Zweck**, auch für automatisch angelegte Konten (siehe [Bank](bank.md#name-und-zweck)). Jede IBAN gibt es nur einmal. Alle Bankkonten buchen auf dasselbe Finanzkonto (1200 bei SKR03, 1800 bei SKR04). Import, Abgleich und Buchungen sind in [Bank](bank.md) beschrieben.
+
+## Wie es weitergeht
+
+- [Rechnungen](rechnungen.md) schreiben und festschreiben
+- [Belege](belege.md) hochladen und buchen
+- [Bank](bank.md): Kontoauszüge importieren und Zahlungen zuordnen
+- [Umsatzsteuer](umsatzsteuer.md): Voranmeldung monatlich oder vierteljährlich
+- [Auswertungen](auswertungen.md) und Jahresexport
+
+[Zurück zur Übersicht](ueberblick.md)

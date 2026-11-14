@@ -1,0 +1,905 @@
+import AxeBuilder from "@axe-core/playwright";
+import { readFileSync } from "node:fs";
+import { deflateSync } from "node:zlib";
+import { type Browser, expect, type Page, test } from "@playwright/test";
+import { SESSION } from "./daten.ts";
+import { HANDY, ziehen } from "./kopfzeile.ts";
+
+/**
+ * Gestaltung der Belege (#113): Zahnrad in der Vorschau, Spalte neben dem Blatt, Speichern für alle künftigen Belege.
+ * Mit der Sitzung aus app.spec.ts (Projekt „mit-daten“). Die Tests setzen die Gestaltung am Ende zurück.
+ */
+
+// Alle Tests ändern dasselbe Standardprofil und dasselbe Logo; nebeneinander überschrieben sie sich gegenseitig
+test.describe.configure({ mode: "default" });
+
+const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"];
+const SCHMAL = { width: 1400, height: 800 };
+const BREIT = { width: 1920, height: 1080 };
+
+async function editor(browser: Browser, viewport: { width: number; height: number }, mode: "angeheftet" | "ueberblendung" = "ueberblendung"): Promise<Page> {
+  const state = JSON.parse(readFileSync(SESSION, "utf8")) as {
+    cookies: [];
+    origins: { origin: string; localStorage: { name: string; value: string }[] }[];
+  };
+  const origins = state.origins.map((o) => ({
+    ...o,
+    localStorage: [...o.localStorage.filter((item) => item.name !== "haben-vorschau"), { name: "haben-vorschau", value: mode }],
+  }));
+  const page = await (await browser.newContext({ viewport, storageState: { ...state, origins } })).newPage();
+  await page.goto("/rechnungen/neu");
+  await page.waitForLoadState("networkidle");
+  return page;
+}
+
+const head = (p: Page) => p.locator(".main > .page-head");
+const vorschauKnopf = (p: Page) => head(p).getByRole("button", { name: "Vorschau", exact: true });
+const seitenansicht = (p: Page) => p.getByRole("region", { name: "Vorschau", exact: true });
+const dialog = (p: Page) => p.getByRole("dialog", { name: "Vorschau" });
+const panel = (p: Page) => dialog(p).getByRole("complementary", { name: "Gestaltung" });
+const blatt = (p: Page) => dialog(p).getByLabel("Vorschau der Rechnung");
+/** Das gesetzte SVG des Blatts; was nur als Bild existiert, lässt sich daran prüfen */
+const svg = (p: Page) =>
+  blatt(p)
+    .locator(".sheet-page img")
+    .first()
+    .evaluate(async (img: HTMLImageElement) => (await fetch(img.src)).text());
+/** Akzentfarbe des Blatts: die kräftigste Farbe darin, die Grautöne sind aus ihr abgeleitet und blasser */
+const brand = async (p: Page) => {
+  const farben = [...new Set([...(await svg(p)).matchAll(/(?:fill|stroke)="(#[0-9a-fA-F]{6})"/g)].map((m) => m[1]!))];
+  const kraft = (hex: string) => {
+    const teile = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    return Math.max(...teile) - Math.min(...teile);
+  };
+  return farben.sort((a, b) => kraft(b) - kraft(a))[0]!.toUpperCase();
+};
+/** Ohne Glyphen und data-tid: Der warme Render-Prozess führt Glyphen mit, die Kennungen vergibt Typst nicht stabil */
+const gesetzt = async (p: Page) => (await svg(p)).replace(/<defs class="glyph">[\s\S]*?<\/defs>/, "").replace(/ data-tid="[^"]*"/g, "");
+/** Nach dem ersten Bild kann das Formular noch nachziehen; verglichen wird erst, wenn das Blatt zur Ruhe gekommen ist */
+async function ruhigesBlatt(p: Page): Promise<string> {
+  await expect(blatt(p).locator(".sheet-page img").first()).toBeVisible();
+  let davor = "";
+  await expect
+    .poll(
+      async () => {
+        const jetzt = await gesetzt(p);
+        const ruhig = jetzt === davor;
+        davor = jetzt;
+        return ruhig;
+      },
+      { intervals: [800] },
+    )
+    .toBe(true);
+  return davor;
+}
+const fuss = (p: Page) => blatt(p).locator('[data-teil="fuss"]');
+
+async function gestaltungOeffnen(p: Page): Promise<void> {
+  await vorschauKnopf(p).click();
+  await dialog(p).getByRole("button", { name: "Gestaltung" }).click();
+  await expect(panel(p)).toBeVisible();
+}
+
+test("Die Knöpfe der angehefteten Vorschau stehen rechts, auch wenn sie in die zweite Zeile rutschen", async ({ browser }) => {
+  const page = await editor(browser, SCHMAL, "angeheftet");
+  const kopf = await page.locator(".preview-pane-head").boundingBox();
+  const knoepfe = await page.locator(".preview-pane-actions").boundingBox();
+  expect(knoepfe!.x + knoepfe!.width).toBeCloseTo(kopf!.x + kopf!.width, 0);
+  await page.context().close();
+});
+
+test("Die Spalte Gestaltung zeigt Änderungen sofort und verwirft sie", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await gestaltungOeffnen(page);
+  const vorher = await brand(page);
+
+  await panel(page).getByRole("button", { name: "Blau" }).click();
+  await expect.poll(() => brand(page)).toBe("#1D4E89");
+  await expect(panel(page).getByRole("button", { name: "Für alle Belege speichern" })).toBeEnabled();
+
+  await panel(page).getByRole("button", { name: "Verwerfen" }).click();
+  await expect.poll(() => brand(page)).toBe(vorher);
+  await expect(panel(page).getByRole("button", { name: "Für alle Belege speichern" })).toBeDisabled();
+  await page.context().close();
+});
+
+test("Die Farbkreise stehen nebeneinander, auch mit den Stilen der Auswertungen", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.addStyleTag({ content: readFileSync("src/styles/auswertungen.css", "utf8") });
+  await gestaltungOeffnen(page);
+  const blau = await panel(page).getByRole("button", { name: "Blau" }).boundingBox();
+  const gruen = await panel(page).getByRole("button", { name: "Grün" }).boundingBox();
+  expect(blau!.width).toBeGreaterThan(40);
+  expect(blau!.x).toBeGreaterThanOrEqual(gruen!.x + gruen!.width);
+  // Sieben Punkte in einer Zeile: Der Regenbogen rutscht nicht um
+  const regenbogen = await panel(page).getByLabel("Eigene Farbe wählen").boundingBox();
+  expect(regenbogen!.y).toBeCloseTo(gruen!.y, 0);
+  await page.context().close();
+});
+
+test("Der Regenbogen-Punkt setzt eine eigene Farbe und zeigt sie an", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await gestaltungOeffnen(page);
+  await panel(page).getByLabel("Eigene Farbe wählen").fill("#123456");
+  await expect.poll(() => brand(page)).toBe("#123456");
+  await expect(panel(page)).toContainText("#123456");
+  await panel(page).getByRole("button", { name: "Grün" }).click();
+  await expect(panel(page)).not.toContainText("Eigene Farbe #");
+  await page.context().close();
+});
+
+test("Das Logo lässt sich im Panel hochladen und entfernen, das Formular bleibt", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.getByLabel("Beschreibung Position 1").fill("Eingabe bleibt");
+  await gestaltungOeffnen(page);
+  await panel(page).getByLabel("Logodatei").setInputFiles("public/icon-192.png");
+  await expect(panel(page).getByRole("status")).toContainText("Logo gespeichert");
+  await expect.poll(() => svg(page)).toContain("<image");
+  // Die Rückfrage liegt über der Vorschau: Esc schließt nur sie, Logo und Vorschau bleiben
+  await panel(page).getByRole("button", { name: "Entfernen" }).click();
+  await expect(page.getByRole("dialog", { name: "Logo entfernen?" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Logo entfernen?" })).toHaveCount(0);
+  await expect(panel(page).getByRole("img", { name: "Aktuelles Logo" })).toBeVisible();
+  await panel(page).getByRole("button", { name: "Entfernen" }).click();
+  await page.getByRole("dialog", { name: "Logo entfernen?" }).getByRole("button", { name: "Entfernen" }).click();
+  await expect.poll(() => svg(page)).not.toContain("<image");
+  await dialog(page).getByRole("button", { name: "Schließen" }).click();
+  await expect(page.getByLabel("Beschreibung Position 1")).toHaveValue("Eingabe bleibt");
+  await page.context().close();
+});
+
+test("Schalter wirken auf das Blatt", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await gestaltungOeffnen(page);
+  const mitMarken = await ruhigesBlatt(page);
+  await panel(page).getByLabel("Falz- und Lochmarken").uncheck();
+  await expect.poll(() => gesetzt(page)).not.toBe(mitMarken);
+  await page.context().close();
+});
+
+test("Der Schalter Artikelnummer nimmt die Spalte vom Blatt", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.getByLabel("Beschreibung Position 1").fill("Dichtungssatz");
+  await page.getByLabel("Menge Position 1").fill("1");
+  await page.getByLabel(/Einzelpreis Position 1/).fill("12,50");
+  await page.getByLabel("Artikelnummer Position 1").fill("ET-1042");
+  await gestaltungOeffnen(page);
+  const positionen = blatt(page).locator('[data-teil="positionen"]');
+  await expect(positionen).toContainText("ET-1042");
+  await panel(page).getByLabel("Artikelnummer").uncheck();
+  await expect(positionen).not.toContainText("ET-1042");
+  await page.context().close();
+});
+
+test("Die Spalte USt entfällt nur bei einem einzigen Steuersatz, sonst sagt das Panel warum", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.getByLabel("Beschreibung Position 1").fill("Beratung");
+  await page.getByLabel("Menge Position 1").fill("2");
+  await page.getByLabel(/Einzelpreis Position 1/).fill("10,00");
+  await page.getByRole("button", { name: "Position hinzufügen" }).click();
+  await page.getByLabel("Beschreibung Position 2").fill("Fachbuch");
+  await page.getByLabel("Menge Position 2").fill("1");
+  await page.getByLabel(/Einzelpreis Position 2/).fill("39,00");
+  await page.getByLabel("Steuersatz Position 2").selectOption("700");
+  await gestaltungOeffnen(page);
+  const positionen = blatt(page).locator('[data-teil="positionen"]');
+  await panel(page).getByLabel("Spalte USt je Position").uncheck();
+  await expect(positionen).toContainText("7 %");
+  await expect(panel(page).getByRole("status")).toContainText("mehrere Steuersätze");
+  await page.context().close();
+});
+
+test("Schließen verwirft ungespeicherte Änderungen, die Vorschau zeigt wieder das, was das PDF zeigt", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await gestaltungOeffnen(page);
+  const vorher = await brand(page);
+  await panel(page).getByRole("button", { name: "Rot" }).click();
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toBeHidden();
+  await vorschauKnopf(page).click();
+  await expect.poll(() => brand(page)).toBe(vorher);
+  await page.context().close();
+});
+
+test("Speichern gilt nach dem Neuladen und lässt das Formular stehen", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.getByLabel("Beschreibung Position 1").fill("Eingabe bleibt");
+  await gestaltungOeffnen(page);
+  const vorher = await brand(page);
+
+  await panel(page).getByRole("button", { name: "Violett" }).click();
+  await panel(page).getByRole("button", { name: "Für alle Belege speichern" }).click();
+  await expect(panel(page).getByRole("status")).toContainText("Gespeichert");
+  await dialog(page).getByRole("button", { name: "Schließen" }).click();
+  await expect(page.getByLabel("Beschreibung Position 1")).toHaveValue("Eingabe bleibt");
+
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+  await gestaltungOeffnen(page);
+  await expect.poll(() => brand(page)).toBe("#6B3FA0");
+
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const akzent = page.getByRole("form", { name: "Akzentfarbe" });
+  await akzent.getByLabel("Hex-Wert").fill(vorher.toUpperCase());
+  await akzent.getByRole("button", { name: "Übernehmen" }).click();
+  await expect(akzent.getByRole("status")).toContainText("Akzentfarbe gespeichert.");
+  await page.context().close();
+});
+
+test("Änderungen, die während des Speicherns entstehen, bleiben als ungespeichert stehen", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await gestaltungOeffnen(page);
+  const vorher = await brand(page);
+  let weiter = () => {};
+  const gehalten = new Promise<void>((resolve) => {
+    weiter = resolve;
+  });
+  await page.route("**/_serverFn/**", async (route) => {
+    await gehalten;
+    await route.continue();
+  });
+
+  await panel(page).getByRole("button", { name: "Violett" }).click();
+  await panel(page).getByRole("button", { name: "Für alle Belege speichern" }).click();
+  await panel(page).getByRole("button", { name: "Blau" }).click();
+  weiter();
+  await expect(panel(page).getByRole("status")).toContainText("Gespeichert");
+
+  await expect.poll(() => brand(page)).toBe("#1D4E89");
+  await expect(panel(page).getByRole("button", { name: "Für alle Belege speichern" })).toBeEnabled();
+
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const akzent = page.getByRole("form", { name: "Akzentfarbe" });
+  await akzent.getByLabel("Hex-Wert").fill(vorher.toUpperCase());
+  await akzent.getByRole("button", { name: "Übernehmen" }).click();
+  await expect(akzent.getByRole("status")).toContainText("Akzentfarbe gespeichert.");
+  await page.context().close();
+});
+
+test("Das Zahnrad der angehefteten Vorschau öffnet die Überblendung mit der Spalte", async ({ browser }) => {
+  const page = await editor(browser, BREIT, "angeheftet");
+  await seitenansicht(page).getByRole("button", { name: "Gestaltung" }).click();
+  await expect(panel(page)).toBeVisible();
+  await page.context().close();
+});
+
+test("Am Handy ist die Gestaltung eine runde Karte mit Griff, wegziehen schließt nur sie", async ({ browser }) => {
+  const page = await editor(browser, HANDY);
+  await gestaltungOeffnen(page);
+  const karte = dialog(page).locator(".design-sheet");
+  const griff = karte.locator(".sheet-grip");
+  await expect(griff).toBeVisible();
+  expect(await karte.evaluate((el) => getComputedStyle(el).borderTopLeftRadius)).toBe("16px");
+  await expect(dialog(page).locator(":scope > .sheet-grip")).toBeHidden();
+
+  const oben = (await karte.boundingBox())!.y;
+  await ziehen(page, griff, 30);
+  expect(Math.round((await karte.boundingBox())!.y)).toBe(Math.round(oben) + 30);
+  await page.mouse.up();
+  expect(Math.round((await karte.boundingBox())!.y)).toBe(Math.round(oben));
+
+  await ziehen(page, griff, 120);
+  await page.mouse.up();
+  await expect(panel(page)).toHaveCount(0);
+  await expect(dialog(page)).toBeVisible();
+  await expect(dialog(page).getByRole("button", { name: "Gestaltung" })).toHaveAttribute("aria-pressed", "false");
+  await page.context().close();
+});
+
+test("Am Desktop hat die Spalte Gestaltung keinen Griff", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await gestaltungOeffnen(page);
+  await expect(panel(page)).toBeVisible();
+  await expect(dialog(page).locator(".design-sheet .sheet-grip")).toBeHidden();
+  await page.context().close();
+});
+
+test("Am Handy stehen Blatt und Gestaltung untereinander, ohne seitliches Scrollen", async ({ browser }) => {
+  const page = await editor(browser, HANDY);
+  await gestaltungOeffnen(page);
+  const breite = await page.evaluate(() => document.querySelector("dialog")!.scrollWidth - document.querySelector("dialog")!.clientWidth);
+  expect(breite).toBe(0);
+  await page.context().close();
+});
+
+test("Die Einstellungen nennen je Belegart das eingebaute Layout", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Layouts", exact: true });
+  await expect(karte.getByRole("row")).toHaveCount(6);
+  // Ohne eigene Zuordnung steht je Belegart das eingebaute Layout in der Auswahl
+  const mahnung = karte.getByLabel("Layout für Mahnung");
+  await expect(mahnung).toHaveValue("eingebaut:klassisch");
+  await expect(mahnung.locator("option:checked")).toHaveText("Klassisch (eingebaut)");
+  await page.context().close();
+});
+
+test("Spalte Gestaltung ohne Befund von axe", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await gestaltungOeffnen(page);
+  const { violations } = await new AxeBuilder({ page }).withTags(WCAG).analyze();
+  expect(violations.map((v) => v.id)).toEqual([]);
+  await page.context().close();
+});
+
+const einstellungenNav = (p: Page) => p.getByRole("navigation", { name: "Bereiche der Einstellungen" });
+
+async function bereichHinUndZurueck(page: Page): Promise<void> {
+  await einstellungenNav(page)
+    .getByRole("link", { name: /^Rechnungen/ })
+    .click();
+  await expect(page.getByRole("form", { name: "Nummernformat" })).toBeVisible();
+  await einstellungenNav(page)
+    .getByRole("link", { name: /^Beleggestaltung/ })
+    .click();
+  await expect(page.getByRole("region", { name: "Logo und Blatt" })).toBeVisible();
+}
+
+test("Eine gespeicherte Logo-Größe steht nach dem Wechsel des Bereichs noch da", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Logo und Blatt" });
+  const groesse = karte.getByRole("group", { name: "Größe des Logos" });
+  await groesse.getByRole("button", { name: "L", exact: true }).click();
+  await karte.getByRole("button", { name: "Speichern" }).click();
+  await expect(karte.getByRole("status").last()).toContainText("Gespeichert");
+  await bereichHinUndZurueck(page);
+  try {
+    await expect(groesse.getByRole("button", { name: "L", exact: true })).toHaveAttribute("aria-pressed", "true");
+  } finally {
+    await page.goto("/einstellungen?bereich=gestaltung");
+    await page.waitForLoadState("networkidle");
+    await groesse.getByRole("button", { name: "M", exact: true }).click();
+    await karte.getByRole("button", { name: "Speichern" }).click();
+    await expect(karte.getByRole("status").last()).toContainText("Gespeichert");
+    await page.context().close();
+  }
+});
+
+test("Ein hochgeladenes Logo steht nach dem Wechsel des Bereichs noch da", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Logo und Blatt" });
+  const entfernen = karte.getByRole("button", { name: "Entfernen" });
+  if (await entfernen.isVisible()) {
+    await entfernen.click();
+    await page.getByRole("dialog", { name: "Logo entfernen?" }).getByRole("button", { name: "Entfernen" }).click();
+    await expect(karte.getByText("Noch kein Logo.")).toBeVisible();
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+  }
+  await karte.getByLabel("Logodatei").setInputFiles("public/icon-192.png");
+  await expect(karte.getByRole("img", { name: "Aktuelles Logo" })).toBeVisible();
+  await bereichHinUndZurueck(page);
+  await expect(karte.getByRole("img", { name: "Aktuelles Logo" })).toBeVisible();
+  await page.context().close();
+});
+
+test("Die Vorschau im Editor zeigt die in den Einstellungen gespeicherte Farbe, auch nach Zurück im Browser", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.getByRole("link", { name: "Einstellungen" }).first().click();
+  await einstellungenNav(page)
+    .getByRole("link", { name: /^Beleggestaltung/ })
+    .click();
+  const akzent = page.getByRole("form", { name: "Akzentfarbe" });
+  const vorher = await akzent.getByLabel("Hex-Wert").inputValue();
+  await akzent.getByLabel("Hex-Wert").fill("#123456");
+  await akzent.getByRole("button", { name: "Übernehmen" }).click();
+  await expect(akzent.getByRole("status")).toContainText("Akzentfarbe gespeichert.");
+  try {
+    await page.goBack();
+    await page.goBack();
+    await page.waitForLoadState("networkidle");
+    await gestaltungOeffnen(page);
+    await expect.poll(() => brand(page)).toBe("#123456");
+  } finally {
+    await page.goto("/einstellungen?bereich=gestaltung");
+    await page.waitForLoadState("networkidle");
+    await akzent.getByLabel("Hex-Wert").fill(vorher);
+    await akzent.getByRole("button", { name: "Übernehmen" }).click();
+    await expect(akzent.getByRole("status")).toContainText("Akzentfarbe gespeichert.");
+    await page.context().close();
+  }
+});
+
+test("Die Knöpfe der Logo-Größe tragen ihre sichtbare Beschriftung im zugänglichen Namen (WCAG 2.5.3)", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await gestaltungOeffnen(page);
+  const gruppe = panel(page).getByRole("group", { name: "Größe des Logos" });
+  for (const sichtbar of ["S", "M", "L"]) await expect(gruppe.getByRole("button", { name: sichtbar, exact: true })).toHaveCount(1);
+  await page.context().close();
+});
+
+test("Eine gespeicherte Fußzeile steht nach dem Wechsel des Bereichs noch da", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Fußzeile" });
+  await karte.getByLabel("Eigene Fußzeile").check();
+  await karte.getByRole("button", { name: "4", exact: true }).click();
+  await karte.getByLabel("Spalte 4").fill("Sprechzeiten Mo bis Fr");
+  await karte.getByRole("button", { name: "Fußzeile speichern" }).click();
+  await expect(karte.getByRole("status").last()).toContainText("Fußzeile gespeichert");
+  await bereichHinUndZurueck(page);
+  try {
+    await expect(karte.getByLabel("Eigene Fußzeile")).toBeChecked();
+    await expect(karte.getByLabel("Spalte 4")).toHaveValue("Sprechzeiten Mo bis Fr");
+  } finally {
+    await page.goto("/einstellungen?bereich=gestaltung");
+    await page.waitForLoadState("networkidle");
+    await karte.getByLabel("Eigene Fußzeile").uncheck();
+    await karte.getByRole("button", { name: "Fußzeile speichern" }).click();
+    await expect(karte.getByRole("status").last()).toContainText("Fußzeile gespeichert");
+    await page.context().close();
+  }
+});
+
+test("Eigene Fußzeile: Platzhalter, Prüfung und Übernahme aufs Blatt", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Fußzeile" });
+  await karte.getByLabel("Eigene Fußzeile").check();
+  await karte.getByRole("button", { name: "4", exact: true }).click();
+
+  await karte.getByLabel("Spalte 3").fill("");
+  await expect(karte.getByRole("alert")).toContainText("Steuernummer oder USt-IdNr.");
+  await expect(karte.getByRole("button", { name: "Fußzeile speichern" })).toBeDisabled();
+  await karte.getByLabel("Spalte 3").fill("{steuernummer}");
+  await expect(karte.getByRole("alert")).toHaveCount(0);
+
+  await karte.getByLabel("Spalte 4").fill("{fax}");
+  await expect(karte.getByRole("alert")).toContainText("{fax}");
+  await expect(karte.getByRole("button", { name: "Fußzeile speichern" })).toBeDisabled();
+
+  await karte.getByLabel("Spalte 4").fill("Sprechzeiten Mo bis Fr ");
+  await karte.getByRole("button", { name: "{email}" }).click();
+  await expect(karte.getByLabel("Spalte 4")).toHaveValue(/\{email\}/);
+  await karte.getByRole("button", { name: "Fußzeile speichern" }).click();
+  await expect(karte.getByRole("status").last()).toContainText("Fußzeile gespeichert");
+
+  await page.goto("/rechnungen/neu");
+  await page.waitForLoadState("networkidle");
+  await vorschauKnopf(page).click();
+  await expect(fuss(page)).toContainText("Sprechzeiten Mo bis Fr");
+
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  await karte.getByLabel("Eigene Fußzeile").uncheck();
+  await karte.getByRole("button", { name: "Fußzeile speichern" }).click();
+  await expect(karte.getByRole("status").last()).toContainText("Fußzeile gespeichert");
+  await page.context().close();
+});
+
+test("Eine Fußzeile über 400 Zeichen meldet das verständlich auf Deutsch", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Fußzeile" });
+  await karte.getByLabel("Eigene Fußzeile").check();
+  await karte.getByLabel("Spalte 1").fill(`{steuernummer} ${"x".repeat(380)}`);
+  await karte.getByLabel("Spalte 1").focus();
+  // Das maxLength des Felds wirkt nur beim Tippen: Die Platzhalter-Knöpfe kommen darüber hinweg
+  await karte.getByRole("button", { name: "{kontoinhaber}" }).click();
+  await karte.getByRole("button", { name: "{kontoinhaber}" }).click();
+  const speichern = karte.getByRole("button", { name: "Fußzeile speichern" });
+  if (await speichern.isEnabled()) await speichern.click();
+  const meldung = karte.locator(".banner-danger, [role=alert]").first();
+  try {
+    await expect(meldung).toBeVisible();
+    await expect(meldung).not.toContainText("Too big");
+    await expect(meldung).toContainText(/Zeichen/);
+  } finally {
+    await page.context().close();
+  }
+});
+
+test("Die Schrift wirkt sofort aufs Blatt", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await gestaltungOeffnen(page);
+  const ohneWechsel = await ruhigesBlatt(page);
+
+  await panel(page).getByLabel("Schrift").selectOption({ label: "IBM Plex Serif" });
+  await expect.poll(() => gesetzt(page)).not.toBe(ohneWechsel);
+  await panel(page).getByRole("button", { name: "Verwerfen" }).click();
+  await expect.poll(() => gesetzt(page)).toBe(ohneWechsel);
+  await page.context().close();
+});
+
+test("Briefpapier: hochladen, auf dem Blatt sehen, entfernen", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Briefpapier" });
+  await expect(karte.getByText("Noch kein Briefpapier.")).toBeVisible();
+  await karte.getByLabel("Datei für das Briefpapier").setInputFiles("public/icon-192.png");
+  await expect(karte.getByRole("img", { name: "Aktuelles Briefpapier" })).toBeVisible();
+  await karte.getByRole("button", { name: "Alle Seiten" }).click();
+  await karte.getByRole("button", { name: "Speichern" }).click();
+  await expect(karte.getByRole("status").last()).toContainText("Gespeichert");
+
+  await page.goto("/rechnungen/neu");
+  await page.waitForLoadState("networkidle");
+  await vorschauKnopf(page).click();
+  await expect.poll(() => svg(page)).toContain("<image");
+
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  await expect(karte.getByRole("button", { name: "Alle Seiten" })).toHaveAttribute("aria-pressed", "true");
+  await karte.getByRole("button", { name: "Erste Seite" }).click();
+  await karte.getByRole("button", { name: "Speichern" }).click();
+  await expect(karte.getByRole("status").last()).toContainText("Gespeichert");
+  await karte.getByRole("button", { name: "Entfernen" }).click();
+  await page.getByRole("dialog", { name: "Briefpapier entfernen?" }).getByRole("button", { name: "Entfernen" }).click();
+  await expect(karte.getByText("Noch kein Briefpapier.")).toBeVisible();
+  await page.context().close();
+});
+
+test("Nach dem Verringern der Spalten fügt ein Platzhalter-Knopf in eine sichtbare Spalte ein", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Fußzeile" });
+  await karte.getByLabel("Eigene Fußzeile").check();
+  await karte.getByRole("button", { name: "4", exact: true }).click();
+  await karte.getByLabel("Spalte 4").click();
+  await karte.getByRole("button", { name: "2", exact: true }).click();
+
+  await karte.getByRole("button", { name: "{email}" }).click();
+
+  const sichtbar = `${await karte.getByLabel("Spalte 1").inputValue()}\n${await karte.getByLabel("Spalte 2").inputValue()}`;
+  await page.context().close();
+  // Die Vorgabe in Spalte 1 hat schon ein {email}; der Klick muss ein zweites bringen
+  expect((sichtbar.match(/\{email\}/g) ?? []).length).toBe(2);
+});
+
+test("Briefpapier mit eigenem Fuß: Fußzeile weglassen nur nach Rückfrage und nur mit Briefpapier", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Briefpapier" });
+  const schalter = karte.getByLabel("Fußzeile steht auf dem Briefpapier");
+  await expect(schalter).toBeDisabled();
+
+  await karte.getByLabel("Datei für das Briefpapier").setInputFiles("public/icon-192.png");
+  await expect(karte.getByRole("img", { name: "Aktuelles Briefpapier" })).toBeVisible();
+  await expect(schalter).toBeEnabled();
+
+  await schalter.click();
+  const rueckfrage = page.getByRole("dialog", { name: "Fußzeile weglassen?" });
+  await expect(rueckfrage.getByText(/Steuernummer oder USt-IdNr\. muss dann auf dem Briefpapier stehen/)).toBeVisible();
+  await expect(schalter).not.toBeChecked();
+  await rueckfrage.getByRole("button", { name: "Abbrechen" }).click();
+  await expect(schalter).not.toBeChecked();
+
+  await schalter.click();
+  await rueckfrage.getByRole("button", { name: "Fußzeile weglassen" }).click();
+  await expect(schalter).toBeChecked();
+  await karte.getByRole("button", { name: "Speichern" }).click();
+  await expect(karte.getByRole("status").last()).toContainText("Gespeichert");
+
+  await page.goto("/rechnungen/neu");
+  await page.waitForLoadState("networkidle");
+  await vorschauKnopf(page).click();
+  await expect(fuss(page)).toHaveCount(0);
+
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  await schalter.uncheck();
+  await karte.getByRole("button", { name: "Speichern" }).click();
+  await expect(karte.getByRole("status").last()).toContainText("Gespeichert");
+  await karte.getByRole("button", { name: "Entfernen" }).click();
+  await page.getByRole("dialog", { name: "Briefpapier entfernen?" }).getByRole("button", { name: "Entfernen" }).click();
+  await expect(karte.getByText("Noch kein Briefpapier.")).toBeVisible();
+  await page.context().close();
+});
+
+test("Entfernen des Briefpapiers nimmt auch ein noch nicht gespeichertes „Fußzeile weglassen“ zurück", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Briefpapier" });
+  const schalter = karte.getByLabel("Fußzeile steht auf dem Briefpapier");
+  await karte.getByLabel("Datei für das Briefpapier").setInputFiles("public/icon-192.png");
+  await expect(karte.getByRole("img", { name: "Aktuelles Briefpapier" })).toBeVisible();
+  await schalter.click();
+  await page.getByRole("dialog", { name: "Fußzeile weglassen?" }).getByRole("button", { name: "Fußzeile weglassen" }).click();
+  await expect(schalter).toBeChecked();
+  await karte.getByRole("button", { name: "Entfernen" }).click();
+  await page.getByRole("dialog", { name: "Briefpapier entfernen?" }).getByRole("button", { name: "Entfernen" }).click();
+  await expect(karte.getByText("Noch kein Briefpapier.")).toBeVisible();
+  await expect(schalter).not.toBeChecked();
+  await page.context().close();
+});
+
+test("Vorschau: Ein hoher Fuß deckt den Hinweis auf einem vollen Blatt nicht zu", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Fußzeile" });
+  const zeile = "Zahlbar innerhalb von vierzehn Tagen ohne Abzug";
+  const spalte = Array.from({ length: 5 }, () => zeile).join("\n");
+  await karte.getByLabel("Eigene Fußzeile").check();
+  await karte.getByRole("button", { name: "4", exact: true }).click();
+  for (const nummer of [1, 2, 3]) await karte.getByLabel(`Spalte ${nummer}`).fill(spalte);
+  await karte.getByLabel("Spalte 4").fill("{steuernummer}");
+  await karte.getByRole("button", { name: "Fußzeile speichern" }).click();
+  await expect(karte.getByRole("status").last()).toContainText("Fußzeile gespeichert");
+  try {
+    await page.goto("/rechnungen/neu");
+    await page.waitForLoadState("networkidle");
+    await page.getByLabel("Hinweis auf der Rechnung (optional)").fill(Array.from({ length: 90 }, (_, i) => `Hinweiszeile ${i + 1}`).join("\n"));
+    await vorschauKnopf(page).click();
+    // Typst bricht um; dass nichts in den Fuß läuft, prüft fusszeile-platz.test.ts am PDF
+    await expect(blatt(page)).toContainText("Hinweiszeile 90");
+    await expect(blatt(page).getByRole("img", { name: /^Seite 2 von/ })).toBeVisible();
+  } finally {
+    await page.goto("/einstellungen?bereich=gestaltung");
+    await page.waitForLoadState("networkidle");
+    await karte.getByLabel("Eigene Fußzeile").uncheck();
+    await karte.getByRole("button", { name: "Fußzeile speichern" }).click();
+    await expect(karte.getByRole("status").last()).toContainText("Fußzeile gespeichert");
+    await page.context().close();
+  }
+});
+
+/** A4 im Verhältnis 210 × 297: oberste 10 % rot, der Rest weiß */
+function briefbogenPng(): Buffer {
+  const crcTabelle = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (daten: Buffer) => (daten.reduce((c, b) => crcTabelle[(c ^ b) & 0xff]! ^ (c >>> 8), 0xffffffff) ^ 0xffffffff) >>> 0;
+  const abschnitt = (typ: string, daten: Buffer) => {
+    const inhalt = Buffer.concat([Buffer.from(typ, "latin1"), daten]);
+    const laenge = Buffer.alloc(4);
+    laenge.writeUInt32BE(daten.length);
+    const pruefsumme = Buffer.alloc(4);
+    pruefsumme.writeUInt32BE(crc(inhalt));
+    return Buffer.concat([laenge, inhalt, pruefsumme]);
+  };
+  const breite = 210;
+  const hoehe = 297;
+  const kopf = Buffer.alloc(13);
+  kopf.writeUInt32BE(breite, 0);
+  kopf.writeUInt32BE(hoehe, 4);
+  kopf[8] = 8;
+  kopf[9] = 2;
+  const zeilen = Array.from({ length: hoehe }, (_, y) => {
+    const zeile = Buffer.alloc(1 + breite * 3, 255);
+    zeile[0] = 0;
+    if (y < 30) for (let x = 0; x < breite; x++) zeile.fill(Buffer.from([255, 0, 0]), 1 + x * 3, 4 + x * 3);
+    return zeile;
+  });
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    abschnitt("IHDR", kopf),
+    abschnitt("IDAT", deflateSync(Buffer.concat(zeilen))),
+    abschnitt("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+test("Vorschau: Das Briefpapier bleibt auf einem langen Blatt so groß wie im PDF", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Briefpapier" });
+  await karte.getByLabel("Datei für das Briefpapier").setInputFiles({ name: "bogen.png", mimeType: "image/png", buffer: briefbogenPng() });
+  await expect(karte.getByRole("img", { name: "Aktuelles Briefpapier" })).toBeVisible();
+  try {
+    await page.goto("/rechnungen/neu");
+    await page.waitForLoadState("networkidle");
+    await page.getByLabel("Hinweis auf der Rechnung (optional)").fill(Array.from({ length: 90 }, (_, i) => `Hinweiszeile ${i + 1}`).join("\n"));
+    await vorschauKnopf(page).click();
+    await expect.poll(() => svg(page)).toContain("<image");
+    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(600);
+    const { width, height } = (await blatt(page).boundingBox())!;
+    const a4Hoehe = (width * 297) / 210;
+    // Sonst prüft der Test nichts: Das Blatt muss deutlich länger sein als eine A4-Seite
+    expect(height).toBeGreaterThan(a4Hoehe * 1.3);
+    const bild = (await blatt(page).screenshot()).toString("base64");
+    const leer = await page.context().newPage();
+    const [oben, darunter] = await leer.evaluate(
+      async ({ bild, punkte }) => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${bild}`;
+        await img.decode();
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d")!;
+        ctx.drawImage(img, 0, 0);
+        return punkte.map(([x, y]) => {
+          const [r, g, b] = ctx.getImageData(x!, y!, 1, 1).data;
+          // Farbmanagement des Screenshots verschiebt Werte um wenige Stufen
+          if (r! > 240 && g! < 20 && b! < 20) return "rot";
+          return r! > 240 && g! > 240 && b! > 240 ? "weiß" : `${r},${g},${b}`;
+        });
+      },
+      {
+        bild,
+        punkte: [
+          [Math.round(width * 0.02), Math.round(a4Hoehe * 0.05)],
+          [Math.round(width * 0.02), Math.round(a4Hoehe * 0.14)],
+        ],
+      },
+    );
+    await leer.close();
+    // Im PDF ist der rote Streifen 10 % einer A4-Seite hoch: bei 5 % rot, bei 14 % schon weiß
+    expect(oben).toBe("rot");
+    expect(darunter).toBe("weiß");
+  } finally {
+    await page.goto("/einstellungen?bereich=gestaltung");
+    await page.waitForLoadState("networkidle");
+    await karte.getByRole("button", { name: "Entfernen" }).click();
+    await page.getByRole("dialog", { name: "Briefpapier entfernen?" }).getByRole("button", { name: "Entfernen" }).click();
+    await expect(karte.getByText("Noch kein Briefpapier.")).toBeVisible();
+    await page.context().close();
+  }
+});
+
+test("Die Meldung „Fußzeile gespeichert“ bleibt stehen, wenn sich die Spalten ändern", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Fußzeile" });
+  await karte.getByLabel("Eigene Fußzeile").check();
+  await karte.getByLabel("Spalte 1").fill("Sprechzeiten Mo bis Fr");
+  await karte.getByRole("button", { name: "Fußzeile speichern" }).click();
+  await expect(karte.getByRole("status").last()).toContainText("Fußzeile gespeichert");
+  await page.waitForLoadState("networkidle");
+  await page.waitForTimeout(1000);
+  try {
+    await expect(karte.getByRole("status").last()).toContainText("Fußzeile gespeichert", { timeout: 1000 });
+  } finally {
+    await karte.getByLabel("Eigene Fußzeile").uncheck();
+    await karte.getByRole("button", { name: "Fußzeile speichern" }).click();
+    await page.waitForLoadState("networkidle");
+    await page.context().close();
+  }
+});
+
+test("Eigene Fußzeile: Auszeichnungen stehen fett auf dem Blatt, die Zeichen nicht", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Fußzeile" });
+  await karte.getByLabel("Eigene Fußzeile").check();
+  await karte.getByLabel("Spalte 1").fill("*Fettzeile*");
+  await expect(karte.locator(".footer-preview strong")).toHaveText("Fettzeile");
+  await karte.getByRole("button", { name: "Fußzeile speichern" }).click();
+  await expect(karte.getByRole("status").last()).toContainText("Fußzeile gespeichert");
+  try {
+    await page.goto("/rechnungen/neu");
+    await page.waitForLoadState("networkidle");
+    await vorschauKnopf(page).click();
+    await expect(fuss(page)).toContainText("Fettzeile");
+    await expect(fuss(page)).not.toContainText("*Fettzeile*");
+  } finally {
+    await page.goto("/einstellungen?bereich=gestaltung");
+    await page.waitForLoadState("networkidle");
+    await karte.getByLabel("Eigene Fußzeile").uncheck();
+    await karte.getByRole("button", { name: "Fußzeile speichern" }).click();
+    await expect(karte.getByRole("status").last()).toContainText("Fußzeile gespeichert");
+    await page.context().close();
+  }
+});
+
+test("Zwei Platzhalter nacheinander landen beide an der Schreibmarke", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Fußzeile" });
+  await karte.getByLabel("Eigene Fußzeile").check();
+  const feld = karte.getByLabel("Spalte 1");
+  await feld.fill("Tel. \nEnde");
+  await feld.evaluate((el: HTMLTextAreaElement) => {
+    el.focus();
+    el.setSelectionRange(5, 5);
+  });
+
+  await karte.getByRole("button", { name: "{plz}" }).click();
+  await karte.getByRole("button", { name: "{ort}" }).click();
+
+  const wert = await feld.inputValue();
+  await page.context().close();
+  expect(wert).toBe("Tel. {plz}{ort}\nEnde");
+});
+
+test("Vorschau: Die Steuerzeile bricht auch in einer breiten Schrift nicht um", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.getByLabel("Beschreibung Position 1").fill("Workshop");
+  await page.getByLabel("Menge Position 1").fill("400");
+  await page.getByLabel(/Einzelpreis Position 1/).fill("12345,67");
+  await page.getByRole("button", { name: "Position hinzufügen" }).click();
+  await page.getByLabel("Beschreibung Position 2").fill("Fachbuch");
+  await page.getByLabel("Menge Position 2").fill("400");
+  await page.getByLabel(/Einzelpreis Position 2/).fill("4990,00");
+  await page.getByLabel("Steuersatz Position 2").selectOption({ index: 1 });
+  await gestaltungOeffnen(page);
+  await panel(page).getByLabel("Schrift").selectOption({ label: "Inter" });
+  // Dass die Zeile nicht umbricht, prüft das PDF (gestaltung.test.ts); hier nur, dass sie im gesetzten Blatt ankommt
+  await expect(blatt(page).locator('[data-teil="summen"]')).toContainText("19 %");
+  await page.context().close();
+});
+
+test("Ein Platzhalter-Knopf ohne Klick ins Feld lässt den vorhandenen Text vorne stehen", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Fußzeile" });
+  await karte.getByLabel("Eigene Fußzeile").check();
+  const feld = karte.getByLabel("Spalte 1");
+  const vorher = await feld.inputValue();
+
+  await karte.getByRole("button", { name: "{telefon}" }).click();
+
+  const nachher = await feld.inputValue();
+  await page.context().close();
+  expect(nachher.startsWith(vorher)).toBe(true);
+});
+
+test("Ein Platzhalter-Knopf lässt den Text auch nach Aus- und Einschalten der eigenen Fußzeile vorne stehen", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Fußzeile" });
+  const schalter = karte.getByLabel("Eigene Fußzeile");
+  await schalter.check();
+  await karte.getByLabel("Spalte 1").click();
+  await schalter.uncheck();
+  await schalter.check();
+  const feld = karte.getByLabel("Spalte 1");
+  const vorher = await feld.inputValue();
+
+  await karte.getByRole("button", { name: "{telefon}" }).click();
+
+  const nachher = await feld.inputValue();
+  await page.context().close();
+  expect(nachher).toBe(`${vorher}{telefon}`);
+});
+
+test("Ein Platzhalter-Knopf lässt den Text vorne stehen, wenn eine Spalte wieder eingeblendet wurde", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Fußzeile" });
+  await karte.getByLabel("Eigene Fußzeile").check();
+  await karte.getByLabel("Spalte 3").click();
+  await karte.getByRole("button", { name: "2", exact: true }).click();
+  await karte.getByRole("button", { name: "3", exact: true }).click();
+  const feld = karte.getByLabel("Spalte 3");
+  const vorher = await feld.inputValue();
+
+  await karte.getByRole("button", { name: "{telefon}" }).click();
+
+  const nachher = await feld.inputValue();
+  await page.context().close();
+  expect(nachher).toBe(`${vorher}{telefon}`);
+});
+
+test("Eigene Fußzeile: Die Knöpfe zeichnen den markierten Text aus", async ({ browser }) => {
+  const page = await editor(browser, BREIT);
+  await page.goto("/einstellungen?bereich=gestaltung");
+  await page.waitForLoadState("networkidle");
+  const karte = page.getByRole("region", { name: "Fußzeile" });
+  await karte.getByLabel("Eigene Fußzeile").check();
+  const spalte = karte.getByLabel("Spalte 1");
+  await spalte.fill("Sprechzeiten nach Vereinbarung");
+  await spalte.focus();
+  await spalte.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(0, 12));
+  await karte.getByRole("button", { name: "Fett" }).click();
+  await expect(spalte).toHaveValue("*Sprechzeiten* nach Vereinbarung");
+  await expect(karte.locator(".footer-preview strong")).toHaveText("Sprechzeiten");
+  await karte.getByRole("button", { name: "{firma}" }).click();
+  await expect(spalte).toHaveValue(/\{firma\}/);
+  await page.context().close();
+});

@@ -1,0 +1,20 @@
+{
+  "name": "@haben/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "bun --bun tsc -p ."
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "xmllint-wasm": "^5.3.0"
+  }
+}

@@ -1,0 +1,88 @@
+/* Farben der App (styles.css --accent, --accent-hover, --brand): Grün wie Badges und Icon */
+:root {
+  --md-primary-fg-color: #1f6f5c;
+  --md-primary-fg-color--light: #3fa284;
+  --md-primary-fg-color--dark: #174f42;
+  --md-accent-fg-color: #174f42;
+  /* Fläche des aktiven Eintrags in der Navigation (Zensical); ohne sie bleibt sie Indigo */
+  --md-accent-fg-color--transparent: rgba(31, 111, 92, .1);
+}
+[data-md-color-scheme="slate"] {
+  --md-accent-fg-color: #3fa284;
+  --md-accent-fg-color--transparent: rgba(63, 162, 132, .15);
+}
+/* Bilder: Ecken und Schatten, nie breiter als der Text; Screenshots und Hero bringen ihren Rahmen selbst mit (unten) */
+.md-typeset img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
+}
+/* Breite, scrollbare Tabellen (Buchungssätze, Kennzahlen, Umgebungsvariablen) */
+.md-typeset table:not([class]) {
+  font-size: .75rem;
+}
+/* Hinweise „Wichtig“ (> [!IMPORTANT]) und „Vorsicht“ (> [!CAUTION]): Zensical kennt beide Typen nicht und zeigt
+   sie sonst wie „Hinweis“. Farben und Bedeutung wie auf GitHub: Wichtig lila mit Sprechblase und Ausrufezeichen
+   (lucide message-square-warning wie die übrigen Icons), Vorsicht rot mit Achteck wie Zensicals „failure“.
+   details.* und summary: dieselben Kästen eingeklappt (> [!NOTE]-) */
+:root {
+  --md-admonition-icon--important: url("data:image/svg+xml;charset=utf-8,<svg xmlns='http://www.w3.org/2000/svg' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' viewBox='0 0 24 24'><path d='M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2zM12 15h.01M12 7v4'/></svg>");
+}
+.md-typeset .admonition.important,
+.md-typeset details.important {
+  background-color: #7c4dff1a;
+}
+.md-typeset .important > .admonition-title::before,
+.md-typeset .important > summary::before {
+  background-color: #7c4dff;
+  -webkit-mask-image: var(--md-admonition-icon--important);
+  mask-image: var(--md-admonition-icon--important);
+}
+.md-typeset .important > summary::after {
+  color: #7c4dff;
+}
+.md-typeset .admonition.caution,
+.md-typeset details.caution {
+  background-color: #ff52521a;
+}
+.md-typeset .caution > .admonition-title::before,
+.md-typeset .caution > summary::before {
+  background-color: #ff5252;
+  -webkit-mask-image: var(--md-admonition-icon--failure);
+  mask-image: var(--md-admonition-icon--failure);
+}
+.md-typeset .caution > summary::after {
+  color: #ff5252;
+}
+/* Änderungsdatum unter jeder Seite (scripts/doku-aenderungsdatum), dezent wie früher bei MkDocs Material */
+.md-typeset .aenderungsdatum {
+  margin-top: 2.5em;
+  color: var(--md-default-fg-color--light);
+}
+/* Agentic Engineering (agentic-engineering.md): Karten in den Farben des Ablaufdiagramms, Mensch gelb, Agent blau,
+   Automatik grün */
+.md-typeset .showcase-cards > .rolle {
+  border-top: 4px solid var(--rolle-farbe);
+  background: color-mix(in srgb, var(--rolle-farbe) 8%, transparent);
+}
+.rolle--mensch { --rolle-farbe: #d97706; }
+.rolle--agent { --rolle-farbe: #6366f1; }
+.rolle--auto { --rolle-farbe: #059669; }
+/* Drei Karten nebeneinander, auch neben dem Inhaltsverzeichnis; am Handy untereinander */
+.showcase-cards.showcase-cards--drei {
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+}
+/* Dunkles Schema: ein schwarzer Schatten verschwindet auf dem dunklen Grund, deshalb eine feine helle Kante und ein
+   weicher Schein wie um das Zeichen der Firma in der App (.brand-mark-kante) */
+[data-md-color-scheme="slate"] .md-typeset img {
+  box-shadow: 0 0 0 1px rgb(255 255 255 / .16), 0 0 20px 1px rgb(255 255 255 / .08);
+}
+/* Screenshots und Hero bringen Kante, Schatten oder Schein und Ecken im Bild mit, für GitHub
+   (apps/web/e2e/bildrahmen.ts); um sie kein zweiter Rahmen */
+.md-typeset img[src*="screenshot-"],
+.md-typeset img[src*="hero-"] {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}

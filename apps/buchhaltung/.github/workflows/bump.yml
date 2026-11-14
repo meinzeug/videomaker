@@ -1,0 +1,29 @@
+name: Bump version
+
+# Erhöht die Version in package.json, taggt vX.Y.Z und startet release.yml auf dem Tag, ohne Checkout; dasselbe wie bun run release:patch|minor|major.
+# Release Candidates: preminor (oder prepatch, premajor) taggt vX.Y.Z-rc.1, prerelease den nächsten RC, patch danach die Version.
+# Same scheme as in every project, see https://github.com/firsttris/workflows#bump-version
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        type: choice
+        options: [patch, minor, major, preminor, prepatch, premajor, prerelease]
+        default: patch
+
+# Standard für alle Jobs; Jobs, die mehr brauchen, setzen eigene permissions
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    uses: firsttris/workflows/.github/workflows/bump-version.yml@b66b54d43031638de35c4eb115a7fda258b3f58f # main
+    with:
+      bump: ${{ inputs.bump }}
+    # Das Ruleset auf main (Pull Request, Status-Checks) lehnt Pushes mit dem GITHUB_TOKEN ab (GH013);
+    # der Deploy Key steht auf seiner Bypass-Liste. Mit ihm startet der Tag release.yml von selbst.
+    secrets:
+      deploy-key: ${{ secrets.BUMP_DEPLOY_KEY }}
+    permissions:
+      contents: write
+      actions: write

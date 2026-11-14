@@ -1,0 +1,1492 @@
+diff --git a/INTEGRATION-VIDEOMAKER.md b/INTEGRATION-VIDEOMAKER.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..3ae7af14657b93e9d35ae0b882f372722134078f
+--- /dev/null
++++ b/INTEGRATION-VIDEOMAKER.md
+@@ -0,0 +1,14 @@
++# Einbindung in Video-Maker: technischer Zwischenstand
++
++Der vollständige Haben-Quelltext wird hier unter Erhalt von `LICENSE` und `NOTICE` weiterentwickelt.
++Für eine Installation unter `/buchhaltung/` muss beim Build `HABEN_BASE_PATH=/buchhaltung` gesetzt
++werden. Dieselbe öffentliche Adresse einschließlich Unterpfad muss in `BETTER_AUTH_URL` stehen,
++beispielsweise `https://videomaker.dorfspy.de/buchhaltung`. Der Reverse Proxy muss diesen Pfad
++einschließlich Präfix weiterreichen. Die Einstellung wird beim Build fest eingebunden und kann nicht
++erst zur Laufzeit geändert werden.
++
++Die Unterpfad-Integration ist noch nicht für den produktiven Buchhaltungsbetrieb freigegeben. Vorher
++sind insbesondere Builds und Browserprüfungen im Root und Unterpfad nötig, einschließlich Anmeldung,
++Passkeys, SSO-Callbacks, Upload/Download, API, PWA, Bank-Callback und Wiederherstellung. Auch die
++Anbindung an die Video-Maker-Anmeldung, die Datenübernahme und der native Serverbetrieb sind gesondert
++umzusetzen und zu prüfen.
+diff --git a/apps/web/public/manifest.webmanifest b/apps/web/public/manifest.webmanifest
+index 586191039f5eaa52038f6ab2653e74268030cc11..91b50592eac7cfb320c58adc12260e6495627a83 100644
+--- a/apps/web/public/manifest.webmanifest
++++ b/apps/web/public/manifest.webmanifest
+@@ -2,23 +2,23 @@
+   "name": "Haben – Buchhaltung",
+   "short_name": "Haben",
+   "lang": "de",
+-  "start_url": "/",
+-  "scope": "/",
++  "start_url": "./",
++  "scope": "./",
+   "display": "standalone",
+   "background_color": "#F4F5F2",
+   "theme_color": "#16211C",
+   "icons": [
+-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+-    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+-    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
++    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
++    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
++    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
++    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+   ],
+   "shortcuts": [
+-    { "name": "Beleg hochladen", "url": "/belege" },
+-    { "name": "Neue Rechnung", "url": "/rechnungen/neu" }
++    { "name": "Beleg hochladen", "url": "belege" },
++    { "name": "Neue Rechnung", "url": "rechnungen/neu" }
+   ],
+   "share_target": {
+-    "action": "/api/belege/teilen",
++    "action": "api/belege/teilen",
+     "method": "POST",
+     "enctype": "multipart/form-data",
+     "params": {
+diff --git a/apps/web/src/components/DatevCard.tsx b/apps/web/src/components/DatevCard.tsx
+index 49a1787350aa190475ebf7a0099b34d69535054a..bbf37761bca3286a73040ab136938c190dc359a2 100644
+--- a/apps/web/src/components/DatevCard.tsx
++++ b/apps/web/src/components/DatevCard.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import { currentYear, personenkontenBetroffen } from "@haben/core";
+ import { useServerFn } from "@tanstack/react-start";
+ import { useState, type FormEvent, type MouseEvent } from "react";
+@@ -137,7 +138,7 @@ export function DatevCard({ years, numbers }: { years: number[]; numbers: Awaite
+           )}
+         </Field>
+         {saved ? (
+-          <a className="btn btn-primary" href={`/api/datev/${year}`} download onClick={onDownload}>
++          <a className="btn btn-primary" href={appPath(`/api/datev/${year}`)} download onClick={onDownload}>
+             Buchungsstapel herunterladen
+           </a>
+         ) : (
+diff --git a/apps/web/src/components/Ebilanz.tsx b/apps/web/src/components/Ebilanz.tsx
+index 7cdb9d99b85c28026bfdb70e01db150d39394be1..ce1d6ee2e84ea6371e90f07da5bf4ed6b2c01c3b 100644
+--- a/apps/web/src/components/Ebilanz.tsx
++++ b/apps/web/src/components/Ebilanz.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+ import { ELSTER_KIND_LABEL, elsterNotice } from "../lib/elster.ts";
+@@ -72,7 +73,7 @@ export function Ebilanz({ year, ebilanz, setup, closed }: { year: number; ebilan
+                   </span>
+                 </div>
+                 {entry.hasPdf && (
+-                  <a href={`/api/protokoll/${entry.id}`} target="_blank" rel="noreferrer" className="small">
++                  <a href={appPath(`/api/protokoll/${entry.id}`)} target="_blank" rel="noreferrer" className="small">
+                     Protokoll
+                   </a>
+                 )}
+diff --git a/apps/web/src/components/ExportCard.tsx b/apps/web/src/components/ExportCard.tsx
+index fe310cd053bbde81845a09fc4a7126d03be49cee..08fdca1ee3249c555c6f65e52069df8c2f625687 100644
+--- a/apps/web/src/components/ExportCard.tsx
++++ b/apps/web/src/components/ExportCard.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import { currentYear } from "@haben/core";
+ import { useState } from "react";
+ import { Field } from "./Field.tsx";
+@@ -25,7 +26,7 @@ export function ExportCard({ years }: { years: number[] }) {
+         )}
+       </Field>
+       <div className="actions">
+-        <a className="btn" href={`/api/export/${year}`} download>
++        <a className="btn" href={appPath(`/api/export/${year}`)} download>
+           ZIP herunterladen
+         </a>
+       </div>
+diff --git a/apps/web/src/components/GestaltungCards.tsx b/apps/web/src/components/GestaltungCards.tsx
+index 47e1604f349550f8745c89248da0f35e4cc828b6..bf7e21db57545195a23f0665c75de66f01a5940a 100644
+--- a/apps/web/src/components/GestaltungCards.tsx
++++ b/apps/web/src/components/GestaltungCards.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+ import { useState } from "react";
+@@ -113,7 +114,7 @@ export function LetterheadBackgroundCard({
+       </p>
+       <ImageUpload
+         sha256={background}
+-        url="/api/briefpapier"
++        url={appPath("/api/briefpapier")}
+         maxBytes={2 * 1024 * 1024}
+         texts={BACKGROUND_TEXTS}
+         upload={upload}
+diff --git a/apps/web/src/components/Hinterlegung.tsx b/apps/web/src/components/Hinterlegung.tsx
+index a4cdf04f54ce1dd776eaba6a4b9a6f4d191cc10a..50ef6086f7f2ccf8d409103d7ddd2f81579e1720 100644
+--- a/apps/web/src/components/Hinterlegung.tsx
++++ b/apps/web/src/components/Hinterlegung.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import { Link } from "@tanstack/react-router";
+ import { useId, useState } from "react";
+ import { formatDate } from "../lib/format.ts";
+@@ -94,7 +95,7 @@ export function Hinterlegung({ year, stand, closed }: { year: number; stand: Hin
+       )}
+       <form
+         method="get"
+-        action={`/api/hinterlegung/${year}`}
++        action={appPath(`/api/hinterlegung/${year}`)}
+         className="stack"
+         style={{ gap: 16, maxWidth: 760, marginTop: 4 }}
+         aria-label="Bilanz zur Hinterlegung"
+diff --git a/apps/web/src/components/InvoiceAttachments.tsx b/apps/web/src/components/InvoiceAttachments.tsx
+index 0fc2a9207c59dc91fc41951ff8a8d9152ff313b1..d62d97e02c2f7a566a6aef993b019aeaeea8dbca 100644
+--- a/apps/web/src/components/InvoiceAttachments.tsx
++++ b/apps/web/src/components/InvoiceAttachments.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+ import { useId, useState } from "react";
+@@ -19,7 +20,7 @@ const KINDS = {
+   rechnung: {
+     heading: "Anhänge",
+     empty: "Keine zusätzlichen Anhänge.",
+-    href: "/api/rechnungsanhang",
++    href: appPath("/api/rechnungsanhang"),
+     owner: "dieser Rechnung",
+     removeHint:
+       "Der Anhang verschwindet aus diesem Entwurf. Nutzt sonst nichts die Datei, wird sie aus Haben gelöscht; hast du sie nur hier, lade sie vorher herunter.",
+@@ -30,7 +31,7 @@ const KINDS = {
+   angebot: {
+     heading: "Anhänge",
+     empty: "Keine zusätzlichen Anhänge.",
+-    href: "/api/angebotsanhang",
++    href: appPath("/api/angebotsanhang"),
+     owner: "diesem Angebot",
+     removeHint:
+       "Der Anhang verschwindet aus diesem Entwurf. Nutzt sonst nichts die Datei, wird sie aus Haben gelöscht; hast du sie nur hier, lade sie vorher herunter.",
+@@ -41,7 +42,7 @@ const KINDS = {
+   standard: {
+     heading: "Standardanhänge für Angebote",
+     empty: "Keine Standardanhänge.",
+-    href: "/api/standardanhang",
++    href: appPath("/api/standardanhang"),
+     owner: "den Standardanhängen",
+     removeHint: "Neue Angebote bekommen die Datei dann nicht mehr. Bestehende Angebote behalten sie.",
+     examples: "Etwa AGB oder Widerrufsbelehrung",
+diff --git a/apps/web/src/components/InvoiceEditor.tsx b/apps/web/src/components/InvoiceEditor.tsx
+index 51e556ab497c42ff04dbec467117eeba0c988fc9..174b7f1936b0e90853359bc3685b8d1e475d1f21 100644
+--- a/apps/web/src/components/InvoiceEditor.tsx
++++ b/apps/web/src/components/InvoiceEditor.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import {
+   type LetterheadDesign,
+   type PaymentMethod,
+@@ -566,7 +567,7 @@ export function InvoiceEditor({
+     void run(async () => {
+       const saving = dirty || id === null;
+       const savedId = saving ? await persist() : id;
+-      await downloadFrom(`/api/entwurf/${quote ? "angebot" : "rechnung"}/${savedId}?download`, quote ? "Angebot-Entwurf.pdf" : "Rechnung-Entwurf.pdf");
++      await downloadFrom(appPath(`/api/entwurf/${quote ? "angebot" : "rechnung"}/${savedId}?download`), quote ? "Angebot-Entwurf.pdf" : "Rechnung-Entwurf.pdf");
+       if (id === null) {
+         await openSaved(savedId);
+       } else if (saving) {
+diff --git a/apps/web/src/components/LayoutsCard.tsx b/apps/web/src/components/LayoutsCard.tsx
+index d98da48eb0b8916f82bc719a39d2cb1e8e3470b8..5644160a78835539f37d8da964e9e872a82c211d 100644
+--- a/apps/web/src/components/LayoutsCard.tsx
++++ b/apps/web/src/components/LayoutsCard.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+ import { useState } from "react";
+@@ -47,7 +48,7 @@ function PackageDialog({ packages, onConfirm, onClose }: { packages: string[] |
+ const ART_LABEL = { beleg: "Belege", mahnung: "Mahnungen" } as const;
+ const artFor = (type: LayoutDocumentType) => (type === "mahnung" ? "mahnung" : "beleg");
+ const refValue = (ref: LayoutRef) => `${ref.kind}:${ref.id}`;
+-const DOWNLOAD = "/api/belegvorlagen";
++const DOWNLOAD = appPath("/api/belegvorlagen");
+ export const LAYOUTS_DOCS = "https://haben.app/belegvorlagen.html";
+ 
+ /** Datei als Text lesen; Typst-Vorlagen sind UTF-8 */
+diff --git a/apps/web/src/components/LogoUpload.tsx b/apps/web/src/components/LogoUpload.tsx
+index 08aa6cb39853b41c0aa3b22282f459ebb52e8378..70d94c13497cfc9534e55ac4278e98a722044c0b 100644
+--- a/apps/web/src/components/LogoUpload.tsx
++++ b/apps/web/src/components/LogoUpload.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+ import { deleteLogo, getLogo, uploadLogo } from "../server/functions/logo.ts";
+@@ -42,7 +43,7 @@ export function LogoUpload({
+   return (
+     <ImageUpload
+       sha256={sha256}
+-      url="/api/logo"
++      url={appPath("/api/logo")}
+       maxBytes={1024 * 1024}
+       texts={TEXTS}
+       upload={upload}
+diff --git a/apps/web/src/components/MandateCard.tsx b/apps/web/src/components/MandateCard.tsx
+index 45cf6823b061261b78a1e6177606f114cf053560..2f505ffdadd720d00e88886c64a7e7abc502d368 100644
+--- a/apps/web/src/components/MandateCard.tsx
++++ b/apps/web/src/components/MandateCard.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import { MANDAT_SCHEMA_LABEL, type MandatStatus } from "@haben/core";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -209,7 +210,7 @@ function MandateRow({ mandate: m, busy, onFile, onRevoke }: RowProps) {
+       <span className="small muted mono">{m.debtorIban}</span>
+       <div className="actions" style={{ alignItems: "center", marginTop: 4 }}>
+         {m.file ? (
+-          <a className="small" href={`/api/mandat/${m.id}`} target="_blank" rel="noreferrer">
++          <a className="small" href={appPath(`/api/mandat/${m.id}`)} target="_blank" rel="noreferrer">
+             Mandat als PDF
+           </a>
+         ) : (
+diff --git a/apps/web/src/components/McpCard.tsx b/apps/web/src/components/McpCard.tsx
+index 6182b9d3b38a8a229997ce1b30658fcf04cb9788..4b8bb2ec70664e2685784bd277b4e99ed241737c 100644
+--- a/apps/web/src/components/McpCard.tsx
++++ b/apps/web/src/components/McpCard.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+ import { useEffect, useState, type FormEvent } from "react";
+@@ -37,8 +38,8 @@ export function McpCard({ data }: { data: Data }) {
+   // Erst nach dem Hydrieren: der Server kennt die Adresse im Browser nicht, sonst wiche der Text ab (React #418)
+   const [origin, setOrigin] = useState("");
+   useEffect(() => setOrigin(window.location.origin), []);
+-  const endpoint = `${origin}/api/mcp`;
+-  const apiBase = `${origin}/api/v1`;
++  const endpoint = `${origin}${appPath("/api/mcp")}`;
++  const apiBase = `${origin}${appPath("/api/v1")}`;
+   const label = (scope: string) => data.scopes.find((s) => s.id === scope)?.label ?? scope;
+ 
+   function onCreate(event: FormEvent<HTMLFormElement>) {
+@@ -100,7 +101,7 @@ export function McpCard({ data }: { data: Data }) {
+         {data.enabled && (
+           <p className="small muted" style={{ margin: 0 }}>
+             MCP: <span className="mono">{endpoint}</span> · REST-API: <span className="mono">{apiBase}</span> (Beschreibung:{" "}
+-            <a href="/api/v1/openapi.json" target="_blank" rel="noreferrer">
++            <a href={appPath("/api/v1/openapi.json")} target="_blank" rel="noreferrer">
+               openapi.json
+             </a>
+             )
+diff --git a/apps/web/src/components/NavMarkCard.tsx b/apps/web/src/components/NavMarkCard.tsx
+index 37f320ded0d91cf9c13c75644e1a39a6bbf0aa74..6e32e09be4eba58840aecc38b9a48f96e014287f 100644
+--- a/apps/web/src/components/NavMarkCard.tsx
++++ b/apps/web/src/components/NavMarkCard.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+ import { useState, type FormEvent } from "react";
+@@ -28,7 +29,7 @@ export function NavMarkCard({ color, logo, logoSha256 }: { color: string | null;
+   // Vorschau mit dem Logo aus der Beleggestaltung; /api/kennzeichen liefert es erst, wenn es gewählt ist
+   const vorschau =
+     art === "logo" && logoSha256
+-      ? { logo: `/api/logo?v=${logoSha256.slice(0, 16)}` }
++      ? { logo: appPath(`/api/logo?v=${logoSha256.slice(0, 16)}`) }
+       : navMark({ color: art === "farbe" && valid ? farbe : null, logo: false }, null);
+ 
+   function onSubmit(event: FormEvent<HTMLFormElement>) {
+diff --git a/apps/web/src/components/SsoSignIn.tsx b/apps/web/src/components/SsoSignIn.tsx
+index 7ec9753451e0395bc71286587d9aa6e34d3744cd..d264da3e70d6d7555730988286161742515bee08 100644
+--- a/apps/web/src/components/SsoSignIn.tsx
++++ b/apps/web/src/components/SsoSignIn.tsx
+@@ -1,5 +1,6 @@
+ import { useEffect, useState } from "react";
+ import { authClient } from "../lib/auth-client.ts";
++import { appPath } from "../lib/app-path.ts";
+ 
+ /** Hinweise zu ?sso=… nach einem abgewiesenen Callback; der Grund kommt vom Server, nie mit Details zur Identität */
+ const ssoReasons = (provider: string): Record<string, string> => ({
+@@ -30,7 +31,7 @@ export function SsoSignIn({ name, label }: { name: string; label?: string }) {
+     setBusy(true);
+     setError(null);
+     try {
+-      const result = await authClient.signIn.social({ provider: "oidc", callbackURL: "/" });
++      const result = await authClient.signIn.social({ provider: "oidc", callbackURL: appPath("/") });
+       // Better Auth begrenzt Anmeldeversuche je Adresse (3 in 10 Sekunden)
+       if (result.error)
+         setError(result.error.status === 429 ? "Zu viele Anmeldeversuche. Bitte einen Moment warten und erneut versuchen." : ssoReasons(name).fehler!);
+diff --git a/apps/web/src/components/VastBelege.tsx b/apps/web/src/components/VastBelege.tsx
+index 2979d0885e3af0db22ef0f91adb0c0795b93dc2c..69373def59b2ba8f887a1768e0b99bf3bce179f7 100644
+--- a/apps/web/src/components/VastBelege.tsx
++++ b/apps/web/src/components/VastBelege.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../lib/app-path.ts";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+ import { useState, type FormEvent } from "react";
+@@ -50,7 +51,7 @@ function BelegDetails({ beleg }: { beleg: Beleg }) {
+         </p>
+       )}
+       <p className="small" style={{ margin: "8px 0 0" }}>
+-        <a href={`/api/vast/${beleg.id}`} target="_blank" rel="noreferrer">
++        <a href={appPath(`/api/vast/${beleg.id}`)} target="_blank" rel="noreferrer">
+           Beleg als XML
+         </a>
+       </p>
+diff --git a/apps/web/src/components/archiv/ArchiveFiles.tsx b/apps/web/src/components/archiv/ArchiveFiles.tsx
+index f9ccefd72a1147df65d5d46f64c681d3cbd9f8a5..b7cca295e8dcaf86c604a57bd8ca8eeec23dd334 100644
+--- a/apps/web/src/components/archiv/ArchiveFiles.tsx
++++ b/apps/web/src/components/archiv/ArchiveFiles.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../lib/app-path.ts";
+ import { formatDate, formatDateTime, formatSize } from "../../lib/format.ts";
+ import type { getMigration } from "../../server/functions/archive.ts";
+ import { ArchiveUpload } from "./ArchiveUpload.tsx";
+@@ -27,7 +28,7 @@ export function ArchiveFiles({ files, kinds }: { files: MigrationData["files"];
+                 <div className="mono small">{file.year ?? "–"}</div>
+                 <div className="small">{label[file.kind] ?? file.kind}</div>
+                 <div className="ellipsis">
+-                  <a href={`/api/archiv/${file.id}`} target="_blank" rel="noreferrer">
++                  <a href={appPath(`/api/archiv/${file.id}`)} target="_blank" rel="noreferrer">
+                     {file.filename}
+                   </a>
+                   <div className="small muted ellipsis" title={`SHA-256 ${file.sha256}`}>
+diff --git a/apps/web/src/components/archiv/WebBackup.tsx b/apps/web/src/components/archiv/WebBackup.tsx
+index a3c5e99eef3ddf0bc9af1733832a9512e4526908..623d60d563bbc472a41ca177641451434e865e8e 100644
+--- a/apps/web/src/components/archiv/WebBackup.tsx
++++ b/apps/web/src/components/archiv/WebBackup.tsx
+@@ -1,4 +1,5 @@
+ import { useRouter } from "@tanstack/react-router";
++import { appPath } from "../../lib/app-path.ts";
+ import { useServerFn } from "@tanstack/react-start";
+ import { useId, useRef, useState, type FormEvent } from "react";
+ import { errorMessage } from "../../lib/format.ts";
+@@ -6,7 +7,7 @@ import { getImportStatus, uploadLexwareBackup } from "../../server/functions/arc
+ import { FilePicker } from "../FilePicker.tsx";
+ import { Field } from "../Field.tsx";
+ 
+-const SCRIPT_URL = "/lexware-sicherung.js";
++const SCRIPT_URL = appPath("/lexware-sicherung.js");
+ 
+ type Message = { tone: "ok" | "info" | "danger"; text: string } | null;
+ 
+diff --git a/apps/web/src/components/jahreserklaerung/AbgabeVermerken.tsx b/apps/web/src/components/jahreserklaerung/AbgabeVermerken.tsx
+index fc14281b45008c9d5a3355b9bd5a51db81b3c9d2..2651724ed1b5e7b777aabca90d555c52fc273297 100644
+--- a/apps/web/src/components/jahreserklaerung/AbgabeVermerken.tsx
++++ b/apps/web/src/components/jahreserklaerung/AbgabeVermerken.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../lib/app-path.ts";
+ import { formatDecimal, formatEuro, parseEuro } from "@haben/core";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -119,7 +120,7 @@ export function AbgabeVermerken({
+           </div>
+         </dl>
+         {vermerkt.hasPdf && (
+-          <a href={`/api/protokoll/${vermerkt.id}`} target="_blank" rel="noreferrer" className="small">
++          <a href={appPath(`/api/protokoll/${vermerkt.id}`)} target="_blank" rel="noreferrer" className="small">
+             Übermittlungsprotokoll
+           </a>
+         )}
+diff --git a/apps/web/src/components/lohn/AbrechnungKarte.tsx b/apps/web/src/components/lohn/AbrechnungKarte.tsx
+index 7448ae529e317a7875b818993870550e703ac041..5576f1fcba61e771935c835772b0a71f128f601d 100644
+--- a/apps/web/src/components/lohn/AbrechnungKarte.tsx
++++ b/apps/web/src/components/lohn/AbrechnungKarte.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../lib/app-path.ts";
+ import { formatEuro, parseEuro } from "@haben/core";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -247,7 +248,7 @@ export function AbrechnungKarte({ p, nummer, name }: { p: Abrechnung; nummer: nu
+       )}
+       {p.storno?.reason && <p className="small muted">Grund des Stornos: {p.storno.reason}</p>}
+       <div className="actions">
+-        <a href={`/api/lohn/abrechnung/${p.id}`} target="_blank" rel="noreferrer">
++        <a href={appPath(`/api/lohn/abrechnung/${p.id}`)} target="_blank" rel="noreferrer">
+           {p.lockedAt ? "Entgeltabrechnung (PDF)" : "Entwurf ansehen (PDF)"}
+         </a>
+       </div>
+diff --git a/apps/web/src/components/sv-meldeportal/Vermerk.tsx b/apps/web/src/components/sv-meldeportal/Vermerk.tsx
+index 484fb709589a4b6634576c29d101fb99fb513a86..bd8929035c344a09a497a3b46f1e7293eb8c4125 100644
+--- a/apps/web/src/components/sv-meldeportal/Vermerk.tsx
++++ b/apps/web/src/components/sv-meldeportal/Vermerk.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../lib/app-path.ts";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+ import { type FormEvent, useRef, useState } from "react";
+@@ -104,7 +105,7 @@ function VermerkZeile({ v, titel }: { v: VermerkStandDaten["vermerke"][number];
+         {v.protokollDateiname && (
+           <>
+             {" · "}
+-            <a href={`/api/sv-protokoll/${v.id}`} target="_blank" rel="noreferrer">
++            <a href={appPath(`/api/sv-protokoll/${v.id}`)} target="_blank" rel="noreferrer">
+               Protokoll {v.protokollDateiname}
+             </a>
+             {v.protokollGroesse !== null && <span className="small muted"> ({formatSize(v.protokollGroesse)})</span>}
+diff --git a/apps/web/src/components/umsatzsteuer/DauerfristCard.tsx b/apps/web/src/components/umsatzsteuer/DauerfristCard.tsx
+index 66222c2126db5e61f63b2b313deb68f40caa4ac3..5fc8ee963ae8f6cc2050026a00652d143ffa75a9 100644
+--- a/apps/web/src/components/umsatzsteuer/DauerfristCard.tsx
++++ b/apps/web/src/components/umsatzsteuer/DauerfristCard.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../lib/app-path.ts";
+ import { formatDecimal, formatEuro, parseEuro } from "@haben/core";
+ import { useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -152,7 +153,7 @@ export function DauerfristCard({ overview, setup }: { overview: Overview; setup:
+               {entry.hasPdf && (
+                 <>
+                   {" · "}
+-                  <a href={`/api/protokoll/${entry.id}`} target="_blank" rel="noreferrer">
++                  <a href={appPath(`/api/protokoll/${entry.id}`)} target="_blank" rel="noreferrer">
+                     Protokoll
+                   </a>
+                 </>
+diff --git a/apps/web/src/lib/app-path.test.ts b/apps/web/src/lib/app-path.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..021aebeee93767703d117c984cd815d824ad3b33
+--- /dev/null
++++ b/apps/web/src/lib/app-path.test.ts
+@@ -0,0 +1,30 @@
++import { readFileSync } from "node:fs";
++import { describe, expect, it } from "vitest";
++import { prefixAppPath } from "./app-path.ts";
++
++describe("Anwendungspfade", () => {
++  it("behält Pfade bei einer Installation im Root unverändert", () => {
++    expect(prefixAppPath("/", "/api/beleg/123?download#view")).toBe("/api/beleg/123?download#view");
++  });
++
++  it("setzt bei einer Installation im Unterpfad den Basispfad voran", () => {
++    expect(prefixAppPath("/buchhaltung/", "/api/beleg/123?download#view")).toBe("/buchhaltung/api/beleg/123?download#view");
++    expect(prefixAppPath("/buchhaltung/", "/")).toBe("/buchhaltung/");
++  });
++
++  it("lehnt fremde und relative Ziele ab", () => {
++    expect(() => prefixAppPath("/buchhaltung/", "//example.org/x")).toThrow();
++    expect(() => prefixAppPath("/buchhaltung/", "https://example.org/x")).toThrow();
++    expect(() => prefixAppPath("/buchhaltung/", "api/x")).toThrow();
++  });
++
++  it.each(["/", "/buchhaltung/"])("begrenzt das PWA-Manifest auf %s", (base) => {
++    const manifest = JSON.parse(readFileSync(new URL("../../public/manifest.webmanifest", import.meta.url), "utf8"));
++    const manifestUrl = `https://example.org${base}manifest.webmanifest`;
++    expect(new URL(manifest.scope, manifestUrl).pathname).toBe(base);
++    expect(new URL(manifest.start_url, manifestUrl).pathname).toBe(base);
++    for (const icon of manifest.icons) expect(new URL(icon.src, manifestUrl).pathname.startsWith(base)).toBe(true);
++    for (const shortcut of manifest.shortcuts) expect(new URL(shortcut.url, manifestUrl).pathname.startsWith(base)).toBe(true);
++    expect(new URL(manifest.share_target.action, manifestUrl).pathname).toBe(`${base}api/belege/teilen`);
++  });
++});
+diff --git a/apps/web/src/lib/app-path.ts b/apps/web/src/lib/app-path.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..52424765028daf3b46e9ed6a08ff4e521badc1ac
+--- /dev/null
++++ b/apps/web/src/lib/app-path.ts
+@@ -0,0 +1,9 @@
++/** Ein lokaler Anwendungspfad unter dem beim Build festgelegten Vite-Basispfad. */
++export function prefixAppPath(base: string, path: string): string {
++  if (!path.startsWith("/") || path.startsWith("//")) throw new Error("Anwendungspfad muss mit genau einem / beginnen");
++  return `${base.replace(/\/$/, "")}${path}`;
++}
++
++export function appPath(path: string): string {
++  return prefixAppPath(import.meta.env.BASE_URL, path);
++}
+diff --git a/apps/web/src/lib/auth-client.ts b/apps/web/src/lib/auth-client.ts
+index 5d6b3e589cca8699a83fc34a0f11d5a09a60c1a0..e42c78fa8435f162554daf7f14fa30c107a70211 100644
+--- a/apps/web/src/lib/auth-client.ts
++++ b/apps/web/src/lib/auth-client.ts
+@@ -1,4 +1,5 @@
+ import { passkeyClient } from "@better-auth/passkey/client";
+ import { createAuthClient } from "better-auth/react";
++import { appPath } from "./app-path.ts";
+ 
+-export const authClient = createAuthClient({ plugins: [passkeyClient()] });
++export const authClient = createAuthClient({ basePath: appPath("/api/auth"), plugins: [passkeyClient()] });
+diff --git a/apps/web/src/lib/navigation.ts b/apps/web/src/lib/navigation.ts
+index b5fc3787e1a8d3009898d0822a8d245ae79309f0..ce5c9de3b2d467f0e6d25aefeb9ec72935099347 100644
+--- a/apps/web/src/lib/navigation.ts
++++ b/apps/web/src/lib/navigation.ts
+@@ -1,3 +1,4 @@
++import { appPath } from "./app-path.ts";
+ import { ACCENT_PATTERN, inkOnAccent, needsEdgeOnNav } from "@haben/core";
+ 
+ /** Bedingungen, unter denen ein Menüpunkt der Hauptnavigation erscheint */
+@@ -29,7 +30,7 @@ export type NavMark = { logo: string } | { background: string; ink: "#FFFFFF" |
+  * der Schrift nach dem höheren Kontrast. Die Prüfsumme in der Adresse lädt ein neues Logo, ohne dass ein Cache stört.
+  */
+ export function navMark(setting: { color: string | null; logo: boolean }, logoSha256: string | null): NavMark {
+-  if (setting.logo && logoSha256) return { logo: `/api/kennzeichen?v=${logoSha256.slice(0, 16)}` };
++  if (setting.logo && logoSha256) return { logo: appPath(`/api/kennzeichen?v=${logoSha256.slice(0, 16)}`) };
+   if (setting.color && ACCENT_PATTERN.test(setting.color))
+     return { background: setting.color.toUpperCase(), ink: inkOnAccent(setting.color), kante: needsEdgeOnNav(setting.color) };
+   return null;
+diff --git a/apps/web/src/router.tsx b/apps/web/src/router.tsx
+index 6329bc2ade28de5f38b3485aa7d5c2eacaa64373..298a1f36c4c25991610a903395e3ea8bfdb900e2 100644
+--- a/apps/web/src/router.tsx
++++ b/apps/web/src/router.tsx
+@@ -5,6 +5,7 @@ import { routeTree } from "./routeTree.gen.ts";
+ export function getRouter() {
+   return createRouter({
+     routeTree,
++    basepath: import.meta.env.BASE_URL,
+     scrollRestoration: true,
+     defaultPreload: "intent",
+     defaultNotFoundComponent: NichtGefunden,
+diff --git a/apps/web/src/routes/__root.tsx b/apps/web/src/routes/__root.tsx
+index 73337adc240f141b2253e9d60c03dbb5d20e474d..6831fc6891be6fb34af30743001407a80cf31f63 100644
+--- a/apps/web/src/routes/__root.tsx
++++ b/apps/web/src/routes/__root.tsx
+@@ -1,6 +1,7 @@
+ import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
+ import { useEffect, type ReactNode } from "react";
+ import { THEME_SCRIPT } from "../lib/theme.ts";
++import { appPath } from "../lib/app-path.ts";
+ import styles from "../styles.css?url";
+ 
+ export const Route = createRootRoute({
+@@ -12,9 +13,9 @@ export const Route = createRootRoute({
+       { title: "Haben" },
+     ],
+     links: [
+-      { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
+-      { rel: "manifest", href: "/manifest.webmanifest" },
+-      { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
++      { rel: "icon", href: appPath("/favicon.svg"), type: "image/svg+xml" },
++      { rel: "manifest", href: appPath("/manifest.webmanifest") },
++      { rel: "apple-touch-icon", href: appPath("/apple-touch-icon.png") },
+       { rel: "stylesheet", href: styles },
+     ],
+   }),
+@@ -28,7 +29,7 @@ export const Route = createRootRoute({
+ function Document({ children }: { children: ReactNode }) {
+   // Service Worker nur fürs Installieren als App (Kamera, Teilen-Menü)
+   useEffect(() => {
+-    if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").catch(() => {});
++    if ("serviceWorker" in navigator) void navigator.serviceWorker.register(appPath("/sw.js"), { scope: appPath("/") }).catch(() => {});
+   }, []);
+   return (
+     // data-theme und data-mode setzt das Skript vor dem Hydrieren; der Server kennt die Wahl nicht
+diff --git a/apps/web/src/routes/_app/angebote/$id.tsx b/apps/web/src/routes/_app/angebote/$id.tsx
+index 83d7ba8532262713bee9dcfe5b008234570f6d4d..bf933fe21fc2dbbf986201a1ba8b5d54387be70b 100644
+--- a/apps/web/src/routes/_app/angebote/$id.tsx
++++ b/apps/web/src/routes/_app/angebote/$id.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import { discountFromColumns, formatEuro, TAX_TREATMENTS, type UnitLabel } from "@haben/core";
+ import { Link, createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -149,7 +150,7 @@ function FinalQuote({ data }: { data: Detail }) {
+           </div>
+         </div>
+         <div className="actions">
+-          <a className="btn" href={`/api/angebot/${quote.id}?download`}>
++          <a className="btn" href={appPath(`/api/angebot/${quote.id}?download`)}>
+             PDF herunterladen
+           </a>
+           <button type="button" className="btn" onClick={() => void onCopy()} disabled={busy}>
+@@ -162,8 +163,8 @@ function FinalQuote({ data }: { data: Detail }) {
+ 
+       <div className="grid-main">
+         <section aria-label="PDF">
+-          <iframe className="pdf-frame" src={`/api/angebot/${quote.id}#view=Fit`} title={`PDF des Angebots ${quote.number}`} />
+-          <a className="btn pdf-open" href={`/api/angebot/${quote.id}`} target="_blank" rel="noreferrer">
++          <iframe className="pdf-frame" src={appPath(`/api/angebot/${quote.id}#view=Fit`)} title={`PDF des Angebots ${quote.number}`} />
++          <a className="btn pdf-open" href={appPath(`/api/angebot/${quote.id}`)} target="_blank" rel="noreferrer">
+             PDF öffnen
+           </a>
+         </section>
+@@ -227,10 +228,10 @@ function FinalQuote({ data }: { data: Detail }) {
+             )}
+             {quote.decision === "angenommen" && (
+               <div className="actions" style={{ flexWrap: "wrap" }}>
+-                <a className="btn btn-sm" href={`/api/dokument/auftragsbestaetigung/${quote.id}`} target="_blank" rel="noreferrer">
++                <a className="btn btn-sm" href={appPath(`/api/dokument/auftragsbestaetigung/${quote.id}`)} target="_blank" rel="noreferrer">
+                   Auftragsbestätigung (PDF)
+                 </a>
+-                <a className="btn btn-sm" href={`/api/dokument/lieferschein-angebot/${quote.id}`} target="_blank" rel="noreferrer">
++                <a className="btn btn-sm" href={appPath(`/api/dokument/lieferschein-angebot/${quote.id}`)} target="_blank" rel="noreferrer">
+                   Lieferschein (PDF)
+                 </a>
+               </div>
+diff --git a/apps/web/src/routes/_app/archiv/auftrag.$id.tsx b/apps/web/src/routes/_app/archiv/auftrag.$id.tsx
+index cd13291053c3b1ec558fca91a6769a6de1fdc046..7901fc421975b189fe7644e9f42a743e12b0136c 100644
+--- a/apps/web/src/routes/_app/archiv/auftrag.$id.tsx
++++ b/apps/web/src/routes/_app/archiv/auftrag.$id.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
+ import { useState, type FormEvent } from "react";
+ import { ORDER_KINDS, ORDER_STATUSES } from "../../../components/archiv/OrderDocuments.tsx";
+@@ -118,8 +119,8 @@ function OrderFiles({ files, id }: { files: OrderDetail["files"]; id: string })
+       )}
+       {file ? (
+         <>
+-          <iframe className="doc-preview" src={`/api/archiv/auftragsdatei/${file.id}#view=Fit`} title={file.filename} />
+-          <a className="btn btn-secondary" href={`/api/archiv/auftragsdatei/${file.id}?download`}>
++          <iframe className="doc-preview" src={appPath(`/api/archiv/auftragsdatei/${file.id}#view=Fit`)} title={file.filename} />
++          <a className="btn btn-secondary" href={appPath(`/api/archiv/auftragsdatei/${file.id}?download`)}>
+             PDF herunterladen
+           </a>
+           <p className="small muted archive-fingerprint">
+diff --git a/apps/web/src/routes/_app/archiv/beleg.$id.tsx b/apps/web/src/routes/_app/archiv/beleg.$id.tsx
+index bea3b538d63840564367e1347de2466542864e41..a8b719b4bded64b501623b54b088da43c32ba921 100644
+--- a/apps/web/src/routes/_app/archiv/beleg.$id.tsx
++++ b/apps/web/src/routes/_app/archiv/beleg.$id.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import { formatEuro } from "@haben/core";
+ import { Link, createFileRoute } from "@tanstack/react-router";
+ import { useState } from "react";
+@@ -30,7 +31,7 @@ function LegacyVoucherPage() {
+   const { voucher, files } = Route.useLoaderData();
+   const [selected, setSelected] = useState(files.find((f) => f.role === "pdf")?.id ?? files[0]?.id ?? null);
+   const file = files.find((f) => f.id === selected) ?? null;
+-  const src = file ? `/api/altbeleg/${file.id}` : null;
++  const src = file ? appPath(`/api/altbeleg/${file.id}`) : null;
+   const source = legacySource(voucher.source, voucher.sourceName);
+   return (
+     <>
+diff --git a/apps/web/src/routes/_app/ausschuettungen.tsx b/apps/web/src/routes/_app/ausschuettungen.tsx
+index 44bfa8bb55111b032263a5d3e1e2f8988f85fb96..6b779e582325bf0de913d8e7695bc47e368582a0 100644
+--- a/apps/web/src/routes/_app/ausschuettungen.tsx
++++ b/apps/web/src/routes/_app/ausschuettungen.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../lib/app-path.ts";
+ import { currentYear, formatEuro, isKapitalgesellschaft, parseEuro } from "@haben/core";
+ import { Link, createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -304,7 +305,7 @@ function Steuerbescheinigungen({ a }: { a: Ausschuettung }) {
+         {a.bescheinigungen.map((b) => (
+           <li key={b.nr}>
+             {b.fehlend.length === 0 ? (
+-              <a href={`/api/steuerbescheinigung/${a.id}/${b.nr}`} download>
++              <a href={appPath(`/api/steuerbescheinigung/${a.id}/${b.nr}`)} download>
+                 Steuerbescheinigung {b.name} (PDF)
+               </a>
+             ) : (
+@@ -383,7 +384,7 @@ function AusschuettungCard({ data, a }: { data: Data; a: Ausschuettung }) {
+                   {h.transferTicket ? ` · Ticket ${h.transferTicket}` : ""}
+                 </span>
+                 {h.ok && h.kind !== "validate" && (
+-                  <a href={`/api/protokoll/${h.id}`} target="_blank" rel="noreferrer" className="small">
++                  <a href={appPath(`/api/protokoll/${h.id}`)} target="_blank" rel="noreferrer" className="small">
+                     Protokoll
+                   </a>
+                 )}
+diff --git a/apps/web/src/routes/_app/auswertungen.tsx b/apps/web/src/routes/_app/auswertungen.tsx
+index 31dcb62b9a12aac3ecf49bb8291eead4d085ce98..31c9c671c1f3cdc70550f7deeffb9704c297979a 100644
+--- a/apps/web/src/routes/_app/auswertungen.tsx
++++ b/apps/web/src/routes/_app/auswertungen.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../lib/app-path.ts";
+ import { currentYear, MONTHS, formatEuro, isKapitalgesellschaft, type EuerLine } from "@haben/core";
+ import { Link, createFileRoute } from "@tanstack/react-router";
+ import { useState } from "react";
+@@ -69,7 +70,7 @@ function ReportsPage() {
+             )}
+           </nav>
+           {!gesellschaft && (
+-            <a className="btn btn-primary" href={`/api/auswertungen/${year}`} download>
++            <a className="btn btn-primary" href={appPath(`/api/auswertungen/${year}`)} download>
+               EÜR als CSV
+             </a>
+           )}
+diff --git a/apps/web/src/routes/_app/belege/$id.tsx b/apps/web/src/routes/_app/belege/$id.tsx
+index 0b732e54b5ed87ad9bdfb4a945e13c85589d1c1a..9f8e8da98269623d68e6561cf90f8207fb23bc95 100644
+--- a/apps/web/src/routes/_app/belege/$id.tsx
++++ b/apps/web/src/routes/_app/belege/$id.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import {
+   ASSET_KINDS,
+   ASSET_METHODS,
+@@ -219,7 +220,7 @@ function DocumentPage() {
+               Zur Anlage
+             </Link>
+           )}
+-          <a className="btn" href={`/api/beleg/${doc.id}?download`}>
++          <a className="btn" href={appPath(`/api/beleg/${doc.id}?download`)}>
+             Original herunterladen
+           </a>
+         </div>
+@@ -274,7 +275,7 @@ function DocumentPage() {
+ }
+ 
+ function Preview({ doc }: { doc: Detail["document"] }) {
+-  const src = `/api/beleg/${doc.id}`;
++  const src = appPath(`/api/beleg/${doc.id}`);
+   if (doc.mimeType === "application/pdf") {
+     return (
+       <>
+diff --git a/apps/web/src/routes/_app/dauerbelege/$id.tsx b/apps/web/src/routes/_app/dauerbelege/$id.tsx
+index 6e0f4897716c19d8d097258f3231c7c43917adc7..d32a0ae19112175939279f3bebd7ed62105289fb 100644
+--- a/apps/web/src/routes/_app/dauerbelege/$id.tsx
++++ b/apps/web/src/routes/_app/dauerbelege/$id.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import { formatEuro, type RecurringInterval } from "@haben/core";
+ import { Link, createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -154,7 +155,7 @@ function DauerbelegDetailPage() {
+           <section className="card stack" aria-labelledby="vertrag-heading">
+             <h2 id="vertrag-heading">Vertrag</h2>
+             <p style={{ margin: 0 }}>
+-              <a href={`/api/dauerbeleg/${vorlage.id}`} target="_blank" rel="noreferrer">
++              <a href={appPath(`/api/dauerbeleg/${vorlage.id}`)} target="_blank" rel="noreferrer">
+                 {vorlage.filename}
+               </a>{" "}
+               <span className="small muted">
+diff --git a/apps/web/src/routes/_app/einstellungen.tsx b/apps/web/src/routes/_app/einstellungen.tsx
+index b8948e65539b8c5eccece21d2673f4999fcb8028..07b8723559b0bf336d7db0c935002b72a0dd7068 100644
+--- a/apps/web/src/routes/_app/einstellungen.tsx
++++ b/apps/web/src/routes/_app/einstellungen.tsx
+@@ -13,6 +13,7 @@ import {
+ import { redirect, Link, createFileRoute, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+ import { useEffect, useState, type FormEvent } from "react";
++import { appPath } from "../../lib/app-path.ts";
+ import { BackupCard } from "../../components/BackupCard.tsx";
+ import { BaseRateLookup } from "../../components/BaseRateLookup.tsx";
+ import { DatevCard } from "../../components/DatevCard.tsx";
+@@ -1114,7 +1115,7 @@ function DatenschutzBestaetigung({ bestaetigt }: { bestaetigt: string | null })
+       <div className="section-label">Datenschutzhinweise der Finanzverwaltung</div>
+       <p className="small muted" style={{ margin: 0 }}>
+         Bevor Haben über ERiC prüft oder sendet, nimmst du einmal die{" "}
+-        <a href="/elster-datenschutz.html" target="_blank" rel="noreferrer">
++        <a href={appPath("/elster-datenschutz.html")} target="_blank" rel="noreferrer">
+           Datenschutzhinweise der Finanzverwaltung
+         </a>{" "}
+         zur Kenntnis; so verlangt es der Lizenzvertrag zu ERiC.
+diff --git a/apps/web/src/routes/_app/finanzamt.tsx b/apps/web/src/routes/_app/finanzamt.tsx
+index 66244001fa7d786180735f514b76c39e3eb13336..0ed2c0d965f2aebe65d19659ab91e0be20f45646 100644
+--- a/apps/web/src/routes/_app/finanzamt.tsx
++++ b/apps/web/src/routes/_app/finanzamt.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../lib/app-path.ts";
+ import { formatDecimal, formatEuro, parseEuro } from "@haben/core";
+ import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -503,7 +504,7 @@ function Postfach({ data }: { data: Data }) {
+               {data.documents.map((d) => (
+                 <tr key={d.id}>
+                   <td>
+-                    <a href={`/api/postfach/${d.id}`} target="_blank" rel="noreferrer">
++                    <a href={appPath(`/api/postfach/${d.id}`)} target="_blank" rel="noreferrer">
+                       {d.dateibezeichnung || d.filename}
+                     </a>
+                     <div className="small muted">
+diff --git a/apps/web/src/routes/_app/fristen.tsx b/apps/web/src/routes/_app/fristen.tsx
+index c4130d8adb53469f7999126017fb687e36a281fa..72314fd630994f2312d41273832a973bfca5a3ef 100644
+--- a/apps/web/src/routes/_app/fristen.tsx
++++ b/apps/web/src/routes/_app/fristen.tsx
+@@ -1,4 +1,5 @@
+ import { tageBis } from "@haben/core";
++import { appPath } from "../../lib/app-path.ts";
+ import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+ import { useState } from "react";
+@@ -57,7 +58,7 @@ function FristRow({ frist, today }: { frist: Frist; today: string }) {
+         {formatDate(frist.datum)}
+       </td>
+       <td data-label="Frist">
+-        <a href={frist.link} style={{ fontWeight: 500 }}>
++        <a href={appPath(frist.link)} style={{ fontWeight: 500 }}>
+           {frist.titel}
+         </a>
+         <div className="small muted">{frist.detail}</div>
+@@ -181,7 +182,7 @@ function KalenderAbo() {
+     run(async () => {
+       const { token } = await create();
+       setCopied(false);
+-      setUrl(`${window.location.origin}/api/fristen/kalender?token=${token}`);
++      setUrl(`${window.location.origin}${appPath(`/api/fristen/kalender?token=${token}`)}`);
+       await router.invalidate();
+     });
+ 
+diff --git a/apps/web/src/routes/_app/jahreserklaerung/$jahr.tsx b/apps/web/src/routes/_app/jahreserklaerung/$jahr.tsx
+index 331783ab0a1acbb5ef1dedc214407fa5db87b16e..06d2fa374f6c819be95ff4847cbd3fdf2fc892fe 100644
+--- a/apps/web/src/routes/_app/jahreserklaerung/$jahr.tsx
++++ b/apps/web/src/routes/_app/jahreserklaerung/$jahr.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import { RECHTSFORMEN, formatDecimal, formatEuro, isKapitalgesellschaft, parseEuro } from "@haben/core";
+ import { Link, createFileRoute, notFound, useNavigate, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -740,7 +741,7 @@ function History({ data }: { data: Data }) {
+               </span>
+             </div>
+             {entry.hasPdf && (
+-              <a href={`/api/protokoll/${entry.id}`} target="_blank" rel="noreferrer" className="small">
++              <a href={appPath(`/api/protokoll/${entry.id}`)} target="_blank" rel="noreferrer" className="small">
+                 Protokoll
+               </a>
+             )}
+diff --git a/apps/web/src/routes/_app/kasse.tsx b/apps/web/src/routes/_app/kasse.tsx
+index 098e44498697f74a8cf1b487bf4a08765fc0a816..d06a7b108b4acfe86cf131e103943ef5a511a8fa 100644
+--- a/apps/web/src/routes/_app/kasse.tsx
++++ b/apps/web/src/routes/_app/kasse.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../lib/app-path.ts";
+ import {
+   bareinnahmeText,
+   currentYear,
+@@ -58,7 +59,7 @@ function CashPage() {
+           <h1>Kassenbuch {year}</h1>
+         </div>
+         <div className="actions">
+-          <a className="btn" href={`/api/kasse/${year}`}>
++          <a className="btn" href={appPath(`/api/kasse/${year}`)}>
+             CSV herunterladen
+           </a>
+         </div>
+diff --git a/apps/web/src/routes/_app/konten/$konto.tsx b/apps/web/src/routes/_app/konten/$konto.tsx
+index b5b9f5abf56b372bf3f5f13908189c168dbceaa1..f487e7e54a2a06ee2e41c4b8a3301d79d62a0aff 100644
+--- a/apps/web/src/routes/_app/konten/$konto.tsx
++++ b/apps/web/src/routes/_app/konten/$konto.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import { currentYear, MONTHS, formatEuro, kontoart, type Kontenrahmen } from "@haben/core";
+ import { Link, createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
+ import { Fragment } from "react";
+@@ -96,7 +97,7 @@ function KontenblattPage() {
+               </select>
+             )}
+           </Field>
+-          <a className="btn" href={`/api/konten/${year}?zeitraum=${zeitraum}&konto=${konto}`}>
++          <a className="btn" href={appPath(`/api/konten/${year}?zeitraum=${zeitraum}&konto=${konto}`)}>
+             CSV
+           </a>
+         </div>
+diff --git a/apps/web/src/routes/_app/konten/index.tsx b/apps/web/src/routes/_app/konten/index.tsx
+index 1efed6c2f90199abf0e9ae397fb7a1eb765e2f91..692f57dd886d5b4bd4088907989849b5ca65725f 100644
+--- a/apps/web/src/routes/_app/konten/index.tsx
++++ b/apps/web/src/routes/_app/konten/index.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import { currentYear, formatEuro, kontenkennzahlen, kontenklasse } from "@haben/core";
+ import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
+ import { useMemo, useState } from "react";
+@@ -103,7 +104,7 @@ function KontenPage() {
+               </select>
+             )}
+           </Field>
+-          <a className="btn" href={`/api/konten/${year}?zeitraum=${zeitraum}`}>
++          <a className="btn" href={appPath(`/api/konten/${year}?zeitraum=${zeitraum}`)}>
+             CSV
+           </a>
+         </div>
+diff --git a/apps/web/src/routes/_app/lastschriften.tsx b/apps/web/src/routes/_app/lastschriften.tsx
+index 66f27a296e4c0dfe7dc6d9fa757b05690131c515..35183d9fc0f7f8348e3b126ffbd21bcc69404f40 100644
+--- a/apps/web/src/routes/_app/lastschriften.tsx
++++ b/apps/web/src/routes/_app/lastschriften.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../lib/app-path.ts";
+ import { formatEuro } from "@haben/core";
+ import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -45,7 +46,7 @@ function DirectDebitPage() {
+ /** Lädt die erzeugte Datei herunter, ohne die Seite zu verlassen */
+ function download(id: string, filename: string) {
+   const link = document.createElement("a");
+-  link.href = `/api/lastschrift/${id}`;
++  link.href = appPath(`/api/lastschrift/${id}`);
+   link.download = filename;
+   link.click();
+ }
+@@ -213,7 +214,7 @@ function DirectDebitFiles({ data }: { data: Data }) {
+             </div>
+             <div className="num">{formatEuro(f.controlSum)}</div>
+             <div style={{ justifySelf: "end" }}>
+-              <a className="btn btn-sm" href={`/api/lastschrift/${f.id}`} download={`${f.messageId}.xml`} aria-label={`${f.messageId}.xml herunterladen`}>
++              <a className="btn btn-sm" href={appPath(`/api/lastschrift/${f.id}`)} download={`${f.messageId}.xml`} aria-label={`${f.messageId}.xml herunterladen`}>
+                 Herunterladen
+               </a>
+             </div>
+diff --git a/apps/web/src/routes/_app/lohn/anmeldung.$zeitraum.tsx b/apps/web/src/routes/_app/lohn/anmeldung.$zeitraum.tsx
+index 747edacbdb2f7b92d29aca862a02730484aaf532..60c2230e6c73c583a22cd81315e0c23fe471607a 100644
+--- a/apps/web/src/routes/_app/lohn/anmeldung.$zeitraum.tsx
++++ b/apps/web/src/routes/_app/lohn/anmeldung.$zeitraum.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import {
+   BESCHAEFTIGUNGSARTEN,
+   formatEuro,
+@@ -353,7 +354,7 @@ function Senden({ data }: { data: Data }) {
+                 {entry.hasPdf && (
+                   <>
+                     {" · "}
+-                    <a href={`/api/protokoll/${entry.id}`} target="_blank" rel="noreferrer">
++                    <a href={appPath(`/api/protokoll/${entry.id}`)} target="_blank" rel="noreferrer">
+                       Protokoll
+                     </a>
+                   </>
+diff --git a/apps/web/src/routes/_app/lohn/bescheinigung.$jahr.tsx b/apps/web/src/routes/_app/lohn/bescheinigung.$jahr.tsx
+index 82c8d3fa446e26dbb0c9bf94f185dd97bd1b4178..cc713293596566aff0c145b20e57448ff6a528c7 100644
+--- a/apps/web/src/routes/_app/lohn/bescheinigung.$jahr.tsx
++++ b/apps/web/src/routes/_app/lohn/bescheinigung.$jahr.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import { formatEuro, KONFESSIONEN, type LstbWerte } from "@haben/core";
+ import { Link, createFileRoute, notFound, useNavigate, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -125,7 +126,7 @@ function MitarbeiterKarte({ data, m }: { data: Data; m: Mitarbeiter }) {
+       {werte && <Werte werte={werte} name={m.name} />}
+       {m.ausdruck && (m.ausdruck === "uebermittelt" || data.firmenfehler.length === 0) && (
+         <p style={{ margin: 0 }}>
+-          <a href={`/api/lohn/bescheinigung/${m.id}/${data.year}`}>
++          <a href={appPath(`/api/lohn/bescheinigung/${m.id}/${data.year}`)}>
+             {m.ausdruck === "entwurf" ? "Entwurf des Ausdrucks (PDF)" : "Ausdruck für den Arbeitnehmer (PDF)"}
+           </a>
+         </p>
+diff --git a/apps/web/src/routes/_app/lohn/index.tsx b/apps/web/src/routes/_app/lohn/index.tsx
+index 8ee4d57e873b6c9fb552732d8ff7855b252af9d7..c9f39918216dc2352152d8bf99ce57c2cbde390a 100644
+--- a/apps/web/src/routes/_app/lohn/index.tsx
++++ b/apps/web/src/routes/_app/lohn/index.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import { currentYear, currentMonth, BESCHAEFTIGUNGSARTEN, formatEuro, isKapitalgesellschaft, monatsgrenzen } from "@haben/core";
+ import { Link, createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -193,11 +194,11 @@ function MitarbeiterListe({ data }: { data: Data }) {
+                 </td>
+                 <td data-label="Zeitraum">{e.austritt ? `${formatDate(e.eintritt)} – ${formatDate(e.austritt)}` : `seit ${formatDate(e.eintritt)}`}</td>
+                 <td data-label={`Lohnkonto ${jahr}`}>
+-                  <a href={`/api/lohn/lohnkonto/${e.id}/${jahr}/pdf`} aria-label={`Lohnkonto ${jahr} von ${e.name} als PDF`}>
++                  <a href={appPath(`/api/lohn/lohnkonto/${e.id}/${jahr}/pdf`)} aria-label={`Lohnkonto ${jahr} von ${e.name} als PDF`}>
+                     PDF
+                   </a>{" "}
+                   ·{" "}
+-                  <a href={`/api/lohn/lohnkonto/${e.id}/${jahr}/csv`} aria-label={`Lohnkonto ${jahr} von ${e.name} als CSV`}>
++                  <a href={appPath(`/api/lohn/lohnkonto/${e.id}/${jahr}/csv`)} aria-label={`Lohnkonto ${jahr} von ${e.name} als CSV`}>
+                     CSV
+                   </a>
+                 </td>
+diff --git a/apps/web/src/routes/_app/lohn/mitarbeiter/$id.tsx b/apps/web/src/routes/_app/lohn/mitarbeiter/$id.tsx
+index 2a0cc575983704eb654dd0c031eb79c5946e3cee..67730950fc29f9a545678c7b6faeab2e2c96adb4 100644
+--- a/apps/web/src/routes/_app/lohn/mitarbeiter/$id.tsx
++++ b/apps/web/src/routes/_app/lohn/mitarbeiter/$id.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../../lib/app-path.ts";
+ import { Link, createFileRoute, notFound, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+ import { currentYear, isKapitalgesellschaft } from "@haben/core";
+@@ -35,10 +36,10 @@ function MitarbeiterPage() {
+           </h1>
+         </div>
+         <div className="actions">
+-          <a className="btn" href={`/api/lohn/lohnkonto/${m.id}/${jahr}/pdf`}>
++          <a className="btn" href={appPath(`/api/lohn/lohnkonto/${m.id}/${jahr}/pdf`)}>
+             Lohnkonto {jahr} (PDF)
+           </a>
+-          <a className="btn" href={`/api/lohn/lohnkonto/${m.id}/${jahr}/csv`}>
++          <a className="btn" href={appPath(`/api/lohn/lohnkonto/${m.id}/${jahr}/csv`)}>
+             Lohnkonto {jahr} (CSV)
+           </a>
+         </div>
+diff --git a/apps/web/src/routes/_app/rechnungen/$id.tsx b/apps/web/src/routes/_app/rechnungen/$id.tsx
+index 90368b25057077fd92b13c3c55b11050d9425f6a..7f1a7b48c670d2ba7b5831356eb0f54e7a9d3290 100644
+--- a/apps/web/src/routes/_app/rechnungen/$id.tsx
++++ b/apps/web/src/routes/_app/rechnungen/$id.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import {
+   describeExchangeRate,
+   discountFromColumns,
+@@ -215,16 +216,16 @@ function FinalInvoice({ data }: { data: Detail }) {
+           </div>
+         </div>
+         <div className="actions">
+-          <a className="btn" href={`/api/rechnung/${invoice.id}/pdf?download`}>
++          <a className="btn" href={appPath(`/api/rechnung/${invoice.id}/pdf?download`)}>
+             PDF herunterladen
+           </a>
+           {invoice.hasXml && (
+-            <a className="btn" href={`/api/rechnung/${invoice.id}/xml?download`}>
++            <a className="btn" href={appPath(`/api/rechnung/${invoice.id}/xml?download`)}>
+               XML herunterladen
+             </a>
+           )}
+           {inhaber && invoice.kind === "rechnung" && (
+-            <a className="btn" href={`/api/dokument/lieferschein-rechnung/${invoice.id}`} target="_blank" rel="noreferrer">
++            <a className="btn" href={appPath(`/api/dokument/lieferschein-rechnung/${invoice.id}`)} target="_blank" rel="noreferrer">
+               Lieferschein
+             </a>
+           )}
+@@ -247,8 +248,8 @@ function FinalInvoice({ data }: { data: Detail }) {
+ 
+       <div className="grid-main">
+         <section aria-label="PDF">
+-          <iframe className="pdf-frame" src={`/api/rechnung/${invoice.id}/pdf#view=Fit`} title={`PDF der Rechnung ${invoice.number}`} />
+-          <a className="btn pdf-open" href={`/api/rechnung/${invoice.id}/pdf`} target="_blank" rel="noreferrer">
++          <iframe className="pdf-frame" src={appPath(`/api/rechnung/${invoice.id}/pdf#view=Fit`)} title={`PDF der Rechnung ${invoice.number}`} />
++          <a className="btn pdf-open" href={appPath(`/api/rechnung/${invoice.id}/pdf`)} target="_blank" rel="noreferrer">
+             PDF öffnen
+           </a>
+         </section>
+@@ -423,7 +424,7 @@ function FinalInvoice({ data }: { data: Detail }) {
+               <h2 id="dunning-heading">Mahnungen</h2>
+               {data.dunnings.map((d) => (
+                 <div key={d.id} className="history-row">
+-                  <a href={`/api/mahnung/${d.id}`} target="_blank" rel="noreferrer">
++                  <a href={appPath(`/api/mahnung/${d.id}`)} target="_blank" rel="noreferrer">
+                     {DUNNING_LEVELS[d.level as DunningLevel].label} vom {formatDate(d.date)}
+                   </a>
+                   <span className="small muted">
+diff --git a/apps/web/src/routes/_app/rechnungen/mahnwesen/$id.tsx b/apps/web/src/routes/_app/rechnungen/mahnwesen/$id.tsx
+index 9325aea55a3992c848bb8dc729352998d7f88e99..5932a551bee109bd4f572b54743807155721f495 100644
+--- a/apps/web/src/routes/_app/rechnungen/mahnwesen/$id.tsx
++++ b/apps/web/src/routes/_app/rechnungen/mahnwesen/$id.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../../lib/app-path.ts";
+ import {
+   DEFAULT_INTEREST_MARKUP,
+   DUNNING_LEVELS,
+@@ -73,7 +74,7 @@ function NewDunningPage() {
+     if (!valid) return;
+     void run(async () => {
+       const result = await create({ data: input() });
+-      window.open(`/api/mahnung/${result.id}`, "_blank", "noopener");
++      window.open(appPath(`/api/mahnung/${result.id}`), "_blank", "noopener");
+       await navigate({ to: "/rechnungen/$id", params: { id: draft.invoice.id } });
+     });
+   }
+diff --git a/apps/web/src/routes/_app/rechnungen/mahnwesen/index.tsx b/apps/web/src/routes/_app/rechnungen/mahnwesen/index.tsx
+index 11dd5fbc093918476b68b030885bf165bfc0b980..c3f77d2c1e7d85db7c06c712ab0d2c8b9131b205 100644
+--- a/apps/web/src/routes/_app/rechnungen/mahnwesen/index.tsx
++++ b/apps/web/src/routes/_app/rechnungen/mahnwesen/index.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../../lib/app-path.ts";
+ import { DUNNING_LEVELS, daysOverdue, formatEuro, type DunningLevel } from "@haben/core";
+ import { Link, createFileRoute } from "@tanstack/react-router";
+ import { InvoiceTabs } from "../../../../components/InvoiceTabs.tsx";
+@@ -52,7 +53,7 @@ function DunningPage() {
+                 <div className="small">
+                   {invoice.lastDunning ? (
+                     <>
+-                      <a href={`/api/mahnung/${invoice.lastDunning.id}`} target="_blank" rel="noreferrer">
++                      <a href={appPath(`/api/mahnung/${invoice.lastDunning.id}`)} target="_blank" rel="noreferrer">
+                         {DUNNING_LEVELS[invoice.lastDunning.level as DunningLevel].label}
+                       </a>{" "}
+                       vom {formatDate(invoice.lastDunning.date)}
+diff --git a/apps/web/src/routes/_app/steuerberatung.tsx b/apps/web/src/routes/_app/steuerberatung.tsx
+index 6bd4c5f4994575c345537d88ea2dd8fb5e096815..0c79a0d1143255a70807b95a13b7b05a3266c51e 100644
+--- a/apps/web/src/routes/_app/steuerberatung.tsx
++++ b/apps/web/src/routes/_app/steuerberatung.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../lib/app-path.ts";
+ import { currentYear } from "@haben/core";
+ import { Link, createFileRoute } from "@tanstack/react-router";
+ import { useState, type MouseEvent } from "react";
+@@ -109,7 +110,7 @@ function Exporte({ years }: { years: number[] }) {
+   function onDatev(event: MouseEvent<HTMLAnchorElement>) {
+     event.preventDefault();
+     void run(async () => {
+-      const hinweis = await downloadFrom(`/api/datev/${year}`, `EXTF_Buchungsstapel_${year}.csv`);
++      const hinweis = await downloadFrom(appPath(`/api/datev/${year}`), `EXTF_Buchungsstapel_${year}.csv`);
+       if (hinweis) setNotice({ tone: "info", text: hinweis });
+     });
+   }
+@@ -132,13 +133,13 @@ function Exporte({ years }: { years: number[] }) {
+         )}
+       </Field>
+       <div className="actions">
+-        <a className="btn" href={`/api/export/${year}`} download>
++        <a className="btn" href={appPath(`/api/export/${year}`)} download>
+           Jahresarchiv (ZIP)
+         </a>
+-        <a className="btn" href={`/api/datev/${year}`} download onClick={onDatev}>
++        <a className="btn" href={appPath(`/api/datev/${year}`)} download onClick={onDatev}>
+           DATEV-Buchungsstapel
+         </a>
+-        <a className="btn" href={`/api/konten/${year}`} download>
++        <a className="btn" href={appPath(`/api/konten/${year}`)} download>
+           Saldenliste (CSV)
+         </a>
+       </div>
+diff --git a/apps/web/src/routes/_app/ueberweisungen.tsx b/apps/web/src/routes/_app/ueberweisungen.tsx
+index 33338769454c6033296bd8af5cb770e5397f1006..37aed1c73654cb7b2223c19dabbaf31da716c1c9 100644
+--- a/apps/web/src/routes/_app/ueberweisungen.tsx
++++ b/apps/web/src/routes/_app/ueberweisungen.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../lib/app-path.ts";
+ import { formatEuro, skontoOffer } from "@haben/core";
+ import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -43,7 +44,7 @@ function TransferPage() {
+ /** Lädt die erzeugte Datei herunter, ohne die Seite zu verlassen */
+ function download(id: string, filename: string) {
+   const link = document.createElement("a");
+-  link.href = `/api/ueberweisung/${id}`;
++  link.href = appPath(`/api/ueberweisung/${id}`);
+   link.download = filename;
+   link.click();
+ }
+@@ -274,7 +275,7 @@ function TransferFiles({ data }: { data: Data }) {
+             </div>
+             <div className="num">{formatEuro(t.controlSum)}</div>
+             <div style={{ justifySelf: "end" }}>
+-              <a className="btn btn-sm" href={`/api/ueberweisung/${t.id}`} download={`${t.messageId}.xml`} aria-label={`${t.messageId}.xml herunterladen`}>
++              <a className="btn btn-sm" href={appPath(`/api/ueberweisung/${t.id}`)} download={`${t.messageId}.xml`} aria-label={`${t.messageId}.xml herunterladen`}>
+                 Herunterladen
+               </a>
+             </div>
+diff --git a/apps/web/src/routes/_app/umsatzsteuer/$zeitraum.tsx b/apps/web/src/routes/_app/umsatzsteuer/$zeitraum.tsx
+index 2e9155e76c91b9b16b09fa50ff0dbbc705818ef3..e7a55610e00f50b6b5be074af9e377b392e537fd 100644
+--- a/apps/web/src/routes/_app/umsatzsteuer/$zeitraum.tsx
++++ b/apps/web/src/routes/_app/umsatzsteuer/$zeitraum.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import { computeUstva, formatDecimal, formatEuro, parseEuro, parsePeriodKey, periodKey, periodLabel, quarterOfMonth } from "@haben/core";
+ import { Link, createFileRoute, notFound, useNavigate, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -688,7 +689,7 @@ function VatReturnEditor({ data, notice, setNotice }: { data: PageData; notice:
+               Entwurf speichern
+             </button>
+             {current && !dirty && !stale && data.companyIssues.length === 0 && (
+-              <a className="btn" href={`/api/ustva/${current.id}`} download>
++              <a className="btn" href={appPath(`/api/ustva/${current.id}`)} download>
+                 XML für Mein ELSTER
+               </a>
+             )}
+@@ -875,7 +876,7 @@ function History({ data }: { data: PageData }) {
+               {formatEuro(filing.kz83)}
+             </span>
+           </div>
+-          <a href={`/api/protokoll/${filing.id}`} target="_blank" rel="noreferrer" className="small">
++          <a href={appPath(`/api/protokoll/${filing.id}`)} target="_blank" rel="noreferrer" className="small">
+             Protokoll
+           </a>
+         </div>
+@@ -898,7 +899,7 @@ function History({ data }: { data: PageData }) {
+               </span>
+             </div>
+             {entry.hasPdf && (
+-              <a href={`/api/protokoll/${entry.id}`} target="_blank" rel="noreferrer" className="small">
++              <a href={appPath(`/api/protokoll/${entry.id}`)} target="_blank" rel="noreferrer" className="small">
+                 Protokoll
+               </a>
+             )}
+diff --git a/apps/web/src/routes/_app/umsatzsteuer/zm.$quartal.tsx b/apps/web/src/routes/_app/umsatzsteuer/zm.$quartal.tsx
+index b76aefa6fbc9ba88a9e3fb03c984477b0feadbb6..024c15e1bd817453105cf1f9b958dd1daf2b7813 100644
+--- a/apps/web/src/routes/_app/umsatzsteuer/zm.$quartal.tsx
++++ b/apps/web/src/routes/_app/umsatzsteuer/zm.$quartal.tsx
+@@ -1,3 +1,4 @@
++import { appPath } from "../../../lib/app-path.ts";
+ import { formatEuro, parsePeriodKey, periodKey, periodLabel, ZM_ART_LABEL, zmEuro } from "@haben/core";
+ import { Link, createFileRoute, notFound, useNavigate, useRouter } from "@tanstack/react-router";
+ import { useServerFn } from "@tanstack/react-start";
+@@ -204,7 +205,7 @@ function ZmSenden({ data }: { data: Data }) {
+                 {entry.hasPdf && (
+                   <>
+                     {" · "}
+-                    <a href={`/api/protokoll/${entry.id}`} target="_blank" rel="noreferrer">
++                    <a href={appPath(`/api/protokoll/${entry.id}`)} target="_blank" rel="noreferrer">
+                       Protokoll
+                     </a>
+                   </>
+diff --git a/apps/web/src/routes/api/bank/callback.ts b/apps/web/src/routes/api/bank/callback.ts
+index 40273e5862882f59955ab9dbd113802b4ff2fe20..e24355a16ddf4e5d29f1f8ff8f9ccbeaf6136bd7 100644
+--- a/apps/web/src/routes/api/bank/callback.ts
++++ b/apps/web/src/routes/api/bank/callback.ts
+@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
+ import { requireUser } from "../../../server/rollen.ts";
+ import { BankError } from "../../../server/modules/bank/index.ts";
+ import { completeConnection } from "../../../server/modules/bank/index.ts";
++import { appPath } from "../../../lib/app-path.ts";
+ 
+ /** Rückleitung der Bank nach der Freigabe im Enable-Banking-Ablauf; leitet weiter auf /bank */
+ export const Route = createFileRoute("/api/bank/callback")({
+@@ -30,7 +31,7 @@ export const Route = createFileRoute("/api/bank/callback")({
+             message = error.message;
+           }
+         }
+-        const target = new URL("/bank", request.url);
++        const target = new URL(appPath("/bank"), request.url);
+         target.searchParams.set("abruf", ok ? "ok" : "fehler");
+         target.searchParams.set("meldung", message.slice(0, 500));
+         return new Response(null, { status: 303, headers: { location: `${target.pathname}${target.search}` } });
+diff --git a/apps/web/src/routes/api/belege/teilen.ts b/apps/web/src/routes/api/belege/teilen.ts
+index f55bf99307dd2b3f5ab16a11833a3a94d90b716e..09e15c75169571ff042e2787a8c94ed5ebcc5ce6 100644
+--- a/apps/web/src/routes/api/belege/teilen.ts
++++ b/apps/web/src/routes/api/belege/teilen.ts
+@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
+ import { DocumentError, MAX_DOCUMENT_SIZE, uploadDocument } from "../../../server/modules/belege/index.ts";
+ import { env } from "../../../server/env.ts";
+ import { darf, sessionUser } from "../../../server/rollen.ts";
++import { appPath } from "../../../lib/app-path.ts";
+ 
+ /** Nur die eigene Seite oder das Teilen-Menü des Systems (Sec-Fetch-Site: none), keine Formulare fremder Seiten */
+ function trustedSource(request: Request): boolean {
+@@ -12,7 +13,7 @@ function trustedSource(request: Request): boolean {
+ }
+ 
+ /** Mit relativem Ziel: Hinter dem Reverse Proxy kennt request.url nur die interne Adresse der App, http://app:3000 */
+-const seeOther = (path: string) => new Response(null, { status: 303, headers: { location: path } });
++const seeOther = (path: string) => new Response(null, { status: 303, headers: { location: appPath(path) } });
+ 
+ /** Ziel des Teilen-Menüs der installierten App (Web Share Target, siehe manifest.webmanifest) */
+ export const Route = createFileRoute("/api/belege/teilen")({
+diff --git a/apps/web/src/routes/einladung.$token.tsx b/apps/web/src/routes/einladung.$token.tsx
+index e8d2f26cdeaeec4756bf5cf90d7081dce83cd375..9c521fbb8b490c2577677c6d0b5c7c0db2dd1423 100644
+--- a/apps/web/src/routes/einladung.$token.tsx
++++ b/apps/web/src/routes/einladung.$token.tsx
+@@ -3,6 +3,7 @@ import { useState, type FormEvent } from "react";
+ import { authClient } from "../lib/auth-client.ts";
+ import { errorMessage, formatDateTime } from "../lib/format.ts";
+ import { getAuthState } from "../server/functions/setup.ts";
++import { appPath } from "../lib/app-path.ts";
+ import { checkInvitation } from "../server/functions/zugang.ts";
+ import { Field } from "../components/Field.tsx";
+ 
+@@ -89,7 +90,7 @@ function InvitationPage() {
+             <p className="muted" style={{ margin: 0 }}>
+               Haben nutzt ausschließlich SSO. Zugänge vergibt der Betreiber über die Gruppen im Anmeldedienst; danach genügt die Anmeldung.
+             </p>
+-            <a className="btn btn-primary" href="/login">
++            <a className="btn btn-primary" href={appPath("/login")}>
+               Zur Anmeldung
+             </a>
+           </>
+diff --git a/apps/web/src/routes/login.tsx b/apps/web/src/routes/login.tsx
+index be8d978a331e053067be03209825de1126c1f812..c2d191bcc5064c417ef76fc5615450d4e7241d1b 100644
+--- a/apps/web/src/routes/login.tsx
++++ b/apps/web/src/routes/login.tsx
+@@ -3,6 +3,7 @@ import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+ import { useEffect, useState, type FormEvent } from "react";
+ import { SsoSignIn } from "../components/SsoSignIn.tsx";
+ import { authClient } from "../lib/auth-client.ts";
++import { appPath } from "../lib/app-path.ts";
+ import { errorMessage } from "../lib/format.ts";
+ import { getAuthState } from "../server/functions/setup.ts";
+ import { Field } from "../components/Field.tsx";
+@@ -11,7 +12,7 @@ export const Route = createFileRoute("/login")({
+   beforeLoad: async ({ location }) => {
+     const state = await getAuthState();
+     // Den Hinweis eines abgewiesenen SSO-Callbacks (?sso=…) mitnehmen
+-    if (!state.initialized) throw redirect({ href: `/setup${location.searchStr}` });
++    if (!state.initialized) throw redirect({ href: appPath(`/setup${location.searchStr}`) });
+     if (state.user) throw redirect({ to: "/" });
+     return { oidc: state.oidc };
+   },
+diff --git a/apps/web/src/server/auth.ts b/apps/web/src/server/auth.ts
+index 6b2c975cf49e80d70d3c11f739f6f4f54bec4d59..49decc9214adb7a4ba501abdbb5e37c4623c9825 100644
+--- a/apps/web/src/server/auth.ts
++++ b/apps/web/src/server/auth.ts
+@@ -4,6 +4,7 @@ import { createAuthMiddleware } from "better-auth/api";
+ import { drizzleAdapter } from "better-auth/adapters/drizzle";
+ import { tanstackStartCookies } from "better-auth/tanstack-start";
+ import { count } from "drizzle-orm";
++import { appPath } from "../lib/app-path.ts";
+ import { INVITATION_HEADER, accountState, claimInvitation, linkInvitation, loginMethod, openInvitation, recordLogin } from "./anmeldung.ts";
+ import { atomicAuthCallback, authDatabase, authDatabaseProxy, authTransaction } from "./auth-transaction.ts";
+ import { schema } from "./db/index.ts";
+@@ -30,9 +31,13 @@ async function localUserRole(user: { email: string }, invitation: string | null
+ 
+ function createAuth() {
+   const baseUrl = new URL(env().BETTER_AUTH_URL);
++  if (appPath("/") !== "/" && `${baseUrl.pathname.replace(/\/+$/, "")}/` !== appPath("/")) {
++    throw new Error("BETTER_AUTH_URL muss den beim Build gesetzten HABEN_BASE_PATH enthalten");
++  }
+   const sso = ssoOnly();
+   return betterAuth({
+     baseURL: baseUrl.origin,
++    basePath: appPath("/api/auth"),
+     secret: env().BETTER_AUTH_SECRET,
+     database: drizzleAdapter(authDatabaseProxy, { provider: "pg", schema }),
+     // Standardmodus: Passwort für die Ersteinrichtung und als Rückfallebene, Anmeldung per Passkey. SSO-Modus: nichts Lokales.
+@@ -40,7 +45,7 @@ function createAuth() {
+     disabledPaths: sso ? LOCAL_AUTH_PATHS : [],
+     rateLimit: { enabled: true, window: 60, max: 20 },
+     // Haben läuft hinter Caddy; die Client-Adresse kommt aus X-Forwarded-For.
+-    advanced: { ipAddress: { ipAddressHeaders: ["x-forwarded-for"] } },
++    advanced: { ipAddress: { ipAddressHeaders: ["x-forwarded-for"] }, ...(appPath("/") === "/" ? {} : { cookiePrefix: "videomaker_buchhaltung" }) },
+     account: {
+       // Keine Verknüpfung und keine Zusammenführung anhand gleicher E-Mail; bestehende Konten übernimmt nur der Betreiber
+       accountLinking: { enabled: false, disableImplicitLinking: true },
+@@ -176,7 +181,7 @@ async function handleAuthRequest(request: Request): Promise<Response> {
+   if (ssoOnly() && !(await authContextReady())) return new Response("Die SSO-Anmeldung ist vorübergehend nicht verfügbar.", { status: 503 });
+   const current = auth();
+   const path = new URL(request.url).pathname;
+-  if (ssoOnly() && path === "/api/auth/callback/oidc") {
++  if (ssoOnly() && path === appPath("/api/auth/callback/oidc")) {
+     return atomicAuthCallback(() => current.handler(request), { errorUrl: loginUrl, afterRejection: revokeRejectedIdentity });
+   }
+   return current.handler(request);
+diff --git a/apps/web/src/server/csrf.test.ts b/apps/web/src/server/csrf.test.ts
+index 6a9c1fb19fda1d3a11d2ccd2a31ae9de62bc7630..e296c97529678123d637b49b1404e0ac8cdc78e3 100644
+--- a/apps/web/src/server/csrf.test.ts
++++ b/apps/web/src/server/csrf.test.ts
+@@ -1,5 +1,5 @@
+ import { isCsrfRequestAllowed } from "@tanstack/react-start";
+-import { beforeAll, describe, expect, it } from "vitest";
++import { beforeAll, describe, expect, it, vi } from "vitest";
+ import { csrfOptions } from "./csrf.ts";
+ 
+ describe("Schutz vor Anfragen fremder Seiten", () => {
+@@ -44,4 +44,18 @@ describe("Schutz vor Anfragen fremder Seiten", () => {
+     // Ohne jeden Herkunfts-Header (kein Browser) entscheidet die Anmeldung
+     expect(await allowed("POST", serverFn, {})).toBe(true);
+   });
++
++  it("begrenzt die Ausnahmen auch im Unterpfad auf die ausdrücklich vorgesehenen Endpunkte", async () => {
++    vi.stubEnv("BASE_URL", "/buchhaltung/");
++    try {
++      expect(await allowed("POST", "/buchhaltung/api/mcp", { "sec-fetch-site": "cross-site" })).toBe(true);
++      expect(await allowed("POST", "/buchhaltung/api/belege/teilen", { "sec-fetch-site": "none" })).toBe(true);
++      expect(await allowed("POST", "/buchhaltung/api/v1/rechnungen", { origin: "https://automation.example.de" })).toBe(true);
++      expect(await allowed("POST", "/buchhaltung/api/v10", { origin: "https://boese.example" })).toBe(false);
++      expect(await allowed("POST", "/api/mcp", { origin: "https://boese.example" })).toBe(false);
++      expect(await allowed("POST", "/buchhaltung/api/auth/sign-out", { origin: "https://boese.example" })).toBe(false);
++    } finally {
++      vi.unstubAllEnvs();
++    }
++  });
+ });
+diff --git a/apps/web/src/server/csrf.ts b/apps/web/src/server/csrf.ts
+index be4b028976959247c24c4b5ed7478a6e8fbf2cb6..7e9b0652e7c46ce9cbe238730c12385295c02242 100644
+--- a/apps/web/src/server/csrf.ts
++++ b/apps/web/src/server/csrf.ts
+@@ -1,5 +1,6 @@
+ import type { createCsrfMiddleware } from "@tanstack/react-start";
+ import { env } from "./env.ts";
++import { appPath } from "../lib/app-path.ts";
+ 
+ type CsrfOptions = NonNullable<Parameters<typeof createCsrfMiddleware>[0]>;
+ 
+@@ -15,7 +16,7 @@ const API_PREFIX = "/api/v1/";
+  * Ohne alle drei Header (kein Browser) entscheidet allein die Anmeldung.
+  */
+ export const csrfOptions: CsrfOptions = {
+-  filter: ({ request, pathname }) => !SAFE_METHODS.has(request.method) && !OWN_CHECK.has(pathname) && !pathname.startsWith(API_PREFIX),
++  filter: ({ request, pathname }) => !SAFE_METHODS.has(request.method) && ![...OWN_CHECK].some((path) => pathname === appPath(path)) && !pathname.startsWith(appPath(API_PREFIX)),
+   origin: (origin) => origin === new URL(env().BETTER_AUTH_URL).origin,
+   allowRequestsWithoutOriginCheck: true,
+   failureResponse: () => new Response("Anfrage von fremder Seite abgelehnt", { status: 403 }),
+diff --git a/apps/web/src/server/modules/api/openapi.ts b/apps/web/src/server/modules/api/openapi.ts
+index 10c8e7d61b3a122264ec026511ddd9590e7d1417..b4808f42d45f77cd69da2486e96afef6d2b6e75e 100644
+--- a/apps/web/src/server/modules/api/openapi.ts
++++ b/apps/web/src/server/modules/api/openapi.ts
+@@ -1,4 +1,5 @@
+ import { z } from "zod";
++import { appPath } from "../../../lib/app-path.ts";
+ import { TOKEN_SCOPE_LABELS, TOKEN_SCOPES } from "../mcp/index.ts";
+ import { API_ROUTES, type ApiRoute } from "./routes.ts";
+ import { MAX_DOCUMENT_SIZE } from "../belege/index.ts";
+@@ -117,7 +118,7 @@ function buildDocument() {
+     openapi: "3.1.0",
+     info: { title: "Haben REST-API", version: "1.0.0", description: DESCRIPTION, license: { name: "AGPL-3.0-only", identifier: "AGPL-3.0-only" } },
+     externalDocs: { description: "Dokumentation", url: DOCS },
+-    servers: [{ url: "/api/v1" }],
++    servers: [{ url: appPath("/api/v1") }],
+     tags: [
+       { name: "Kontakte", description: "Kunden; versioniert, nicht löschbar" },
+       { name: "Rechnungen", description: "Alle Rechnungen lesen, Entwürfe anlegen, ändern und löschen" },
+diff --git a/apps/web/src/server/modules/api/router.ts b/apps/web/src/server/modules/api/router.ts
+index 1ca56e1df9d58752e9d40a26f93e3a6c91634ca0..6c47103f81aed53186f51b6b977b5b06e51499c1 100644
+--- a/apps/web/src/server/modules/api/router.ts
++++ b/apps/web/src/server/modules/api/router.ts
+@@ -1,4 +1,5 @@
+ import { env } from "../../env.ts";
++import { appPath } from "../../../lib/app-path.ts";
+ import { INTERNAL_ERROR, userMessage } from "../../errors.ts";
+ import { today } from "../../today.ts";
+ import { authenticateMcp, hasScope, rateLimited, recordMcpCall, type McpAccess } from "../mcp/index.ts";
+@@ -152,7 +153,7 @@ async function authorized(route: ApiRoute, access: McpAccess, params: Record<str
+ 
+ async function dispatch(request: Request): Promise<ApiResult> {
+   const url = new URL(request.url);
+-  const path = url.pathname.slice(API_PREFIX.length).replace(/\/$/, "") || "/";
++  const path = url.pathname.slice(appPath(API_PREFIX).length).replace(/\/$/, "") || "/";
+   if (path === "/openapi.json" && request.method === "GET") return { status: 200, body: openApiDocument() };
+ 
+   const candidates = API_ROUTES.flatMap((route) => {
+@@ -186,5 +187,7 @@ async function dispatch(request: Request): Promise<ApiResult> {
+ 
+ /** Eine Anfrage an /api/v1/… */
+ export async function handleApiRequest(request: Request): Promise<Response> {
+-  return toResponse(await dispatch(request));
++  const result = await dispatch(request);
++  if (result.headers?.Location?.startsWith("/")) result.headers.Location = appPath(result.headers.Location);
++  return toResponse(result);
+ }
+diff --git a/apps/web/src/server/oidc.ts b/apps/web/src/server/oidc.ts
+index d7bcb7f087762d457e5d52ee1ed49d61ca753c08..22a3fb3c7959d07e083c032238597b6dc3342f17 100644
+--- a/apps/web/src/server/oidc.ts
++++ b/apps/web/src/server/oidc.ts
+@@ -1,6 +1,7 @@
+ import { APIError, authorizationCodeRequest, getOAuth2Tokens, type BetterAuthPlugin, type GenericEndpointContext } from "better-auth";
+ import { addOAuthServerContext, createAuthMiddleware, getOAuthState, isAPIError } from "better-auth/api";
+ import { genericOAuth } from "better-auth/plugins";
++import { appPath } from "../lib/app-path.ts";
+ import { beginCallbackWrites, rejectCallback, setCallbackProof } from "./auth-transaction.ts";
+ import { env } from "./env.ts";
+ import { decideRole, SSO_PROOF_MS } from "./sso-groups.ts";
+@@ -175,7 +176,7 @@ export function oidcProvider() {
+           discoveryUrl: `${issuer.replace(/\/$/, "")}/.well-known/openid-configuration`,
+           clientId: config.OIDC_CLIENT_ID!,
+           clientSecret: config.OIDC_CLIENT_SECRET!,
+-          redirectURI: `${new URL(config.BETTER_AUTH_URL).origin}/api/auth/callback/oidc`,
++          redirectURI: `${config.BETTER_AUTH_URL.replace(/\/+$/, "")}/api/auth/callback/oidc`,
+           pkce: true,
+           requireIdTokenVerification: true,
+           tokenEndpointAuth: { method: "client_secret_basic" },
+@@ -236,9 +237,9 @@ async function oidcBefore(ctx: GenericEndpointContext): Promise<void> {
+   if (callback) return;
+   if (ctx.body?.provider !== "oidc" || ctx.body?.idToken || ctx.body?.additionalParams || ctx.body?.additionalData || ctx.body?.loginHint) throw denied();
+   // Auch Fehler- und Neuanlage-URLs fest: keine offenen Redirects. Ob ein Konto entsteht, entscheidet der Callback.
+-  ctx.body.callbackURL = "/";
+-  ctx.body.newUserCallbackURL = "/";
+-  ctx.body.errorCallbackURL = "/login?sso=fehler";
++  ctx.body.callbackURL = appPath("/");
++  ctx.body.newUserCallbackURL = appPath("/");
++  ctx.body.errorCallbackURL = appPath("/login?sso=fehler");
+   ctx.body.requestSignUp = true;
+   await addOAuthServerContext({ ssoIssuer: env().OIDC_ISSUER });
+ }
+diff --git a/apps/web/vite.config.ts b/apps/web/vite.config.ts
+index a2d2f3746dfcfb28122bd43e5750ad4af985cf5c..4b734b62e8ebed3818472ab006002d07148b8a34 100644
+--- a/apps/web/vite.config.ts
++++ b/apps/web/vite.config.ts
+@@ -8,6 +8,11 @@ import { redact } from "@tanstack/redact/vite";
+ // Version der ausgelieferten App, angezeigt unten in der Navigation
+ const VERSION = (JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string }).version;
+ 
++// Für Video-Maker beim Build HABEN_BASE_PATH=/buchhaltung setzen; allein der Proxy reicht nicht.
++const configuredBase = process.env.HABEN_BASE_PATH ?? "/";
++if (!/^\/(?:[a-zA-Z0-9_-]+\/?)*$/.test(configuredBase)) throw new Error("Ungültiger HABEN_BASE_PATH");
++const base = `${configuredBase.replace(/\/+$/, "")}/`;
++
+ const NATIVE = ["@myriaddreamin/typst-ts-node-compiler"];
+ 
+ /** Native Typst-Bindung in keiner Umgebung vorbündeln, sondern zur Laufzeit laden. */
+@@ -22,6 +27,7 @@ function keepNativeExternal(): Plugin {
+ }
+ 
+ export default defineConfig(({ command }) => ({
++  base,
+   server: { port: 3000 },
+   // Abhängigkeiten des Servers mitbündeln, damit redact() auch deren React-Imports umleitet (README von TanStack Redact).
+   // Nur beim Bauen: Der Dev-Server führt mitgebündelte CommonJS-Pakete wie tslib im Modul-Runner nicht aus
+@@ -29,13 +35,14 @@ export default defineConfig(({ command }) => ({
+   define: { __HABEN_VERSION__: JSON.stringify(VERSION) },
+   plugins: [
+     keepNativeExternal(),
+-    tanstackStart(),
++    tanstackStart({ router: { basepath: base } }),
+     // die native Bindung löst der Server zur Laufzeit aus apps/web/node_modules auf
+     // compressPublicAssets: .br/.gz neben den Assets, auch ohne komprimierenden Proxy davor;
+     // preset node-server: Der Server läuft unter Bun über node:http. Nicht das Preset bun (Bun.serve), das Nitro
+     // unter Bun sonst selbst wählt: Bun.serve trennt jede Antwort, die länger als idleTimeout (10 s) braucht,
+     // und Nitro reicht dafür keine Einstellung durch (e2e/langsame-anfrage.spec.ts)
+     nitro({
++      baseURL: base,
+       preset: "node-server",
+       plugins: [
+         "./src/server/plugins/scheduler.ts",

@@ -1,0 +1,33 @@
+import { createServerFn } from "@tanstack/react-start";
+import { deleteMailSettings, lastMails, mailSettingsSchema, mailSettingsSummary, saveMailSettings, sendTestMail, SMTP_PRESETS } from "../modules/mail/index.ts";
+import { loadCompany } from "../modules/stammdaten/index.ts";
+import { authMiddleware } from "../middleware.ts";
+
+export const getMailSettings = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async () => ({
+    settings: await mailSettingsSummary(),
+    presets: SMTP_PRESETS,
+    last: await lastMails(),
+    /** Vorgabe für den Absendernamen, solange keiner eingetragen ist */
+    companyName: (await loadCompany()).name,
+  }));
+
+export const saveMail = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(mailSettingsSchema)
+  .handler(async ({ data, context }) => {
+    await saveMailSettings(context.user.id, data);
+    return { ok: true };
+  });
+
+export const sendMailTest = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => sendTestMail(context.user.id));
+
+export const removeMail = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    await deleteMailSettings(context.user.id);
+    return { ok: true };
+  });

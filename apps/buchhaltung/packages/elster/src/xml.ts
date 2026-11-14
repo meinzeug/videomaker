@@ -1,0 +1,303 @@
+import { germanDay, filingPeriodSchema, finanzamtsnummer, type Cents, type UstvaFigures, type VatPeriod } from "@haben/core";
+import { encodeIso885915 } from "./iso8859-15.ts";
+
+/** Fehlende oder ungültige Angaben für eine ELSTER-Nachricht; die Meldung ist für den Nutzer bestimmt */
+export class ElsterEingabeError extends Error {}
+
+/** Hersteller-ID für Testübermittlungen laut ERiC-Dokumentation. */
+export const TEST_HERSTELLER_ID = "74931";
+/** Testmerker für Testfälle, die der Server annimmt, aber nicht weiterleitet. */
+export const TESTMERKER = "700000004";
+export const PRODUKT_NAME = "Haben";
+
+export interface Datenlieferant {
+  name: string;
+  strasse: string;
+  plz: string;
+  ort: string;
+}
+
+export interface UstvaXmlInput {
+  period: VatPeriod;
+  /** 13-stellige Steuernummer im ELSTER-Format */
+  steuernummer13: string;
+  figures: Pick<UstvaFigures, "kz81" | "kz86" | "kz66" | "kz83"> &
+    Partial<
+      Pick<UstvaFigures, "kz21" | "kz45" | "kz48" | "kz46" | "kz47" | "kz84" | "kz85" | "kz67" | "kz39" | "kz41" | "kz43" | "kz89" | "kz93" | "kz61" | "kz62">
+    >;
+  datenlieferant: Datenlieferant;
+  herstellerId: string;
+  produktVersion: string;
+  test: boolean;
+  /** Berichtigte Anmeldung (Kz 10) */
+  berichtigt?: boolean;
+  erstellungsdatum?: Date;
+}
+
+/** Datenart-Version, die ERiC zum XML erwartet. */
+export function ustvaDatenartVersion(year: number): string {
+  return `UStVA_${year}`;
+}
+
+/** Liest die Datenart-Version aus dem XML (für validate/send ohne Zusatzangaben): UStVA_2026, USt_2025, EUER_2025 */
+/** Datum im Namensraum der Taxonomie → Version der Datenart Bilanz; Haben erzeugt nur aktuelle Taxonomien */
+export const EBILANZ_TAXONOMIEN: Record<string, string> = { "2024-04-01": "6.8", "2025-04-01": "6.9", "2026-04-01": "6.10" };
+
+export function datenartVersionFromXml(xml: string): string | undefined {
+  // Lohnsteuer-Anmeldung: dasselbe Wurzelelement wie die Voranmeldung, aber eigener Namensraum (LStA-2026.xsd)
+  const lsta = /<Anmeldungssteuern\b[^>]*elsteranmeldung\/lsta\/v\d{4}"[^>]*\bversion="(\d{4})"/.exec(xml);
+  if (lsta?.[1]) return `LStA_${lsta[1]}`;
+  const ustva = /<Anmeldungssteuern\b[^>]*\bversion="(\d{4})"/.exec(xml);
+  if (ustva?.[1]) return ustvaDatenartVersion(Number(ustva[1]));
+  const erklaerung = /<(E10|E20|E30|E50|E77)\b[^>]*\bversion="(\d{4})"/.exec(xml);
+  if (erklaerung?.[1] && erklaerung[2]) {
+    return `${{ E10: "ESt", E20: "GewSt", E30: "KSt_30", E50: "USt", E77: "EUER" }[erklaerung[1]]}_${erklaerung[2]}`;
+  }
+  const kapest = /<KapEStA\b[^>]*\bversion="(\d{4})"/.exec(xml);
+  if (kapest?.[1]) return `KapEStA_${kapest[1]}`;
+  const nachricht = /<DatenArt>(SonstigeNachrichten)<\/DatenArt>[\s\S]*<Nachricht\b[^>]*\bversion="(\d+)"/.exec(xml);
+  if (nachricht?.[1] && nachricht[2]) return `${nachricht[1]}_${nachricht[2]}`;
+  const bank = /<AenderungBankverbindung\b[^>]*\bversion="(\d+)"/.exec(xml);
+  if (bank?.[1]) return `AenderungBankverbindung_${bank[1]}`;
+  const abholung = /<DatenArt>(PostfachAnfrage|PostfachBestaetigung)<\/DatenArt>[\s\S]*<Datenabholung\b[^>]*\bversion="(\d+)"/.exec(xml);
+  if (abholung?.[1] && abholung[2]) return `${abholung[1]}_${abholung[2]}`;
+  if (/<DatenArt>ElsterVaStDaten<\/DatenArt>/.test(xml)) return "ElsterVaStDaten_32";
+  // E-Bilanz: Version der Taxonomie nach dem Datum im Namensraum (Beispiele zur Datenart Bilanz in der ERiC-Dokumentation)
+  if (/<DatenArt>Bilanz<\/DatenArt>/.test(xml)) {
+    const taxonomie = /xmlns:de-gcd="http:\/\/www\.xbrl\.de\/taxonomies\/de-gcd-(\d{4}-\d{2}-\d{2})"/.exec(xml)?.[1];
+    const version = taxonomie ? EBILANZ_TAXONOMIEN[taxonomie] : undefined;
+    if (version) return `Bilanz_${version}`;
+  }
+  // Lohnsteuerbescheinigung bis VZ 2025: eine Datenart-Version für das ganze Verfahren (Datenartversionmatrix, checkElsterLohn)
+  if (/<Verfahren>ElsterLohn<\/Verfahren>/.test(xml)) return "ElsterLohn";
+  // Zusammenfassende Meldung: die Datenart ZMDO hat keine Jahresversion (ERiC-Plugin checkZMDO)
+  if (/<DatenArt>ZMDO<\/DatenArt>/.test(xml)) return "ZMDO";
+  // Berechtigungsmanagement: Datenart = Datenart-Version
+  const brm = /<DatenArt>(SpezRecht(?:Antrag|Freischaltung|Storno|Liste))<\/DatenArt>/.exec(xml);
+  if (brm?.[1]) return brm[1];
+  return undefined;
+}
+
+/**
+ * Trägt das XML irgendeinen Testmerker? Haben setzt 700000004 (Anmeldungen, Erklärungen, Nachrichten,
+ * Postfach) und 370000001 (Belegabruf, Berechtigungsmanagement); jeder andere Wert gilt ebenso als Test.
+ */
+export function hasTestmerker(xml: string): boolean {
+  return /<Testmerker>\s*[^<\s][^<]*<\/Testmerker>/.test(xml);
+}
+
+/** Fehlermeldung, wenn Testmerker im XML und angeforderte Übermittlungsart nicht zusammenpassen */
+export function testmerkerMismatch(xml: string, test: boolean): string | undefined {
+  if (hasTestmerker(xml) === test) return undefined;
+  return test ? "Testübermittlung angefordert, aber das XML trägt keinen Testmerker." : "Echte Übermittlung angefordert, aber das XML trägt einen Testmerker.";
+}
+
+/** Maskiert für Text und Attribute; in XML 1.0 unzulässige Steuerzeichen fallen weg (sonst Parserfehler in ERiC) */
+export function escapeXml(value: string): string {
+  return (
+    value
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: Steuerzeichen sind hier gesucht
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;")
+  );
+}
+
+export function checkSteuernummer13(steuernummer13: string): void {
+  if (!/^\d{13}$/.test(steuernummer13)) throw new ElsterEingabeError(`Steuernummer muss 13-stellig im ELSTER-Format sein: ${steuernummer13}`);
+}
+
+/** Bemessungsgrundlage in vollen Euro: 123456 → "1234" */
+export function wholeEuros(cents: Cents): string {
+  return String(Math.trunc(cents / 100));
+}
+
+/** Betrag mit Komma, ohne Tausenderpunkte: -1200 → "-12,00" */
+export function elsterDecimal(cents: Cents): string {
+  if (!Number.isSafeInteger(cents)) throw new ElsterEingabeError(`Kein ganzzahliger Centbetrag: ${cents}`);
+  const abs = Math.abs(cents);
+  const euros = Math.trunc(abs / 100);
+  const rest = String(abs % 100).padStart(2, "0");
+  return `${cents < 0 ? "-" : ""}${euros},${rest}`;
+}
+
+/** Der Tag in Deutschland als JJJJMMTT */
+export function yyyymmdd(date: Date): string {
+  return germanDay(date).replaceAll("-", "");
+}
+
+export function element(name: string, value: string): string {
+  return `<${name}>${escapeXml(value)}</${name}>`;
+}
+
+export interface TransferKopf {
+  verfahren: string;
+  datenArt: string;
+  /** Fehlt bei Echtfällen */
+  testmerker: string | undefined;
+  /** Bundesland als Ziel im TransferHeader (ElsterErklaerung, ElsterNachricht) */
+  ziel?: string;
+  herstellerId: string;
+  datenlieferant: string;
+}
+
+export interface Nutzdatenblock {
+  ticket: string;
+  /** F: Finanzamtsnummer, L: Clearingstelle (CS) */
+  empfaenger: { id: "F" | "L"; wert: string };
+  /** Ohne Produktversion entfällt der Hersteller-Block */
+  produktVersion?: string;
+  nutzdaten: string[];
+}
+
+/** ELSTER-Umschlag: TransferHeader und je Block NutzdatenHeader um die fertigen Nutzdaten */
+export function elsterXml(kopf: TransferKopf, bloecke: Nutzdatenblock[]): string {
+  return [
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<Elster xmlns="http://www.elster.de/elsterxml/schema/v11">`,
+    `<TransferHeader version="11">`,
+    element("Verfahren", kopf.verfahren),
+    element("DatenArt", kopf.datenArt),
+    element("Vorgang", "send-Auth"),
+    ...(kopf.testmerker ? [element("Testmerker", kopf.testmerker)] : []),
+    ...(kopf.ziel !== undefined ? [`<Empfaenger id="L">${element("Ziel", kopf.ziel)}</Empfaenger>`] : []),
+    element("HerstellerID", kopf.herstellerId),
+    element("DatenLieferant", kopf.datenlieferant),
+    `<Datei>`,
+    element("Verschluesselung", "CMSEncryptedData"),
+    element("Kompression", "GZIP"),
+    `<TransportSchluessel></TransportSchluessel>`,
+    `</Datei>`,
+    `</TransferHeader>`,
+    `<DatenTeil>`,
+    ...bloecke.flatMap((block) => [
+      `<Nutzdatenblock>`,
+      `<NutzdatenHeader version="11">`,
+      element("NutzdatenTicket", block.ticket),
+      `<Empfaenger id="${block.empfaenger.id}">${escapeXml(block.empfaenger.wert)}</Empfaenger>`,
+      ...(block.produktVersion !== undefined
+        ? [`<Hersteller>`, element("ProduktName", PRODUKT_NAME), element("ProduktVersion", block.produktVersion), `</Hersteller>`]
+        : []),
+      `</NutzdatenHeader>`,
+      `<Nutzdaten>`,
+      ...block.nutzdaten,
+      `</Nutzdaten>`,
+      `</Nutzdatenblock>`,
+    ]),
+    `</DatenTeil>`,
+    `</Elster>`,
+  ].join("\n");
+}
+
+/** Was in den Nutzdaten der Voranmeldung steht; Transferkopf und Testmerker gehören nicht dazu */
+export type UstvaNutzdatenInput = Omit<UstvaXmlInput, "produktVersion" | "test">;
+
+/** Der Inhalt von /Elster/DatenTeil/Nutzdatenblock/Nutzdaten: das Element <Anmeldungssteuern>, zeilenweise */
+export function ustvaNutzdaten(input: UstvaNutzdatenInput): string[] {
+  const { period, figures, datenlieferant: dl } = input;
+  checkSteuernummer13(input.steuernummer13);
+  // Zeitraum laut ERiC-Schema: 01–12 Monate, 41–44 Kalendervierteljahre
+  if (!filingPeriodSchema.safeParse(period).success) {
+    throw new ElsterEingabeError(`Ungültiger Zeitraum: ${period.month}`);
+  }
+
+  // Kennzahlen in aufsteigender Reihenfolge, wie im Schema
+  const kennzahlen: string[] = [];
+  const base = (kz: string, cents: Cents | undefined) => {
+    if (cents !== undefined && Math.trunc(cents / 100) !== 0) kennzahlen.push(element(`Kz${kz}`, wholeEuros(cents)));
+  };
+  if (input.berichtigt) kennzahlen.push(element("Kz10", "1"));
+  // Steuerbeträge in der Voranmeldung mit Punkt ("17.35"), anders als in den Jahreserklärungen
+  const tax = (kz: string, cents: Cents | undefined) => {
+    if (cents !== undefined && cents !== 0) kennzahlen.push(element(`Kz${kz}`, elsterDecimal(cents).replace(",", ".")));
+  };
+  base("21", figures.kz21);
+  tax("39", figures.kz39);
+  base("41", figures.kz41);
+  base("43", figures.kz43);
+  base("45", figures.kz45);
+  base("46", figures.kz46);
+  tax("47", figures.kz47);
+  base("48", figures.kz48);
+  tax("61", figures.kz61);
+  tax("62", figures.kz62);
+  tax("66", figures.kz66);
+  tax("67", figures.kz67);
+  base("81", figures.kz81);
+  kennzahlen.push(element("Kz83", elsterDecimal(figures.kz83).replace(",", ".")));
+  base("84", figures.kz84);
+  tax("85", figures.kz85);
+  base("86", figures.kz86);
+  base("89", figures.kz89);
+  base("93", figures.kz93);
+
+  return anmeldungssteuern(period.year, dl, input.erstellungsdatum, [
+    `<Umsatzsteuervoranmeldung>`,
+    element("Jahr", String(period.year)),
+    element("Zeitraum", String(period.month).padStart(2, "0")),
+    element("Steuernummer", input.steuernummer13),
+    // Pflichtfeld: Hersteller-ID der Software
+    element("Kz09", input.herstellerId),
+    ...kennzahlen,
+    `</Umsatzsteuervoranmeldung>`,
+  ]);
+}
+
+/**
+ * <Anmeldungssteuern> der Datenart UStVA um einen Steuerfall: Voranmeldung, Antrag auf Dauerfristverlängerung oder
+ * Anmeldung der Sondervorauszahlung; laut ERiC-Plugin checkUStVA darf je Nachricht nur einer davon stehen.
+ */
+export function anmeldungssteuern(year: number, dl: Datenlieferant, erstellungsdatum: Date | undefined, steuerfall: string[]): string[] {
+  return [
+    `<Anmeldungssteuern xmlns="http://finkonsens.de/elster/elsteranmeldung/ustva/v${year}" version="${year}">`,
+    element("Erstellungsdatum", yyyymmdd(erstellungsdatum ?? new Date())),
+    // Längen laut Schema; der Datenlieferant ist nur Absenderangabe
+    `<DatenLieferant>`,
+    element("Name", dl.name.slice(0, 45)),
+    element("Strasse", dl.strasse.slice(0, 30)),
+    element("PLZ", dl.plz),
+    element("Ort", dl.ort.slice(0, 30)),
+    `</DatenLieferant>`,
+    `<Steuerfall>`,
+    ...steuerfall,
+    `</Steuerfall>`,
+    `</Anmeldungssteuern>`,
+  ];
+}
+
+export function buildUstvaXml(input: UstvaXmlInput): string {
+  return anmeldungXml(input, ustvaNutzdaten(input));
+}
+
+/** Umschlag der Datenart UStVA (ElsterAnmeldung) an das Finanzamt aus der Steuernummer */
+export function anmeldungXml(
+  input: Pick<UstvaXmlInput, "datenlieferant" | "test" | "herstellerId" | "steuernummer13" | "produktVersion">,
+  nutzdaten: string[],
+): string {
+  const dl = input.datenlieferant;
+  const lieferantKurz = `${dl.name}, ${dl.strasse}, ${dl.plz} ${dl.ort}`;
+  return elsterXml(
+    {
+      verfahren: "ElsterAnmeldung",
+      datenArt: "UStVA",
+      testmerker: input.test ? TESTMERKER : undefined,
+      herstellerId: input.herstellerId,
+      datenlieferant: lieferantKurz,
+    },
+    [{ ticket: "1", empfaenger: { id: "F", wert: finanzamtsnummer(input.steuernummer13) }, produktVersion: input.produktVersion, nutzdaten }],
+  );
+}
+
+/**
+ * Datei für den XML-Import der Voranmeldung in Mein ELSTER (Formular „Umsatzsteuer-Voranmeldung“ › Datenübernahme ›
+ * XML-Import). Laut Benutzeranleitung zum Hochladen von Formulardaten (Mein ELSTER, Hilfe „ustva_upload“) wird nur der
+ * Inhalt der Nutzdaten hochgeladen, im Zeichensatz ISO-8859-15; Kz09 übernimmt Mein ELSTER nicht. Das Schema verlangt
+ * Kz09 trotzdem, deshalb steht dort die Test-Hersteller-ID: Eine eigene Hersteller-ID ist für diesen Weg nicht nötig.
+ */
+export function buildUstvaUpload(input: Omit<UstvaNutzdatenInput, "herstellerId">): Uint8Array {
+  const xml = [`<?xml version="1.0" encoding="ISO-8859-15" standalone="no"?>`, ...ustvaNutzdaten({ ...input, herstellerId: TEST_HERSTELLER_ID })].join("\n");
+  return encodeIso885915(xml);
+}

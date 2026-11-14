@@ -1,0 +1,14 @@
+**/node_modules
+**/.output
+**/.tanstack
+**/.nitro
+.git
+.env
+apps/web/.env
+apps/web/data
+**/test-results
+**/playwright-report
+docs
+site
+**/*.test.ts
+**/*.test.tsx

@@ -1,0 +1,127 @@
+import { appPath } from "../lib/app-path.ts";
+import { Link } from "@tanstack/react-router";
+import { useId, useState } from "react";
+import { formatDate } from "../lib/format.ts";
+import type { HinterlegungStand } from "../server/modules/buchhaltung/index.ts";
+import { Icon } from "./Icon.tsx";
+import { Field } from "./Field.tsx";
+
+/** Eine Angabe unter der Bilanz: „Keine“ vorgewählt, sonst Freitext, den Haben unverändert unter die Bilanz setzt */
+function Angabe({ name, legend, hint }: { name: string; legend: string; hint: string }) {
+  const id = useId();
+  const [vorhanden, setVorhanden] = useState(false);
+  return (
+    <fieldset className="stack" style={{ border: 0, padding: 0, margin: 0, gap: 8 }} aria-describedby={`${id}-hint`}>
+      <legend style={{ padding: 0, marginBottom: 4, fontWeight: 600 }}>{legend}</legend>
+      <span id={`${id}-hint`} className="field-hint">
+        {hint}
+      </span>
+      <label className="checkbox">
+        <input type="radio" name={`${name}-art`} checked={!vorhanden} onChange={() => setVorhanden(false)} />
+        Keine
+      </label>
+      <label className="checkbox">
+        <input type="radio" name={`${name}-art`} checked={vorhanden} onChange={() => setVorhanden(true)} />
+        Ja, folgende
+      </label>
+      {vorhanden && (
+        <Field label="Angaben, wie sie unter der Bilanz stehen sollen">
+          {(control) => <textarea {...control} name={name} required maxLength={2000} rows={3} />}
+        </Field>
+      )}
+    </fieldset>
+  );
+}
+
+/**
+ * Bilanz zur Hinterlegung beim Unternehmensregister (§ 326 Abs. 2 HGB) auf der Abschluss-Seite. Das Formular lädt das PDF
+ * direkt von /api/hinterlegung/<jahr>; gespeichert wird nichts.
+ */
+export function Hinterlegung({ year, stand, closed }: { year: number; stand: HinterlegungStand; closed: boolean }) {
+  const id = useId();
+  const blocked = stand.maengel.length > 0;
+  return (
+    <section className="card" aria-labelledby={`${id}-heading`}>
+      <h2 id={`${id}-heading`} style={{ margin: 0 }}>
+        Hinterlegung beim Unternehmensregister {year}
+      </h2>
+      <p className="small muted" style={{ margin: 0, maxWidth: 760 }}>
+        Als Kleinstkapitalgesellschaft hinterlegt die Gesellschaft nur die Bilanz, statt den Jahresabschluss offenzulegen (§ 326 Abs. 2 HGB). Haben erstellt sie
+        als PDF mit Firma, Sitz und Registernummer, den Vorjahreszahlen, den Vermerken zu Restlaufzeiten und Gesellschaftern und den Angaben unter der Bilanz,
+        die den Anhang ersetzen. Das PDF lädst du auf der Publikations-Plattform (publikations-plattform.de) als Hinterlegungsauftrag an das
+        Unternehmensregister hoch und teilst dort mit, dass die Gesellschaft eine Kleinstkapitalgesellschaft ist (§ 326 Abs. 2 Satz 2 HGB). Das Register
+        berechnet eine Gebühr und für ein PDF ein Entgelt für die Umwandlung.
+      </p>
+      <p className="small muted" style={{ margin: 0, maxWidth: 760 }}>
+        Das Entgelt für die Umwandlung beträgt 1,75 Cent je sichtbarem Zeichen zuzüglich Umsatzsteuer. Ohne dieses Entgelt nimmt das Register nur XML oder XBRL
+        nach den Vorgaben des Bundesanzeiger Verlags und die Eingabe im Webformular der Plattform an; wer es sparen will, tippt die Bilanz dort ab. XML oder
+        XBRL erzeugt Haben nicht, weil der Verlag Schema und Vorgaben nur nach einer Freischaltung und ohne Recht zur Weitergabe herausgibt.
+      </p>
+      <p style={{ margin: 0, maxWidth: 760 }}>
+        {stand.fristAbgelaufen ? (
+          <strong>Die Frist ist am {formatDate(stand.frist)} abgelaufen; hinterlege so bald wie möglich, sonst droht ein Ordnungsgeld (§ 335 HGB).</strong>
+        ) : (
+          <>Frist: bis {formatDate(stand.frist)}, ein Jahr nach dem Bilanzstichtag (§ 325 Abs. 1a HGB).</>
+        )}
+      </p>
+      {!closed && (
+        <div className="banner banner-info" role="note">
+          <Icon name="info" />
+          <span>
+            Das Jahr {year} ist noch nicht abgeschlossen. Hinterlege erst, wenn die Steuerberatung den Abschluss freigegeben, die Gesellschafterversammlung ihn
+            festgestellt hat und das Jahr abgeschlossen ist; jede spätere Buchung ins Jahr ändert die Bilanz.
+          </span>
+        </div>
+      )}
+      {!stand.vorjahr && (
+        <p className="small" style={{ margin: 0, maxWidth: 760 }}>
+          Ohne Vorjahresspalte: Zum 1.1.{year} gibt es in Haben keine Salden. Im ersten Geschäftsjahr ist das richtig; sonst gehören die Vorjahreszahlen dazu (§
+          265 Abs. 2 HGB), dann übernimm die Bestände mit einer Eröffnungsbuchung.
+        </p>
+      )}
+      {blocked && (
+        <div className="banner" role="note">
+          <span>
+            Noch nicht möglich: {stand.maengel.join(" ")}
+            {stand.maengel.some((m) => m.includes("Firmendaten")) && (
+              <>
+                {" "}
+                Sitz, Registergericht und Registernummer trägst du unter <Link to="/einstellungen">Einstellungen › Firmendaten</Link> ein.
+              </>
+            )}
+            {stand.maengel.some((m) => m.includes("Restlaufzeiten")) && " Die Restlaufzeiten bestätigst du oben unter „Restlaufzeiten“."}
+          </span>
+        </div>
+      )}
+      <form
+        method="get"
+        action={appPath(`/api/hinterlegung/${year}`)}
+        className="stack"
+        style={{ gap: 16, maxWidth: 760, marginTop: 4 }}
+        aria-label="Bilanz zur Hinterlegung"
+      >
+        <Field
+          label="Tag der Feststellung"
+          hint="An dem die Gesellschafter den Abschluss festgestellt haben (§ 46 Nr. 1 GmbHG); er steht unter der Bilanz (§ 328 Abs. 1a HGB)."
+        >
+          {(control) => <input {...control} type="date" name="festgestelltAm" required min={`${year + 1}-01-01`} style={{ maxWidth: 260 }} />}
+        </Field>
+        <Angabe
+          name="haftungsverhaeltnisse"
+          legend="Haftungsverhältnisse (§ 268 Abs. 7, § 251 HGB)"
+          hint="Bürgschaften, Gewährleistungen und Sicherheiten für fremde Verbindlichkeiten, die nicht in der Bilanz stehen."
+        />
+        <Angabe
+          name="organkredite"
+          legend="Vorschüsse und Kredite an Geschäftsführer (§ 285 Nr. 9 Buchst. c HGB)"
+          hint="Mit Zinssatz, wesentlichen Bedingungen und im Jahr zurückgezahlten Beträgen, ebenso Haftungsverhältnisse zugunsten der Geschäftsführer."
+        />
+        <div>
+          <button type="submit" className="btn btn-primary" disabled={blocked}>
+            Bilanz als PDF herunterladen
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}

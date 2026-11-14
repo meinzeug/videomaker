@@ -1,0 +1,113 @@
+# Baut docs/ mit Zensical und veröffentlicht sie auf GitHub Pages:
+# https://haben.app/
+# Die eigene Domain steht unter Settings → Pages → Custom domain; ihr DNS liegt bei Cloudflare
+# (A/AAAA auf GitHub Pages, www als CNAME auf firsttris.github.io, ohne Cloudflare-Proxy, damit
+# GitHub das Zertifikat ausstellen kann). firsttris.github.io/haben/ leitet dorthin um.
+# In Pull Requests nur bauen, nicht veröffentlichen: bei reinen Doku-Änderungen überspringt ci.yml (Job `changes`) seine Jobs,
+# so fällt ein kaputter Link oder eine fehlende Seite in der Navigation schon vor dem Merge auf.
+# Voraussetzung einmalig: Settings → Pages → Source "GitHub Actions"
+# (configure-pages mit enablement schaltet das beim ersten Lauf selbst ein).
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'overrides/**'
+      - 'requirements-docs.txt'
+      - 'scripts/doku-aenderungsdatum/**'
+      - 'scripts/doku-hinweise/**'
+      - 'scripts/doku-kurzlinks/**'
+      - 'scripts/doku-startseite/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'overrides/**'
+      - 'requirements-docs.txt'
+      - 'scripts/doku-aenderungsdatum/**'
+      - 'scripts/doku-hinweise/**'
+      - 'scripts/doku-kurzlinks/**'
+      - 'scripts/doku-startseite/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Veröffentlichen läuft nie parallel; Pull Requests haben je eine eigene Gruppe und brechen veraltete Läufe ab
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('docs-{0}', github.ref) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # configure-pages braucht Schreibrecht auf Pages; in Pull Requests läuft der Schritt nicht
+    permissions:
+      contents: read
+      pages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Ganze Historie: das Änderungsdatum unter jeder Seite kommt aus dem letzten Commit ihrer Datei
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.15'
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+      - run: pip install -r requirements-docs.txt
+      - run: python -m unittest discover -s scripts/doku-aenderungsdatum
+      - run: python -m unittest discover -s scripts/doku-hinweise
+      - run: python -m unittest discover -s scripts/doku-kurzlinks
+      - run: python -m unittest discover -s scripts/doku-startseite
+      - uses: actions/configure-pages@v6
+        if: github.event_name != 'pull_request'
+        with:
+          enablement: true
+      - run: zensical build --strict
+      # Adressen mit Schrägstrich: haben.app/api/ führt auf api.html, statt 404 (scripts/doku-kurzlinks)
+      - run: python scripts/doku-kurzlinks/haben_doku_kurzlinks.py site
+      - run: grep -q 'url=../api.html' site/api/index.html
+      # Startseite als https://haben.app/, nicht index.html: Canonical, og:url, Sitemap (scripts/doku-startseite)
+      - run: python scripts/doku-startseite/haben_doku_startseite.py site https://haben.app/
+      - run: grep -q '<link rel="canonical" href="https://haben.app/">' site/index.html
+      - run: "! grep -q 'https://haben.app/index.html' site/index.html site/sitemap.xml"
+      # Ohne git-Historie fehlt das Datum, ohne dass der Build scheitert; hier fällt es auf
+      - run: grep -q 'class="aenderungsdatum"' site/index.html
+      # Das Datum gehört nicht in den Suchindex, sonst findet die Suche nach „Update“ jede Seite
+      - run: "! grep -q 'Letztes Update' site/search.json"
+      # Jeder Hinweis im GitHub-Stil ist ein Kasten; ein Absatz, der mit dem Marker beginnt, hieße, pymdownx.quotes
+      # fehlt. Nur am Anfang eines Absatzes: als Code (`> [!NOTE]` in entwicklung.md) darf der Marker stehen
+      - run: "! grep -rlE '<p>\\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\\]' site --include='*.html'"
+      # Suchmaschinen: jede Seite mit eigener Beschreibung im Front Matter (sonst stünde überall
+      # site_description), Open Graph auf jeder Seite, strukturierte Daten auf der Startseite,
+      # noindex nur auf der 404-Seite (overrides/main.html) und robots.txt mit der Sitemap
+      - run: test -z "$(grep -L '^description:' docs/*.md)"
+      - run: test -z "$(grep -L 'property="og:image"' site/*.html)"
+      - run: grep -q 'application/ld+json' site/index.html
+      - run: test "$(grep -l 'name="robots" content="noindex"' site/*.html)" = site/404.html
+      - run: "grep -q '^Sitemap: https://haben.app/sitemap.xml' site/robots.txt"
+      - uses: actions/upload-pages-artifact@v5
+        if: github.event_name != 'pull_request'
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

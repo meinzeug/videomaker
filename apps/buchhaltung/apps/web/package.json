@@ -1,0 +1,53 @@
+{
+  "name": "@haben/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "dev": "bun --bun vite dev --port 3000",
+    "build": "bun --bun vite build",
+    "start": "bun .output/server/index.mjs",
+    "typecheck": "bun --bun tsc -p .",
+    "db:generate": "bun --bun drizzle-kit generate",
+    "db:migrate": "bun src/server/db/migrate.ts",
+    "e2e": "bun --bun playwright test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.0.0",
+    "@azure/msal-node": "^7.2.1",
+    "@better-auth/passkey": "^1.7.14",
+    "@haben/core": "workspace:*",
+    "@haben/einvoice": "workspace:*",
+    "@haben/elster": "workspace:*",
+    "@haben/import": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@myriaddreamin/typst-ts-node-compiler": "0.7.0",
+    "@tanstack/react-router": "^1.170.41",
+    "@tanstack/react-start": "^1.168.60",
+    "@tanstack/redact": "0.3.1",
+    "better-auth": "^1.7.14",
+    "drizzle-orm": "^0.45.3",
+    "fflate": "^0.8.3",
+    "imapflow": "^2.0.0",
+    "mailparser": "^3.9.34",
+    "nodemailer": "^10.0.13",
+    "postgres": "^4.0.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
+    "@playwright/test": "1.64.1",
+    "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "drizzle-kit": "^0.31.11",
+    "nitro": "3.0.260903-beta",
+    "vite": "^8.3.2"
+  }
+}

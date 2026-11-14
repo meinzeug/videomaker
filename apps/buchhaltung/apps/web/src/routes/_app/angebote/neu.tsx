@@ -1,0 +1,35 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { InvoiceEditor } from "../../../components/InvoiceEditor.tsx";
+import { getNewQuote } from "../../../server/functions/quotes.ts";
+
+export const Route = createFileRoute("/_app/angebote/neu")({
+  loader: () => getNewQuote(),
+  head: () => ({ meta: [{ title: "Neues Angebot · Haben" }] }),
+  component: NewQuotePage,
+});
+
+function NewQuotePage() {
+  const data = Route.useLoaderData();
+  return (
+    <InvoiceEditor
+      id={null}
+      kind="angebot"
+      initial={{ ...data.draft, paymentTermDays: 0, format: "zugferd" }}
+      contacts={data.contacts}
+      seller={data.company}
+      sellerIssues={data.sellerIssues}
+      letterIssues={data.letterIssues}
+      issues={[]}
+      numberCounters={data.numberCounters}
+      numberRunning={data.numberRunning}
+      numberFormat={data.numberFormat}
+      corrects={null}
+      bundesland={data.bundesland}
+      kleinunternehmer={data.kleinunternehmer}
+      articles={data.articles}
+      textBlocks={data.textBlocks}
+      planTemplates={data.planTemplates}
+      contactPersons={data.contactPersons}
+    />
+  );
+}

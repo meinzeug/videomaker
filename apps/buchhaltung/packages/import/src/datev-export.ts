@@ -1,0 +1,338 @@
+/**
+ * DATEV-Buchungsstapel (EXTF, Formatkategorie 21, Version 13) aus dem Journal von Haben, für die
+ * Steuerberatung. Jede Buchung mit mehreren Zeilen wird in Buchungssätze Konto an Gegenkonto
+ * zerlegt; die Summe je Konto bleibt exakt wie im Journal. Auf DATEV-Automatikkonten setzt der
+ * Export den BU-Schlüssel 40 (Aufhebung der Automatik), weil die Umsatzsteuer schon als eigene
+ * Zeile im Journal steht und DATEV sie sonst ein zweites Mal herausrechnen würde.
+ */
+
+export interface DatevExportLine {
+  account: string;
+  debit: number;
+  credit: number;
+}
+
+export interface DatevExportEntry {
+  /** JJJJ-MM-TT */
+  date: string;
+  description: string;
+  /** Belegfeld 1, z. B. die Rechnungsnummer */
+  voucher: string;
+  lines: DatevExportLine[];
+  /** Festgeschrieben in Haben */
+  locked: boolean;
+}
+
+export interface DatevExportHeader {
+  beraterNr: string;
+  mandantNr: string;
+  /** JJJJ-MM-TT */
+  fiscalYearStart: string;
+  dateFrom: string;
+  dateTo: string;
+  description: string;
+  kontenrahmen: "SKR03" | "SKR04";
+  /** Zeitpunkt der Erzeugung */
+  createdAt: Date;
+}
+
+export interface DatevBookingRow {
+  amount: number;
+  side: "S" | "H";
+  account: string;
+  contraAccount: string;
+  buKey: string;
+  date: string;
+  voucher: string;
+  text: string;
+  locked: boolean;
+}
+
+/**
+ * Erlöskonten mit Umsatzsteuer-Automatik (AM) in den DATEV-Standardkontenrahmen, die Haben bebucht: Erlöse 19 % und 7 %,
+ * die Sachentnahme (Entnahme durch den Unternehmer für Zwecke außerhalb des Unternehmens (Waren) 19 % bzw. 7 % USt) und die
+ * private Kfz-Nutzung mit Umsatzsteuer (Verwendung von Gegenständen … 19 % USt (Fahrzeug-Nutzung)). Das Konto der
+ * Kfz-Nutzung ohne Umsatzsteuer (SKR03 8924, SKR04 4639) ist ein KU-Konto ohne Automatik. SKR04 4630 („Verwendung von
+ * Gegenständen … 7 % USt“, ebenfalls AM) trägt Sachentnahmen 7 %, die Haben vor #598 dort gebucht hat. Quelle: DATEV-Kontenrahmen
+ * SKR03 Art.-Nr. 11174 und SKR04 Art.-Nr. 11175, gültig für 2026.
+ */
+export const DATEV_AUTOMATIC_ACCOUNTS: Record<DatevExportHeader["kontenrahmen"], ReadonlySet<string>> = {
+  SKR03: new Set(["8400", "8300", "8910", "8915", "8921"]),
+  SKR04: new Set(["4400", "4300", "4620", "4610", "4630", "4645"]),
+};
+
+/**
+ * Zerlegt eine ausgeglichene Buchung in Buchungssätze. Soll- und Habenzeilen werden der Größe nach
+ * gegeneinander verrechnet; jede Zeile landet so vollständig bei ihrem Konto.
+ */
+export function splitEntry(entry: DatevExportEntry, kontenrahmen: DatevExportHeader["kontenrahmen"]): DatevBookingRow[] {
+  const debits = entry.lines.filter((l) => l.debit > 0).map((l) => ({ account: l.account, rest: l.debit }));
+  const credits = entry.lines.filter((l) => l.credit > 0).map((l) => ({ account: l.account, rest: l.credit }));
+  const sumDebit = debits.reduce((s, l) => s + l.rest, 0);
+  const sumCredit = credits.reduce((s, l) => s + l.rest, 0);
+  if (sumDebit !== sumCredit) throw new Error(`Buchung „${entry.description}“ ist nicht ausgeglichen (${sumDebit} ≠ ${sumCredit}).`);
+  debits.sort((a, b) => b.rest - a.rest);
+  credits.sort((a, b) => b.rest - a.rest);
+  const automatic = DATEV_AUTOMATIC_ACCOUNTS[kontenrahmen];
+  const rows: DatevBookingRow[] = [];
+  let d = 0;
+  let c = 0;
+  while (d < debits.length && c < credits.length) {
+    const debit = debits[d]!;
+    const credit = credits[c]!;
+    const amount = Math.min(debit.rest, credit.rest);
+    rows.push({
+      amount,
+      side: "S",
+      account: debit.account,
+      contraAccount: credit.account,
+      buKey: automatic.has(debit.account) || automatic.has(credit.account) ? "40" : "",
+      date: entry.date,
+      voucher: entry.voucher,
+      text: entry.description,
+      locked: entry.locked,
+    });
+    debit.rest -= amount;
+    credit.rest -= amount;
+    if (debit.rest === 0) d++;
+    if (credit.rest === 0) c++;
+  }
+  return rows;
+}
+
+/** Spalten der Formatversion 13 (125, Version 9 endete mit „Land“); DATEV liest EXTF-Dateien nach Position */
+export const DATEV_COLUMNS = [
+  "Umsatz (ohne Soll/Haben-Kz)",
+  "Soll/Haben-Kennzeichen",
+  "WKZ Umsatz",
+  "Kurs",
+  "Basis-Umsatz",
+  "WKZ Basis-Umsatz",
+  "Konto",
+  "Gegenkonto (ohne BU-Schlüssel)",
+  "BU-Schlüssel",
+  "Belegdatum",
+  "Belegfeld 1",
+  "Belegfeld 2",
+  "Skonto",
+  "Buchungstext",
+  "Postensperre",
+  "Diverse Adressnummer",
+  "Geschäftspartnerbank",
+  "Sachverhalt",
+  "Zinssperre",
+  "Beleglink",
+  ...Array.from({ length: 8 }, (_, i) => [`Beleginfo - Art ${i + 1}`, `Beleginfo - Inhalt ${i + 1}`]).flat(),
+  "KOST1 - Kostenstelle",
+  "KOST2 - Kostenstelle",
+  "Kost-Menge",
+  "EU-Mitgliedstaat u. UStID (Bestimmung)",
+  "EU-Steuersatz (Bestimmung)",
+  "Abw. Versteuerungsart",
+  "Sachverhalt L+L",
+  "Funktionsergänzung L+L",
+  "BU 49 Hauptfunktionstyp",
+  "BU 49 Hauptfunktionsnummer",
+  "BU 49 Funktionsergänzung",
+  ...Array.from({ length: 20 }, (_, i) => [`Zusatzinformation - Art ${i + 1}`, `Zusatzinformation- Inhalt ${i + 1}`]).flat(),
+  "Stück",
+  "Gewicht",
+  "Zahlweise",
+  "Forderungsart",
+  "Veranlagungsjahr",
+  "Zugeordnete Fälligkeit",
+  "Skontotyp",
+  "Auftragsnummer",
+  "Buchungstyp",
+  "USt-Schlüssel (Anzahlungen)",
+  "EU-Land (Anzahlungen)",
+  "Sachverhalt L+L (Anzahlungen)",
+  "EU-Steuersatz (Anzahlungen)",
+  "Erlöskonto (Anzahlungen)",
+  "Herkunft-Kz",
+  "Buchungs GUID",
+  "KOST-Datum",
+  "SEPA-Mandatsreferenz",
+  "Skontosperre",
+  "Gesellschaftername",
+  "Beteiligtennummer",
+  "Identifikationsnummer",
+  "Zeichnernummer",
+  "Postensperre bis",
+  "Bezeichnung SoBil-Sachverhalt",
+  "Kennzeichen SoBil-Buchung",
+  "Festschreibung",
+  "Leistungsdatum",
+  "Datum Zuord. Steuerperiode",
+  "Fälligkeit",
+  "Generalumkehr (GU)",
+  "Steuersatz",
+  "Land",
+  "Abrechnungsreferenz",
+  "BVV-Position",
+  "EU-Mitgliedstaat u. UStID (Ursprung)",
+  "EU-Steuersatz (Ursprung)",
+  "Abw. Skontokonto",
+] as const;
+
+const text = (value: string) => `"${value.replace(/"/g, '""').replace(/[\r\n]+/g, " ")}"`;
+const compact = (iso: string) => iso.replace(/-/g, "");
+const amount = (cents: number) => `${Math.floor(cents / 100)},${String(cents % 100).padStart(2, "0")}`;
+/**
+ * Belegfeld 1 erlaubt nur Ziffern, Buchstaben und $ & % * + - /, höchstens 36 Zeichen; unzulässig sind „insbesondere
+ * Leerzeichen, Umlaute, Punkt, Komma, Semikolon und Doppelpunkt“ (DATEV „ASCII-Import: Feldbeschreibungen für
+ * Standardformate“, Dok.-Nr. 1003221, Stand 13.08.2026, Abschnitt 3, Feld 11, https://apps.datev.de/help-center/documents/1003221).
+ * Der Punkt aus dem Nummernformat wird zu „-“, damit `RE.2026.001` als `RE-2026-001` erkennbar bleibt; alles andere
+ * außerhalb der Liste fällt weg (#675).
+ */
+const voucherField = (value: string) =>
+  value
+    .replace(/\./g, "-")
+    .replace(/[^A-Za-z0-9$&%*+\-/]/g, "")
+    .slice(0, 36);
+
+const nummern = (values: string[]) => {
+  const quoted = values.map((v) => `„${v}“`);
+  return `${quoted.slice(0, -1).join(", ")} und ${quoted.at(-1)}`;
+};
+
+/**
+ * Belegfeld 1 ist in DATEV der Schlüssel für den Ausgleich offener Posten. Ergeben verschiedene Nummern nach dem Bereinigen
+ * dasselbe Feld, nennt der Export sie (#675).
+ */
+function voucherWarnings(rows: DatevBookingRow[]): string[] {
+  const byField = new Map<string, Set<string>>();
+  for (const { voucher } of rows) {
+    if (!voucher) continue;
+    const field = voucherField(voucher);
+    byField.set(field, (byField.get(field) ?? new Set()).add(voucher));
+  }
+  return [...byField]
+    .filter(([, vouchers]) => vouchers.size > 1)
+    .map(([field, vouchers]) => `${nummern([...vouchers].sort())} stehen im Belegfeld 1 als „${field}“; DATEV kann ihre offenen Posten verwechseln.`);
+}
+
+const germanTime = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Europe/Berlin",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+/** „Erzeugt am“ laut DATEV: JJJJMMTTHHMMSSFFF, in deutscher Zeit */
+function stamp(date: Date): string {
+  return `${germanTime.format(date).replace(/\D/g, "")}${String(date.getMilliseconds()).padStart(3, "0")}`;
+}
+
+/** Kopfzeile laut Schnittstellenbeschreibung (31 Felder) */
+function headerLine(h: DatevExportHeader): string {
+  const fields: (string | number)[] = [
+    text("EXTF"),
+    700,
+    21,
+    text("Buchungsstapel"),
+    13,
+    stamp(h.createdAt),
+    "",
+    text("HB"),
+    text(""),
+    text(""),
+    h.beraterNr,
+    h.mandantNr,
+    compact(h.fiscalYearStart),
+    4,
+    compact(h.dateFrom),
+    compact(h.dateTo),
+    text(h.description.slice(0, 30)),
+    text(""),
+    1,
+    0,
+    1,
+    text("EUR"),
+    "",
+    text(""),
+    "",
+    "",
+    text(h.kontenrahmen === "SKR04" ? "04" : "03"),
+    "",
+    "",
+    text(""),
+    text(""),
+  ];
+  return fields.join(";");
+}
+
+function bookingLine(row: DatevBookingRow): string {
+  const fields: string[] = new Array(DATEV_COLUMNS.length).fill("");
+  const set = (column: (typeof DATEV_COLUMNS)[number], value: string) => {
+    fields[DATEV_COLUMNS.indexOf(column)] = value;
+  };
+  set("Umsatz (ohne Soll/Haben-Kz)", amount(row.amount));
+  set("Soll/Haben-Kennzeichen", text(row.side));
+  set("WKZ Umsatz", text("EUR"));
+  set("Konto", row.account);
+  set("Gegenkonto (ohne BU-Schlüssel)", row.contraAccount);
+  set("BU-Schlüssel", row.buKey ? text(row.buKey) : "");
+  set("Belegdatum", `${row.date.slice(8, 10)}${row.date.slice(5, 7)}`);
+  set("Belegfeld 1", text(voucherField(row.voucher)));
+  set("Buchungstext", text(row.text.slice(0, 60)));
+  set("Festschreibung", row.locked ? "1" : "0");
+  return fields.join(";");
+}
+
+/** Windows-1252, wie DATEV EXTF-Dateien erwartet; nicht darstellbare Zeichen werden zu „?“ */
+const CP1252: Record<string, number> = {
+  "€": 0x80,
+  "‚": 0x82,
+  ƒ: 0x83,
+  "„": 0x84,
+  "…": 0x85,
+  "†": 0x86,
+  "‡": 0x87,
+  ˆ: 0x88,
+  "‰": 0x89,
+  Š: 0x8a,
+  "‹": 0x8b,
+  Œ: 0x8c,
+  Ž: 0x8e,
+  "‘": 0x91,
+  "’": 0x92,
+  "“": 0x93,
+  "”": 0x94,
+  "•": 0x95,
+  "–": 0x96,
+  "—": 0x97,
+  "˜": 0x98,
+  "™": 0x99,
+  š: 0x9a,
+  "›": 0x9b,
+  œ: 0x9c,
+  ž: 0x9e,
+  Ÿ: 0x9f,
+};
+
+export function encodeCp1252(value: string): Uint8Array {
+  const out = new Uint8Array(value.length);
+  let i = 0;
+  for (const ch of value) {
+    const code = ch.codePointAt(0)!;
+    out[i++] = CP1252[ch] ?? (code < 0x80 || (code >= 0xa0 && code <= 0xff) ? code : 0x3f);
+  }
+  return out.subarray(0, i);
+}
+
+/** `warnings`: Nummern, die nach dem Bereinigen dasselbe Belegfeld 1 ergeben */
+export function buildDatevBuchungsstapel(
+  header: DatevExportHeader,
+  entries: DatevExportEntry[],
+): { bytes: Uint8Array; rows: DatevBookingRow[]; warnings: string[] } {
+  if (!/^\d{4,7}$/.test(header.beraterNr)) throw new Error("Die Beraternummer hat 4 bis 7 Ziffern.");
+  if (!/^\d{1,5}$/.test(header.mandantNr)) throw new Error("Die Mandantennummer hat 1 bis 5 Ziffern.");
+  const rows = entries.flatMap((entry) => splitEntry(entry, header.kontenrahmen));
+  const lines = [headerLine(header), DATEV_COLUMNS.map(text).join(";"), ...rows.map(bookingLine)];
+  return { bytes: encodeCp1252(`${lines.join("\r\n")}\r\n`), rows, warnings: voucherWarnings(rows) };
+}

@@ -1,0 +1,174 @@
+// Renovate (GitHub-App, https://github.com/apps/renovate): ein Pull Request je neuem Release
+// dessen, worauf Haben aufbaut, dazu das Issue „Dependency Dashboard“ mit allem, was offen ist.
+// Eigene Pull Requests: KoSIT-Validator und XRechnung-Konfiguration (CI-Job kosit), Bun (Images,
+// package.json, Screenshots, README), die Wolfi-Basis des App-Images (wöchentlich), PostgreSQL
+// (Datenbank, Backup-Image, CI, Doku), Caddy und restic.
+// Nicht über Renovate: ERiC (download.elster.de hat keine Liste, die Renovate lesen könnte;
+// DEFAULT_ERIC_VERSION in packages/elster/src/install.ts hebt man von Hand nach einer
+// Testübermittlung) und Habens eigene Images. Neue ERiC-Versionen, Lohnsteuer-PAP, Sozialversicherungswerte,
+// DATEV-Kontenrahmen und geänderte Normen meldet stattdessen der Workflow .github/workflows/jahreswerte.yml
+// als Issue mit dem Label „jahreswerte“ (docs/entwicklung.md, „Jahreswerte“).
+// Alle übrigen Pakete, die Actions und die Images kommen mit den gemeinsamen Einstellungen aus
+// firsttris/workflows (renovate/default.json5): Minor- und Patch-Updates einmal im Monat in einem
+// Pull Request, der sich bei grüner CI selbst merged; Majors auf Anfrage im Dashboard.
+// Prüfen mit `bunx --package renovate renovate-config-validator .github/renovate.json5`.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["github>firsttris/workflows//renovate/default.json5"],
+  customManagers: [
+    {
+      // Der Validator, gegen den der kosit-Job die E-Rechnungen prüft (v1.5.0, v1.6.3); Alphas und
+      // Technical Previews (v2.0.0-alpha1, -tp2) passen nicht zur Versionierung unten
+      customType: "regex",
+      managerFilePatterns: ["/^\\.github/workflows/ci\\.yml$/"],
+      matchStrings: ["KOSIT_VALIDATOR: (?<currentValue>v\\d+\\.\\d+\\.\\d+\\S*)\\n"],
+      depNameTemplate: "itplr-kosit/validator",
+      datasourceTemplate: "github-releases",
+      versioningTemplate: "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$",
+    },
+    {
+      // Mustang-Validator für die ZUGFeRD-PDFs (Job zugferd); die Tags heißen core-2.26.0
+      customType: "regex",
+      managerFilePatterns: ["/^\\.github/workflows/ci\\.yml$/"],
+      matchStrings: ["MUSTANG: (?<currentValue>core-\\d+\\.\\d+\\.\\d+)\\n"],
+      depNameTemplate: "ZUGFeRD/mustangproject",
+      datasourceTemplate: "github-releases",
+      versioningTemplate: "regex:^core-(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$",
+    },
+    {
+      // Die XRechnung-Konfiguration des Validators; die Tags heißen release-2025-07-10, ab 2026
+      // v2026-08-31
+      customType: "regex",
+      managerFilePatterns: ["/^\\.github/workflows/ci\\.yml$/"],
+      matchStrings: ["KOSIT_XRECHNUNG: (?<currentValue>(?:release-|v)\\d{4}-\\d{2}-\\d{2})\\n"],
+      depNameTemplate: "itplr-kosit/validator-configuration-xrechnung",
+      datasourceTemplate: "github-releases",
+      versioningTemplate: "regex:^(?:release-|v)(?<major>\\d{4})-(?<minor>\\d{2})-(?<patch>\\d{2})$",
+    },
+    {
+      // Das Bun von package.json (packageManager; daraus nimmt die CI ihre Version), vom Screenshot-Workflow
+      // und das, was das README voraussetzt (die Images: dockerfile-Manager)
+      customType: "regex",
+      managerFilePatterns: ["/^package\\.json$/", "/^\\.github/workflows/screenshots\\.yml$/", "/^README\\.md$/"],
+      matchStrings: [
+        "\"packageManager\": \"bun@(?<currentValue>\\d+\\.\\d+\\.\\d+)\"",
+        "bun-version: (?<currentValue>\\d+\\.\\d+\\.\\d+)\\n",
+        "Voraussetzungen: Bun (?<currentValue>\\d+\\.\\d+\\.\\d+),",
+      ],
+      depNameTemplate: "bun",
+      datasourceTemplate: "npm",
+    },
+    {
+      // PostgreSQL überall, wo es nicht Compose, Quadlet oder FROM nennt: CI (services, docker run,
+      // Screenshots), README samt Badge, Doku und die Beschreibungen der Images
+      customType: "regex",
+      managerFilePatterns: [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/",
+        "/^README\\.md$/",
+        "/^docs/installation(-[a-z]+)?\\.md$/",
+        "/^deploy/(backup|db)/(README\\.md|Containerfile)$/",
+      ],
+      matchStrings: [
+        "(?:image|postgres): postgres:(?<currentValue>\\d+)\\n",
+        "-e POSTGRES_DB=haben postgres:(?<currentValue>\\d+)\\n",
+        "und PostgreSQL (?<currentValue>\\d+)\\.",
+        "`postgres:(?<currentValue>\\d+)`",
+        "\\(postgres:(?<currentValue>\\d+)\\)",
+        "# postgres:(?<currentValue>\\d+) hält",
+        "Basis ist `postgres:(?<currentValue>\\d+)`",
+        "PostgreSQL-(?<currentValue>\\d+)-4169e1",
+      ],
+      depNameTemplate: "docker.io/library/postgres",
+      datasourceTemplate: "docker",
+    },
+    {
+      // Der Caddy der Doku (Compose und Quadlet: eigene Manager)
+      customType: "regex",
+      managerFilePatterns: ["/^docs/installation(-[a-z]+)?\\.md$/"],
+      matchStrings: ["`caddy:(?<currentValue>\\d+)`"],
+      depNameTemplate: "docker.io/library/caddy",
+      datasourceTemplate: "docker",
+    },
+  ],
+  packageRules: [
+    {
+      // Habens eigene Images ziehen mit den Releases nach (release.yml)
+      matchPackageNames: ["docker.io/tristanteu/**", "tristanteu/**", "ghcr.io/firsttris/**"],
+      enabled: false,
+    },
+    {
+      // Validator und Konfiguration in einem PR: die Konfiguration nennt den Validator, mit dem sie
+      // gebaut ist (CHANGELOG „Using KoSIT Validator v…“)
+      matchPackageNames: ["itplr-kosit/validator", "itplr-kosit/validator-configuration-xrechnung"],
+      groupName: "KoSIT-Validator und XRechnung-Konfiguration",
+      commitMessageTopic: "KoSIT validator and XRechnung configuration",
+      prBodyNotes: [
+        "Der CI-Job `kosit` dieses Pull Requests prüft alle Beispielrechnungen von `packages/einvoice/scripts/kosit-check.ts` mit der neuen Version. Vor dem Mergen: CHANGELOG von [Validator](https://github.com/itplr-kosit/validator/blob/main/CHANGELOG.md) und [Konfiguration](https://github.com/itplr-kosit/validator-configuration-xrechnung/blob/master/CHANGELOG.md) lesen (neue CEN-/XRechnung-Schematron-Regeln, geänderte Fehlerstufen) und die Berichte im Artefakt `kosit-reports` ansehen, auch die Warnungen. Wird der Job rot, ist die Rechnung aus `packages/einvoice` zu korrigieren, nicht der Validator. Eine neue XRechnung-Hauptversion (die Konfiguration nennt sie im Dateinamen, derzeit 3.0.2) betrifft auch die Spezifikationskennung der erzeugten Rechnungen (`urn:xeinkauf.de:kosit:xrechnung_3.0`, geprüft in `packages/einvoice/src/xml.test.ts`).",
+      ],
+      schedule: ["at any time"],
+      automerge: false,
+      dependencyDashboardApproval: false,
+    },
+    {
+      // Basis der Laufzeit im Containerfile: Wolfi ist rollend, der gepinnte Digest bringt poppler und die übrigen
+      // Systempakete. Jede Woche statt einmal im Monat, damit Sicherheitsfixes nicht lange warten; der CI-Job container
+      // startet das Image und prüft pdftotext, pdftoppm und die Pakete der Laufzeit, danach merged Renovate selbst.
+      matchPackageNames: ["cgr.dev/chainguard/wolfi-base"],
+      groupName: "Wolfi",
+      schedule: ["* 0-5 * * 1"],
+      automerge: true,
+    },
+    {
+      // Bun: Images, package.json, Screenshots und README in einem PR, auch Majors
+      matchPackageNames: ["docker.io/oven/bun", "oven/bun", "bun"],
+      groupName: "Bun",
+      sourceUrl: "https://github.com/oven-sh/bun",
+      prBodyNotes: [
+        "Die Images (`Containerfile`: Build-Stufe und das Bun, das die Laufzeit-Stufe auf Wolfi daraus kopiert; `deploy/dev/Containerfile`), `packageManager` in `package.json` (daraus nimmt die CI ihre Version), der Screenshot-Workflow und das README ziehen zusammen. Bun ist Laufzeit und Paketmanager: Nach dem Update `bun install` ausführen, falls sich `bun.lock` ändert. Der ERiC-Worker läuft unter Bun aus den Quellen und lädt ERiC über `koffi` (Node-API in Bun): Vor dem Mergen `ERIC_DIR=… bun --bun vitest run packages/elster/src/eric-echt.test.ts` mit installiertem ERiC laufen lassen (in der CI wird ERiC nicht geladen); der Container-Job dieses PRs startet das Image.",
+      ],
+      schedule: ["at any time"],
+      automerge: false,
+      dependencyDashboardApproval: false,
+    },
+    {
+      // PostgreSQL: Das Datenbank-Image (deploy/db) hebt ältere Bestände beim Start mit pg_upgrade an.
+      // Der PR entsteht erst, wenn er im Dependency Dashboard angehakt wird.
+      // Nur das Image: Das npm-Paket `postgres` (postgres.js, der Treiber in apps/web) heißt genauso und läuft
+      // mit den übrigen Paketen.
+      matchDatasources: ["docker"],
+      matchPackageNames: ["docker.io/library/postgres", "postgres"],
+      dependencyDashboardApproval: true,
+      groupName: "PostgreSQL",
+      sourceUrl: "https://github.com/postgres/postgres",
+      prBodyNotes: [
+        "Eine neue Hauptversion zieht in `deploy/db/Containerfile` (Datenbank), `deploy/backup/Containerfile` (pg_dump), CI und Doku zusammen. Beide Images bauen die Programme aller Versionen von `UPGRADE_FROM` bis zur vorletzten mit ein: `haben-db` hebt damit vorhandene Bestände beim Start mit `pg_upgrade` an, `backup.sh` nimmt das `pg_dump` der Version, in der die Datenbank läuft. Der CI-Job `db-upgrade` prüft das Upgrade von 16 mit Backup und Test-Restore davor und danach; bei einer weiteren Hauptversion dort einen Schritt von der bisherigen ergänzen. Fällt eine alte Version aus dem PGDG-Repository, `UPGRADE_FROM` in beiden Containerfiles anheben und das in docs/installation-backup.md (PostgreSQL-Update) vermerken. Die Trigger der Migrationen (`apps/web/drizzle/*_trigger.sql`, Festschreibung und Hash-Kette) laufen in CI gegen die neue Version.",
+      ],
+      schedule: ["at any time"],
+      automerge: false,
+    },
+    {
+      // Der Reverse Proxy der mitgelieferten Einrichtung (deploy/compose.yml, Quadlet, Doku)
+      matchPackageNames: ["docker.io/library/caddy", "caddy"],
+      groupName: "Caddy",
+      sourceUrl: "https://github.com/caddyserver/caddy",
+      prBodyNotes: [
+        "Vor dem Mergen: Release Notes gegen `deploy/Caddyfile` und den Caddy-Block in `deploy/compose.yml` prüfen (Sicherheits-Header, `max_size`).",
+      ],
+      schedule: ["at any time"],
+      automerge: false,
+      dependencyDashboardApproval: false,
+    },
+    {
+      // restic im Backup-Image (deploy/backup/Containerfile)
+      matchPackageNames: ["ghcr.io/restic/restic"],
+      sourceUrl: "https://github.com/restic/restic",
+      prBodyNotes: [
+        "Vor dem Mergen: CHANGELOG lesen (Repository-Format, `--json`-Ausgabe von `backup`, `snapshots` und Fehlermeldungen, die `deploy/backup/backup.sh` und `backup-status.sh` auswerten). Das neue `haben-backup` erscheint mit dem nächsten Release; `restore-check.sh` gegen ein vorhandenes Repository laufen lassen.",
+      ],
+      groupName: "restic",
+      schedule: ["at any time"],
+      automerge: false,
+      dependencyDashboardApproval: false,
+    },
+  ],
+}

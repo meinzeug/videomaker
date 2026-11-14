@@ -1,0 +1,298 @@
+import { tageBis } from "@haben/core";
+import { appPath } from "../../lib/app-path.ts";
+import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { useState } from "react";
+import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
+import { formatDate, relativeDays } from "../../lib/format.ts";
+import { Status } from "../../components/Status.tsx";
+import { NoticeBanner } from "../../components/NoticeBanner.tsx";
+import { useAction } from "../../lib/use-action.ts";
+import { createFristenAbo, getFristen, reactivateFristenAbo, revokeFristenAbo } from "../../server/functions/fristen.ts";
+import styles from "../../styles/auswertungen.css?url";
+import { Field } from "../../components/Field.tsx";
+
+export const Route = createFileRoute("/_app/fristen")({
+  loader: () => getFristen(),
+  head: () => ({ meta: [{ title: "Fristen · Haben" }], links: [{ rel: "stylesheet", href: styles }] }),
+  component: FristenPage,
+});
+
+type Data = Awaited<ReturnType<typeof getFristen>>;
+type Frist = Data["fristen"][number];
+
+const ART_LABEL: Record<Frist["art"], string> = {
+  ustva: "Voranmeldung",
+  zm: "Zusammenfassende Meldung",
+  kapest: "Kapitalertragsteuer",
+  lsta: "Lohnsteuer",
+  lstb: "Lohnsteuerbescheinigung",
+  erklaerung: "Erklärung",
+  vorauszahlung: "Vorauszahlung",
+  einspruch: "Einspruch",
+  zertifikat: "Zertifikat",
+  sv: "Sozialversicherung",
+};
+
+/** Zustand einer Frist: erledigt, Hinweis (Haben prüft es nicht) oder offen, ab 7 Tagen vorher dringend */
+function FristStatus({ frist, today }: { frist: Frist; today: string }) {
+  const tage = tageBis(frist.datum, today);
+  if (frist.status === "erledigt") return <Status tone="ok">Erledigt</Status>;
+  if (frist.status === "hinweis")
+    return (
+      <Status tone="info" detail={relativeDays(tage)}>
+        Hinweis
+      </Status>
+    );
+  return (
+    <Status tone={tage <= 7 ? "warn" : "neutral"} emphasis={tage <= 7 ? "urgent" : undefined} detail={relativeDays(tage)}>
+      Offen
+    </Status>
+  );
+}
+
+function FristRow({ frist, today }: { frist: Frist; today: string }) {
+  return (
+    <tr>
+      <td data-label="Datum" style={{ whiteSpace: "nowrap" }}>
+        {formatDate(frist.datum)}
+      </td>
+      <td data-label="Frist">
+        <a href={appPath(frist.link)} style={{ fontWeight: 500 }}>
+          {frist.titel}
+        </a>
+        <div className="small muted">{frist.detail}</div>
+      </td>
+      <td data-label="Art" className="small">
+        {ART_LABEL[frist.art]}
+      </td>
+      <td data-label="Status">
+        <FristStatus frist={frist} today={today} />
+      </td>
+    </tr>
+  );
+}
+
+/** Lange Gruppen zeigen erst die nächsten Fristen; der Rest klappt auf */
+const KURZ = 6;
+
+function Gruppe({ titel, fristen, today, leer, kurz }: { titel: string; fristen: Frist[]; today: string; leer?: string; kurz?: boolean }) {
+  const [alle, setAlle] = useState(false);
+  if (fristen.length === 0 && !leer) return null;
+  const gezeigt = kurz && !alle ? fristen.slice(0, KURZ) : fristen;
+  const id = `fristen-${titel.toLowerCase().replace(/\W+/g, "-")}`;
+  return (
+    <section className="card" aria-labelledby={id}>
+      <h2 id={id} style={{ margin: 0, fontSize: 16 }}>
+        {titel} <span className="small muted">({fristen.length})</span>
+      </h2>
+      {fristen.length === 0 ? (
+        <p className="muted" style={{ margin: 0 }}>
+          {leer}
+        </p>
+      ) : (
+        <table className="report-table stack-table fristen-table">
+          <thead>
+            <tr>
+              <th scope="col" style={{ width: 140 }}>
+                Datum
+              </th>
+              <th scope="col">Frist</th>
+              <th scope="col" style={{ width: 140 }}>
+                Art
+              </th>
+              <th scope="col" style={{ width: 150 }}>
+                Status
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {gezeigt.map((f) => (
+              <FristRow key={f.id} frist={f} today={today} />
+            ))}
+          </tbody>
+        </table>
+      )}
+      {gezeigt.length < fristen.length && (
+        <button type="button" className="btn btn-sm" style={{ alignSelf: "flex-start" }} onClick={() => setAlle(true)}>
+          Alle {fristen.length} zeigen
+        </button>
+      )}
+    </section>
+  );
+}
+
+function FristenPage() {
+  const { today, fristen } = Route.useLoaderData();
+  const bald = (f: Frist) => tageBis(f.datum, today) <= 30;
+  const ueberfaellig = fristen.filter((f) => f.status === "offen" && f.datum < today);
+  const naechste = fristen.filter((f) => f.status !== "erledigt" && f.datum >= today && bald(f));
+  const spaeter = fristen.filter((f) => f.status !== "erledigt" && !bald(f));
+  const erledigt = fristen.filter((f) => f.status === "erledigt").reverse();
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <div className="eyebrow">Steuertermine</div>
+          <h1>Fristen</h1>
+        </div>
+      </div>
+      <p className="muted small" style={{ margin: 0, maxWidth: 760 }}>
+        Voranmeldungen, Jahreserklärungen, Vorauszahlungen, Einspruchsfristen aus dem <Link to="/finanzamt">ELSTER-Postfach</Link> und der Ablauf des
+        Zertifikats, dazu Beitragsnachweise und Meldungen im <Link to="/sv-meldeportal">SV-Meldeportal</Link>. Fällt eine Steuerfrist auf ein Wochenende oder
+        einen Feiertag, gilt der nächste Werktag. Erledigt ist, was echt übermittelt oder als im Portal abgegeben vermerkt ist.
+      </p>
+      <div className="stack" style={{ gap: 16 }}>
+        {ueberfaellig.length > 0 && <Gruppe titel="Überfällig" fristen={ueberfaellig} today={today} />}
+        <Gruppe titel="Nächste 30 Tage" fristen={naechste} today={today} leer="In den nächsten 30 Tagen ist nichts fällig." />
+        <Gruppe titel="Später" fristen={spaeter} today={today} kurz />
+        <KalenderAbo />
+        {erledigt.length > 0 && (
+          <details className="card">
+            <summary style={{ cursor: "pointer", fontWeight: 600 }}>Erledigt ({erledigt.length})</summary>
+            <table className="report-table stack-table fristen-table" style={{ marginTop: 8 }}>
+              <tbody>
+                {erledigt.map((f) => (
+                  <FristRow key={f.id} frist={f} today={today} />
+                ))}
+              </tbody>
+            </table>
+          </details>
+        )}
+      </div>
+    </>
+  );
+}
+
+/** Abo-Link für Kalender-Apps; den Link gibt es nur direkt nach dem Erzeugen */
+function KalenderAbo() {
+  const { abo, aboStatus } = Route.useLoaderData();
+  const reactivate = useServerFn(reactivateFristenAbo);
+  const [takingOver, setTakingOver] = useState(false);
+  const router = useRouter();
+  const create = useServerFn(createFristenAbo);
+  const revoke = useServerFn(revokeFristenAbo);
+  const [url, setUrl] = useState<string | null>(null);
+  const { busy, notice, run } = useAction();
+  const [copied, setCopied] = useState(false);
+  const [rueckfrage, setRueckfrage] = useState<"neu" | "beenden" | null>(null);
+
+  const neu = () =>
+    run(async () => {
+      const { token } = await create();
+      setCopied(false);
+      setUrl(`${window.location.origin}${appPath(`/api/fristen/kalender?token=${token}`)}`);
+      await router.invalidate();
+    });
+
+  return (
+    <section className="card" aria-labelledby="abo-heading">
+      <h2 id="abo-heading" style={{ margin: 0, fontSize: 16 }}>
+        Erinnerungen im Kalender
+      </h2>
+      <p className="small muted" style={{ margin: 0, maxWidth: 760 }}>
+        Abonniere die offenen Fristen in deinem Kalender (iPhone, Android, Thunderbird, Outlook). Jede Frist ist ein ganztägiger Termin mit Erinnerung drei Tage
+        vorher und am Morgen des Tages; Erledigtes verschwindet beim nächsten Abgleich. Manche Kalender, etwa Google, übernehmen die Erinnerungen aus Abos
+        nicht; dort stellst du sie für den abonnierten Kalender selbst ein.
+      </p>
+      {aboStatus.exists && <p className="small muted">Verantwortlich: {aboStatus.responsibleName ?? aboStatus.responsibleId ?? "Noch nicht zugeordnet"}</p>}
+      <ConfirmDialog
+        open={takingOver}
+        title="Kalender-Abo übernehmen und reaktivieren?"
+        confirmLabel="Übernehmen und reaktivieren"
+        onClose={() => setTakingOver(false)}
+        onConfirm={() =>
+          void run(async () => {
+            await reactivate();
+            await router.invalidate();
+          }, "Kalender-Abo übernommen und reaktiviert.")
+        }
+      >
+        <p>Du übernimmst die Verantwortung. Der bisherige Kalender-Link bleibt erhalten.</p>
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={rueckfrage === "beenden"}
+        title="Kalender-Abo beenden?"
+        confirmLabel="Abo beenden"
+        danger
+        onConfirm={() =>
+          void run(async () => {
+            await revoke();
+            await router.invalidate();
+          })
+        }
+        onClose={() => setRueckfrage(null)}
+      >
+        <p>Der Link wird sofort ungültig, abonnierte Kalender bekommen die Fristen nicht mehr. Ein neues Abo muss jeder Kalender wieder einrichten.</p>
+      </ConfirmDialog>
+      {aboStatus.exists && (aboStatus.disabledAt || !aboStatus.ownerConfirmed) ? (
+        <>
+          <p role="status">
+            {aboStatus.disabledAt
+              ? `Kalender-Abo deaktiviert: ${aboStatus.disabledReason === "inhaberrolle-entzogen" ? "Inhaberrolle entzogen" : "Verantwortung noch nicht zugeordnet"}.`
+              : "Kalender-Abo unbestätigt: Der Verantwortliche hat seine Inhaberrolle seit über 30 Tagen nicht bestätigt."}
+          </p>
+          <div className="actions" style={{ flexWrap: "wrap" }}>
+            {aboStatus.canTakeOver && (
+              <button type="button" className="btn" disabled={busy} onClick={() => setTakingOver(true)}>
+                Übernehmen und reaktivieren
+              </button>
+            )}
+            <button type="button" className="btn btn-danger" disabled={busy} onClick={() => setRueckfrage("beenden")}>
+              Abo beenden
+            </button>
+          </div>
+        </>
+      ) : url ? (
+        <>
+          <Field label="Abo-Link (wird nur jetzt angezeigt)">
+            {(control) => <input {...control} readOnly value={url} onFocus={(e) => e.currentTarget.select()} />}
+          </Field>
+          <div className="actions" style={{ flexWrap: "wrap" }}>
+            <a className="btn" href={url.replace(/^https?:/, "webcal:")}>
+              Im Kalender öffnen
+            </a>
+            <button type="button" className="btn btn-primary" onClick={() => void navigator.clipboard?.writeText(url).then(() => setCopied(true))}>
+              {copied ? "Kopiert" : "Link kopieren"}
+            </button>
+          </div>
+          <p className="small muted" style={{ margin: 0 }}>
+            Wer den Link hat, sieht deine Fristen. Gib ihn nicht weiter; ein neuer Link macht den alten ungültig.
+          </p>
+        </>
+      ) : abo ? (
+        <>
+          <p className="small" style={{ margin: 0 }}>
+            Das Abo ist eingerichtet. Den Link zeigt Haben aus Sicherheitsgründen nur beim Erzeugen.
+          </p>
+          <div className="actions" style={{ flexWrap: "wrap" }}>
+            <button type="button" className="btn" disabled={busy} onClick={() => setRueckfrage("neu")}>
+              Neuen Link erzeugen
+            </button>
+            <button type="button" className="btn btn-danger" disabled={busy} onClick={() => setRueckfrage("beenden")}>
+              Abo beenden
+            </button>
+          </div>
+          <ConfirmDialog
+            open={rueckfrage === "neu"}
+            title="Neuen Abo-Link erzeugen?"
+            confirmLabel="Neuen Link erzeugen"
+            danger
+            onConfirm={() => void neu()}
+            onClose={() => setRueckfrage(null)}
+          >
+            <p>Der bisherige Link wird sofort ungültig. Jeder Kalender muss danach den neuen Link abonnieren.</p>
+          </ConfirmDialog>
+        </>
+      ) : (
+        <div className="actions">
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void neu()}>
+            Kalender-Abo einrichten
+          </button>
+        </div>
+      )}
+      <NoticeBanner notice={notice} />
+    </section>
+  );
+}

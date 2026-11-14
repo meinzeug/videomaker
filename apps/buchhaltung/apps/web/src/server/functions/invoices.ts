@@ -1,0 +1,222 @@
+import { notFound } from "@tanstack/react-router";
+import { invoicesSentByMail, listInvoiceAttachments, mailsForInvoice } from "../modules/rechnungen/index.ts";
+import { createServerFn } from "@tanstack/react-start";
+import { asc, eq, or } from "drizzle-orm";
+import { z } from "zod";
+import { invoicePaymentList, listAccounts, listWriteOffs } from "../modules/bank/index.ts";
+import { openPositions } from "../modules/auswertungen/index.ts";
+import { serviceEntriesOfInvoice } from "../modules/leistungen/index.ts";
+import { editorContext } from "../modules/stammdaten/index.ts";
+import { authMiddleware, readMiddleware } from "../middleware.ts";
+import {
+  cancelInvoice,
+  createCorrection,
+  createDraft,
+  deleteDraft,
+  documentPreview,
+  documentPreviewSchema,
+  draftSchema,
+  finalizeInvoice,
+  finalizeIssues,
+  getInvoice,
+  invoiceSummary,
+  listInvoices,
+  newDraftDefaults,
+  numbering,
+  abschlagLinks,
+  openAbschlaege,
+  setNextNumber,
+  updateDraft,
+} from "../modules/rechnungen/index.ts";
+import { db, schema } from "../db/index.ts";
+import { dunningsFor } from "../modules/rechnungen/index.ts";
+import { today } from "../today.ts";
+import { detailId } from "./schemas.ts";
+
+/** Ohne PDF und XML, die gehen über die Download-Routen */
+function withoutFiles<T extends { pdf: unknown; xml: unknown }>({ pdf, xml, ...rest }: T) {
+  return { ...rest, hasPdf: pdf !== null, hasXml: xml !== null };
+}
+
+export const getInvoices = createServerFn({ method: "GET" })
+  .middleware([readMiddleware])
+  .handler(async ({ context }) => {
+    const [invoices, mailed] = await Promise.all([listInvoices(today()), invoicesSentByMail()]);
+    // Entwürfe sind Arbeitsstand des Inhabers, für die Steuerberatung zählt nur Festgeschriebenes
+    const visible = context.user.role === "inhaber" ? invoices : invoices.filter((invoice) => invoice.status !== "draft");
+    return visible.map((invoice) => ({ ...invoice, mailed: mailed.has(invoice.id) }));
+  });
+
+/** Blatt der Vorschau aus dem Stand des Formulars, für Rechnung und Angebot; gespeichert wird nichts */
+export const renderDocumentPreview = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(documentPreviewSchema)
+  .handler(({ data }) => documentPreview(data));
+
+export const getInvoiceSummary = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async () => {
+    const now = today();
+    const [accounts, open] = await Promise.all([listAccounts(), openPositions(now)]);
+    return {
+      ...(await invoiceSummary(now)),
+      // Offene Verbindlichkeiten wie in den Auswertungen: gebuchte, über die Bank zu zahlende Belege
+      payables: {
+        total: open.payablesTotal,
+        count: open.payables.length,
+        overdueCount: open.payables.filter((p) => p.daysOverdue > 0).length,
+        nextDue: open.payables[0]?.dueDate ?? null,
+      },
+      bank: accounts.map((a) => ({
+        id: a.id,
+        name: a.name,
+        purpose: a.purpose,
+        openCount: a.openCount,
+        staleOpenCount: a.staleOpenCount,
+        balance: a.lastImport?.closingBalance ?? null,
+        balanceDate: a.lastImport?.periodTo ?? null,
+      })),
+    };
+  });
+
+/** Editor-Daten samt offenen Abschlagsrechnungen für die Schlussrechnung */
+async function invoiceEditorContext() {
+  return {
+    ...(await editorContext("rechnung")),
+    abschlaege: (await openAbschlaege()).map(({ id, contactId, quoteId, number, issueDate, gross, rates, taxTreatment, priceMode, propertyRetention }) => ({
+      id,
+      contactId,
+      quoteId,
+      number,
+      issueDate,
+      gross,
+      rates,
+      taxTreatment,
+      priceMode,
+      propertyRetention,
+    })),
+    /** Festgeschriebene Angebote für den Bezug von Abschlags- und Schlussrechnungen */
+    quotes: (
+      await db
+        .select({ id: schema.quotes.id, contactId: schema.quotes.contactId, number: schema.quotes.number, issueDate: schema.quotes.issueDate })
+        .from(schema.quotes)
+        .where(eq(schema.quotes.status, "final"))
+        .orderBy(asc(schema.quotes.issueDate))
+    ).map((q) => ({ ...q, number: q.number ?? "" })),
+  };
+}
+
+export const getNewInvoice = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async () => ({ draft: await newDraftDefaults(today()), ...(await invoiceEditorContext()) }));
+
+export const getInvoiceDetail = createServerFn({ method: "GET" })
+  .middleware([readMiddleware])
+  .validator(detailId)
+  .handler(async ({ data, context }) => {
+    const result = await getInvoice(data);
+    if (!result || (context.user.role !== "inhaber" && result.invoice.status === "draft")) throw notFound();
+    const issues = result.invoice.status === "draft" ? await finalizeIssues(data) : [];
+    // Mahnungen und ob die Rechnung gerade überfällig ist (offen und Fälligkeit vorbei)
+    const listed = result.invoice.status === "final" ? (await listInvoices(today(), data))[0] : undefined;
+    return {
+      ...result,
+      invoice: withoutFiles(result.invoice),
+      issues,
+      attachments: (await listInvoiceAttachments(data)).map(({ id, filename, size }) => ({ id, filename, size })),
+      dunnings: await dunningsFor([data]),
+      mails: result.invoice.status === "final" ? await mailsForInvoice(data) : [],
+      overdue: listed?.listStatus === "ueberfaellig",
+      // Angebot der Rechnung: über invoices.quote_id oder (ältere Rechnungen aus dem Angebot) über quotes.invoice_id
+      fromQuote:
+        (
+          await db
+            .select({ id: schema.quotes.id, number: schema.quotes.number })
+            .from(schema.quotes)
+            .where(
+              result.invoice.quoteId ? or(eq(schema.quotes.id, result.invoice.quoteId), eq(schema.quotes.invoiceId, data)) : eq(schema.quotes.invoiceId, data),
+            )
+        )[0] ?? null,
+      open: listed?.open ?? 0,
+      listStatus: listed?.listStatus ?? null,
+      /** Für die Auskunft unter dem Status im Seitenkopf */
+      statusFacts: listed
+        ? {
+            listStatus: listed.listStatus,
+            dueDate: listed.dueDate,
+            gross: listed.gross,
+            paid: listed.paid,
+            open: listed.open,
+            settledOn: listed.settledOn,
+            cancelledBy: listed.cancelledBy,
+            correctsNumber: listed.correctsNumber,
+          }
+        : null,
+      writeOffs: result.invoice.status === "final" ? await listWriteOffs({ invoiceId: data }) : [],
+      /** Zahlungen über die Bank und bar im Kassenbuch */
+      payments: result.invoice.status === "final" ? await invoicePaymentList(data) : [],
+      /** Leistungen, aus denen die Rechnung entstanden ist (Nachweis); die Steuerberatung sieht sie nicht, wie die Seite Leistungen */
+      serviceEntries: context.user.role === "inhaber" ? await serviceEntriesOfInvoice(data) : [],
+      /** Vorschlag für das Datum einer Ausbuchung, nach deutscher Zeit */
+      today: today(),
+      ...(await abschlagLinks(data)),
+      ...(await invoiceEditorContext()),
+    };
+  });
+
+export const saveInvoiceDraft = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.uuid().nullable(), draft: draftSchema }))
+  .handler(async ({ data, context }) => {
+    const saved = data.id ? await updateDraft(context.user.id, data.id, data.draft) : await createDraft(context.user.id, data.draft);
+    return { id: saved.id };
+  });
+
+export const removeInvoiceDraft = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.uuid())
+  .handler(async ({ data, context }) => {
+    await deleteDraft(context.user.id, data);
+    return { ok: true };
+  });
+
+export const finalizeInvoiceDraft = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.uuid())
+  .handler(async ({ data, context }) => {
+    const invoice = await finalizeInvoice(context.user.id, data);
+    return { id: invoice.id, number: invoice.number };
+  });
+
+export const cancelFinalInvoice = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.uuid())
+  .handler(async ({ data, context }) => {
+    const storno = await cancelInvoice(context.user.id, data, today());
+    return { id: storno.id, number: storno.number };
+  });
+
+export const correctFinalInvoice = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.uuid())
+  .handler(async ({ data, context }) => {
+    const draft = await createCorrection(context.user.id, data, today());
+    return { id: draft.id };
+  });
+
+/** Nummernkreise für Rechnungen und Angebote, heute: im Jahr oder durchlaufend */
+export const getNumbering = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async () => {
+    const date = today();
+    const [invoice, quote] = await Promise.all([numbering(date, "rechnung"), numbering(date, "angebot")]);
+    return { invoice, quote };
+  });
+
+export const saveNextNumber = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ kind: z.enum(["rechnung", "angebot"]).default("rechnung"), next: z.number().int().min(1).max(999_999) }))
+  .handler(async ({ data, context }) => {
+    await setNextNumber(context.user.id, today(), data.next, data.kind);
+    return { ok: true };
+  });

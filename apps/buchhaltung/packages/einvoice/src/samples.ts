@@ -1,0 +1,157 @@
+import { computeInvoice, negateDiscount, type Discount, type InvoiceLineInput, type PriceMode, type TaxTreatment } from "@haben/core";
+import type { Buyer, InvoiceDocument, InvoiceFormat, InvoiceKind, Seller } from "./types.ts";
+
+// Beispielbelege für Tests und KoSIT-Prüfung
+
+export const sampleSeller: Seller = {
+  name: "Erika Mustermann",
+  strasse: "Lindenstraße 12",
+  plz: "10969",
+  ort: "Berlin",
+  land: "DE",
+  email: "rechnung@mustermann.example",
+  telefon: "+49 30 1234567",
+  steuernummer: "13/345/67890",
+  ustId: "DE123456789",
+  iban: "DE89370400440532013000",
+  bic: "COBADEFFXXX",
+  bank: "Commerzbank",
+};
+
+/** GmbH mit den Pflichtangaben nach § 35a GmbHG */
+export const gmbhSeller: Seller = {
+  ...sampleSeller,
+  name: "Mustermann Software GmbH",
+  kontoinhaber: "Mustermann Software GmbH",
+  legalInfo: {
+    seat: "Berlin",
+    registerCourt: "Amtsgericht Charlottenburg",
+    registerNumber: "HRB 123456 B",
+    managingDirectors: ["Erika Mustermann", "Max Mustermann"],
+  },
+};
+
+export const sampleBuyer: Buyer = {
+  name: "Beispiel GmbH",
+  strasse: "Hafenweg 3",
+  plz: "20457",
+  ort: "Hamburg",
+  land: "DE",
+  email: "buchhaltung@beispiel.example",
+  kundennummer: "K-1007",
+};
+
+export const publicBuyer: Buyer = {
+  name: "Bezirksamt Musterstadt",
+  strasse: "Rathausplatz 1",
+  plz: "12345",
+  ort: "Musterstadt",
+  land: "DE",
+  leitwegId: "991-12345-67",
+};
+
+interface SampleOptions {
+  kind?: InvoiceKind;
+  format?: InvoiceFormat;
+  number?: string;
+  buyer?: Buyer;
+  lines?: (InvoiceLineInput & { discount?: Discount; deductionOf?: string })[];
+  /** Gesamtrabatt; bei Storno und Korrektur mit umgekehrtem Vorzeichen übernommen */
+  discount?: Discount;
+  intro?: string;
+  note?: string;
+  taxTreatment?: TaxTreatment;
+  exemptionReason?: string;
+  priceMode?: PriceMode;
+}
+
+export function sampleDocument(options: SampleOptions = {}): InvoiceDocument {
+  const kind = options.kind ?? "rechnung";
+  const sign = kind === "rechnung" ? 1 : -1;
+  const inputs = (
+    options.lines ?? [
+      { description: "Softwareentwicklung September", quantity: 152000, unit: "Std.", unitPrice: 9500, taxRate: 1900 },
+      { description: "Reisekosten Hamburg", quantity: 1000, unit: "Psch.", unitPrice: 18990, taxRate: 1900 },
+    ]
+  ).map((line) => ({ ...line, unitPrice: sign * line.unitPrice, discount: sign < 0 ? negateDiscount(line.discount) : (line.discount ?? null) }));
+  const priceMode = options.priceMode ?? "netto";
+  const discount = (sign < 0 ? negateDiscount(options.discount) : options.discount) ?? null;
+  const { totals, lineNets } = computeInvoice(inputs, priceMode, discount);
+  return {
+    kind,
+    format: options.format ?? "zugferd",
+    number: options.number ?? (kind === "rechnung" ? "2026-034" : "2026-035"),
+    issueDate: "2026-10-02",
+    dueDate: "2026-10-16",
+    paymentTermDays: 14,
+    serviceFrom: "2026-09-01",
+    serviceTo: "2026-09-30",
+    currency: "EUR",
+    seller: sampleSeller,
+    buyer: options.buyer ?? sampleBuyer,
+    lines: inputs.map((line, index) => ({
+      position: index + 1,
+      description: line.description,
+      quantity: line.quantity,
+      unit: line.unit,
+      unitPrice: line.unitPrice,
+      taxRate: line.taxRate,
+      net: lineNets[index]!,
+      ...(line.discount ? { discount: line.discount } : {}),
+      ...(line.deductionOf ? { deductionOf: line.deductionOf } : {}),
+    })),
+    totals,
+    ...(discount ? { discount } : {}),
+    corrects: kind === "rechnung" ? undefined : { number: "2026-034", issueDate: "2026-09-30" },
+    ...(options.intro ? { intro: options.intro } : {}),
+    note: options.note,
+    ...(options.taxTreatment ? { taxTreatment: options.taxTreatment } : {}),
+    ...(options.exemptionReason ? { exemptionReason: options.exemptionReason } : {}),
+    ...(priceMode === "brutto" ? { priceMode } : {}),
+  };
+}
+
+export const mixedRateLines: InvoiceLineInput[] = [
+  { description: "Workshop „Buchhaltung für Freiberufler“", quantity: 2000, unit: "Tag", unitPrice: 120000, taxRate: 1900 },
+  { description: "Fachbuch Steuerrecht", quantity: 3000, unit: "Stk.", unitPrice: 4990, taxRate: 700 },
+  { description: "Fahrtkosten", quantity: 287500, unit: "km", unitPrice: 30, taxRate: 1900 },
+];
+
+/** Endpreise für Privatkunden: glatte Bruttobeträge, die netto nicht centgenau erreichbar wären */
+export const grossPriceLines: InvoiceLineInput[] = [
+  { description: "Fotoshooting Familie", quantity: 1000, unit: "Psch.", unitPrice: 24900, taxRate: 1900 },
+  { description: "Abzug 13 × 18 cm", quantity: 7000, unit: "Stk.", unitPrice: 980, taxRate: 1900 },
+  { description: "Fotobuch", quantity: 3000, unit: "Stk.", unitPrice: 3990, taxRate: 700 },
+  { description: "Anfahrt", quantity: 23500, unit: "km", unitPrice: 42, taxRate: 1900 },
+];
+
+/** Positionsrabatt in Prozent und als Betrag, gemischte Sätze; mit Gesamtrabatt geprüft in kosit-check.ts */
+export const discountLines: (InvoiceLineInput & { discount?: Discount })[] = [
+  { description: "Softwareentwicklung September", quantity: 152000, unit: "Std.", unitPrice: 9500, taxRate: 1900, discount: { kind: "prozent", value: 1000 } },
+  { description: "Wartungspauschale", quantity: 1000, unit: "Psch.", unitPrice: 49900, taxRate: 1900, discount: { kind: "betrag", value: 4900 } },
+  { description: "Fachbuch Steuerrecht", quantity: 3000, unit: "Stk.", unitPrice: 4990, taxRate: 700 },
+];
+
+export const zeroRateLines: InvoiceLineInput[] = [{ description: "Beratung Oktober", quantity: 10000, unit: "Std.", unitPrice: 12000, taxRate: 0 }];
+
+/** Unternehmen in Österreich (Reverse Charge) */
+export const euBuyer: Buyer = {
+  name: "Alpenblick Software GmbH",
+  strasse: "Mariahilfer Straße 10",
+  plz: "1070",
+  ort: "Wien",
+  land: "AT",
+  email: "rechnung@alpenblick.example",
+  ustId: "ATU12345678",
+};
+
+/** Unternehmen in der Schweiz (Drittland) */
+export const thirdCountryBuyer: Buyer = {
+  name: "Matterhorn Data AG",
+  strasse: "Bahnhofstrasse 1",
+  plz: "8001",
+  ort: "Zürich",
+  land: "CH",
+  email: "invoices@matterhorn.example",
+  ustId: "CHE-123.456.789 MWST",
+};

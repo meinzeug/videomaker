@@ -1,0 +1,206 @@
+import { appPath } from "../../../../lib/app-path.ts";
+import {
+  DEFAULT_INTEREST_MARKUP,
+  DUNNING_LEVELS,
+  dunningAmounts,
+  formatDecimal,
+  formatEuro,
+  parseEuro,
+  type CustomerType,
+  type DunningLevel,
+} from "@haben/core";
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { useState, type FormEvent } from "react";
+import { formatDate } from "../../../../lib/format.ts";
+import { FormattedTextarea } from "../../../../components/FormattedTextarea.tsx";
+import { NoticeBanner } from "../../../../components/NoticeBanner.tsx";
+import { useAction } from "../../../../lib/use-action.ts";
+import { saveBase64File } from "../../../../lib/download.ts";
+import { createDunningFn, dunningDraftPdfFn, getDunningDraft } from "../../../../server/functions/dunning.ts";
+import { Field } from "../../../../components/Field.tsx";
+
+export const Route = createFileRoute("/_app/rechnungen/mahnwesen/$id")({
+  loader: ({ params }) => getDunningDraft({ data: params.id }),
+  head: ({ loaderData }) => ({ meta: [{ title: `Mahnung zu ${loaderData?.invoice.number ?? ""} · Haben` }] }),
+  component: NewDunningPage,
+});
+
+/** Basispunkte als Prozent: 127 → „1,27 %“ */
+const percent = (basisPoints: number) => `${formatDecimal(basisPoints)} %`;
+
+function NewDunningPage() {
+  const draft = Route.useLoaderData();
+  const navigate = useNavigate();
+  const create = useServerFn(createDunningFn);
+  const draftPdf = useServerFn(dunningDraftPdfFn);
+  const [level, setLevel] = useState<DunningLevel>(draft.level);
+  const [dueDate, setDueDate] = useState(draft.dueDate);
+  const [fee, setFee] = useState(draft.fee ? formatDecimal(draft.fee) : "");
+  const [flatFee, setFlatFee] = useState(false);
+  const [interest, setInterest] = useState<CustomerType | "">("");
+  const [intro, setIntro] = useState(draft.texts[draft.level].intro);
+  const [closing, setClosing] = useState(draft.texts[draft.level].closing);
+  const { busy, notice, run } = useAction();
+
+  const parsedFee = fee.trim() ? parseEuro(fee) : 0;
+  const interestRate = interest && draft.baseRate !== null ? draft.baseRate + DEFAULT_INTEREST_MARKUP[interest] : null;
+  const amounts = dunningAmounts({
+    open: draft.invoice.open,
+    dueDate: draft.invoice.dueDate,
+    date: draft.date,
+    fee: parsedFee ?? 0,
+    flatFee,
+    interestRate,
+  });
+  const valid = parsedFee !== null && parsedFee >= 0 && dueDate > draft.date && intro.trim() !== "";
+
+  function chooseLevel(next: DunningLevel) {
+    setLevel(next);
+    setIntro(draft.texts[next].intro);
+    setClosing(draft.texts[next].closing);
+  }
+
+  const input = () => ({ invoiceId: draft.invoice.id, level, dueDate, fee: parsedFee ?? 0, flatFee, interest: interest || null, intro, closing });
+
+  // Prüfausdruck mit dem Vermerk ENTWURF; gespeichert wird nichts, die Stufe bleibt frei
+  function onDraftPdf() {
+    if (!valid) return;
+    void run(async () => saveBase64File(await draftPdf({ data: input() }), "application/pdf"));
+  }
+
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!valid) return;
+    void run(async () => {
+      const result = await create({ data: input() });
+      window.open(appPath(`/api/mahnung/${result.id}`), "_blank", "noopener");
+      await navigate({ to: "/rechnungen/$id", params: { id: draft.invoice.id } });
+    });
+  }
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <div className="eyebrow">
+            <Link to="/rechnungen/mahnwesen">Mahnwesen</Link> › Rechnung {draft.invoice.number}
+          </div>
+          <h1>{DUNNING_LEVELS[level].label}</h1>
+        </div>
+      </div>
+      <NoticeBanner notice={notice} />
+      <form className="editor-grid" onSubmit={onSubmit}>
+        <section className="card stack" aria-label="Mahnung">
+          <p className="small muted" style={{ margin: 0 }}>
+            Rechnung {draft.invoice.number} an {draft.invoice.customer} vom {formatDate(draft.invoice.issueDate)}, fällig seit{" "}
+            {formatDate(draft.invoice.dueDate)}, offen {formatEuro(draft.invoice.open)}.
+          </p>
+          <div className="form-grid">
+            <Field label="Stufe">
+              {(control) => (
+                <select {...control} value={level} onChange={(e) => chooseLevel(Number(e.target.value) as DunningLevel)}>
+                  {([1, 2, 3] as const)
+                    .filter((l) => l >= draft.level)
+                    .map((l) => (
+                      <option key={l} value={l}>
+                        {DUNNING_LEVELS[l].label}
+                      </option>
+                    ))}
+                </select>
+              )}
+            </Field>
+            <Field label="Neue Zahlungsfrist">
+              {(control) => (
+                <input {...control} type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} aria-invalid={dueDate <= draft.date} />
+              )}
+            </Field>
+            <Field label="Mahngebühr (€)">
+              {(control) => (
+                <input
+                  {...control}
+                  inputMode="decimal"
+                  value={fee}
+                  placeholder="0,00"
+                  onChange={(e) => setFee(e.target.value)}
+                  aria-invalid={parsedFee === null}
+                />
+              )}
+            </Field>
+            <Field
+              label="Verzugszinsen"
+              hint={
+                draft.baseRate === null ? (
+                  <>
+                    Für Zinsen den Basiszinssatz in den <Link to="/einstellungen">Einstellungen</Link> eintragen.
+                  </>
+                ) : (
+                  `Basiszinssatz ${percent(draft.baseRate)}`
+                )
+              }
+            >
+              {(control) => (
+                <select {...control} value={interest} onChange={(e) => setInterest(e.target.value as CustomerType | "")} disabled={draft.baseRate === null}>
+                  <option value="">keine</option>
+                  <option value="geschaeftskunde">Geschäftskunde (Basiszins + 9 Prozentpunkte)</option>
+                  <option value="verbraucher">Verbraucher (Basiszins + 5 Prozentpunkte)</option>
+                </select>
+              )}
+            </Field>
+            <label className="checkbox" style={{ gridColumn: "1 / -1" }}>
+              <input type="checkbox" checked={flatFee} onChange={(e) => setFlatFee(e.target.checked)} />
+              Verzugspauschale 40 € (nur bei Geschäftskunden, § 288 Abs. 5 BGB)
+            </label>
+            <Field label="Einleitung" style={{ gridColumn: "1 / -1" }}>
+              {(control) => <FormattedTextarea {...control} value={intro} onChange={(e) => setIntro(e.target.value)} maxLength={2000} rows={4} />}
+            </Field>
+            <Field label="Schluss" style={{ gridColumn: "1 / -1" }}>
+              {(control) => <FormattedTextarea {...control} value={closing} onChange={(e) => setClosing(e.target.value)} maxLength={2000} rows={3} />}
+            </Field>
+          </div>
+        </section>
+        <section className="card stack" aria-label="Forderung">
+          <h2>Forderung</h2>
+          <dl className="paper-totals">
+            <dt>Offener Rechnungsbetrag</dt>
+            <dd>{formatEuro(amounts.open)}</dd>
+            {amounts.fee > 0 && (
+              <>
+                <dt>Mahngebühr</dt>
+                <dd>{formatEuro(amounts.fee)}</dd>
+              </>
+            )}
+            {amounts.flatFee > 0 && (
+              <>
+                <dt>Verzugspauschale</dt>
+                <dd>{formatEuro(amounts.flatFee)}</dd>
+              </>
+            )}
+            {amounts.interest > 0 && (
+              <>
+                <dt>
+                  Zinsen {percent(amounts.interestRate)} für {amounts.interestDays} Tage
+                </dt>
+                <dd>{formatEuro(amounts.interest)}</dd>
+              </>
+            )}
+            <dt className="strong">Zu zahlen</dt>
+            <dd className="strong">{formatEuro(amounts.total)}</dd>
+          </dl>
+          <p className="small muted" style={{ margin: 0 }}>
+            Die Mahnung wird als PDF gespeichert und lässt sich danach nicht mehr ändern. Gebühren und Zinsen sind keine Rechnung: Zahlt der Kunde sie, ordnest
+            du den Mehrbetrag im Bankabgleich „Mahngebühren und Verzugszinsen“ zu.
+          </p>
+          <div className="actions">
+            <button type="button" className="btn" disabled={busy || !valid} onClick={onDraftPdf}>
+              Entwurf als PDF
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={busy || !valid}>
+              {DUNNING_LEVELS[level].label} erstellen
+            </button>
+          </div>
+        </section>
+      </form>
+    </>
+  );
+}

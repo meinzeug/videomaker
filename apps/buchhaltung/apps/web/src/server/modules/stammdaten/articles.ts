@@ -1,0 +1,71 @@
+import { UserError } from "../../errors.ts";
+import { ITEM_NUMBER_MAX, LINE_DETAIL_MAX, UNITS, type UnitLabel } from "@haben/core";
+import { asc, eq, isNull } from "drizzle-orm";
+import { z } from "zod";
+import { withActor } from "../../db/actor.ts";
+import { db, schema, type Tx } from "../../db/index.ts";
+
+/** Artikel- und Leistungskatalog: Vorlagen für Positionen in Rechnungen und Angeboten */
+
+export type Article = typeof schema.articles.$inferSelect;
+
+export class ArticleError extends UserError {}
+
+export const articleInputSchema = z.object({
+  number: z.string().trim().max(ITEM_NUMBER_MAX).default(""),
+  description: z.string().trim().min(1, "Bezeichnung fehlt").max(500),
+  /** Text unter der Bezeichnung, mehrzeilig; geht beim Einfügen in den Text der Position */
+  detail: z.string().trim().max(LINE_DETAIL_MAX).default(""),
+  unit: z.enum(Object.keys(UNITS) as [UnitLabel, ...UnitLabel[]]),
+  unitPrice: z.number().int().min(-100_000_000_00).max(100_000_000_00),
+  taxRate: z.union([z.literal(1900), z.literal(700), z.literal(0)]),
+  /** Preis inklusive Umsatzsteuer; beim Einfügen in eine Rechnung mit anderem Preismodus umgerechnet */
+  priceIncludesTax: z.boolean().default(false),
+  note: z.string().trim().max(1000).default(""),
+});
+
+export type ArticleInput = z.input<typeof articleInputSchema>;
+
+/** Aktive Artikel zuerst nach Nummer, dann nach Bezeichnung */
+export async function listArticles({ archived = false }: { archived?: boolean } = {}): Promise<Article[]> {
+  return db
+    .select()
+    .from(schema.articles)
+    .where(archived ? undefined : isNull(schema.articles.archivedAt))
+    .orderBy(asc(schema.articles.number), asc(schema.articles.description));
+}
+
+export async function createArticle(actor: string, input: ArticleInput): Promise<Article> {
+  return withActor(actor, (tx) => insertArticle(tx, input));
+}
+
+/** Legt einen Artikel in der laufenden Transaktion an; auch für den CSV-Import */
+export async function insertArticle(tx: Tx, input: ArticleInput): Promise<Article> {
+  const [row] = await tx.insert(schema.articles).values(articleInputSchema.parse(input)).returning();
+  return row!;
+}
+
+export async function updateArticle(actor: string, id: string, input: ArticleInput): Promise<Article> {
+  const values = articleInputSchema.parse(input);
+  const [row] = await withActor(actor, (tx) =>
+    tx
+      .update(schema.articles)
+      .set({ ...values, updatedAt: new Date() })
+      .where(eq(schema.articles.id, id))
+      .returning(),
+  );
+  if (!row) throw new ArticleError("Artikel nicht gefunden.");
+  return row;
+}
+
+/** Archivieren statt löschen: alte Rechnungen behalten ihre Texte ohnehin, der Katalog bleibt nachvollziehbar */
+export async function setArticleArchived(actor: string, id: string, archived: boolean): Promise<void> {
+  const [row] = await withActor(actor, (tx) =>
+    tx
+      .update(schema.articles)
+      .set({ archivedAt: archived ? new Date() : null, updatedAt: new Date() })
+      .where(eq(schema.articles.id, id))
+      .returning({ id: schema.articles.id }),
+  );
+  if (!row) throw new ArticleError("Artikel nicht gefunden.");
+}

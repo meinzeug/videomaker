@@ -1,0 +1,27 @@
+{
+  "name": "@haben/einvoice",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "bun --bun tsc -p .",
+    "kosit": "bun scripts/kosit-check.ts",
+    "zugferd": "bun scripts/zugferd-check.ts"
+  },
+  "dependencies": {
+    "@haben/core": "workspace:*",
+    "@myriaddreamin/typst-ts-node-compiler": "^0.7.0",
+    "fast-xml-parser": "^5.11.2",
+    "pdf-lib": "^1.17.1",
+    "qrcode": "^1.5.4",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "@types/qrcode": "^1.5.6"
+  }
+}

@@ -1,0 +1,214 @@
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { zipSync } from "fflate";
+import { describe, expect, it } from "vitest";
+import { ericDownloadUrl, ericHomeIn, ericPlatformSupported, installedEricVersion, installEric, type InstallProgress } from "./install.ts";
+
+const big = randomBytes(3 * 1024 * 1024);
+
+function jar(files: Record<string, Uint8Array>) {
+  return zipSync(files, { level: 6 });
+}
+
+const goodJar = jar({
+  "ERiC-43.4.6.0/Linux-x86_64/lib/libericapi.so": new TextEncoder().encode("api"),
+  "ERiC-43.4.6.0/Linux-x86_64/lib/libericxerces.so": big,
+  "ERiC-43.4.6.0/Linux-x86_64/lib/plugins/libcheckUStVA_2026.so": new TextEncoder().encode("plugin"),
+  "ERiC-43.4.6.0/Windows-x86_64/dll/ericapi.dll": new TextEncoder().encode("win"),
+  "ERiC-43.4.6.0/Dokumentation/Liesmich.txt": new TextEncoder().encode("doku"),
+});
+
+function fakeFetch(body: Uint8Array | null, status = 200, finalUrl?: string) {
+  const urls: string[] = [];
+  const fn = (async (input: RequestInfo | URL) => {
+    urls.push(String(input));
+    const response = new Response(body as BodyInit | null, { status, headers: body ? { "content-length": String(body.length) } : {} });
+    // Nach einer Weiterleitung steht die tatsächliche Adresse in response.url
+    if (finalUrl) Object.defineProperty(response, "url", { value: finalUrl });
+    return response;
+  }) as typeof fetch;
+  return { fn, urls };
+}
+
+async function tempDir() {
+  return mkdtemp(join(tmpdir(), "eric-test-"));
+}
+
+describe("ERiC installieren", () => {
+  it("lässt ERiC nur auf Linux x86_64 zu, auf anderen Rechnern nur mit ERIC_WORKER_COMMAND", () => {
+    expect(ericPlatformSupported(undefined, "linux", "x64")).toBe(true);
+    expect(ericPlatformSupported(undefined, "linux", "arm64")).toBe(false);
+    expect(ericPlatformSupported("   ", "linux", "arm64")).toBe(false);
+    expect(ericPlatformSupported(undefined, "darwin", "x64")).toBe(false);
+    expect(ericPlatformSupported("/opt/haben-x86_64/worker.sh", "linux", "arm64")).toBe(true);
+  });
+
+  // Nur auf Rechnern ohne Linux x86_64 prüfbar (arm64, macOS); die CI läuft auf x86_64
+  it.skipIf(ericPlatformSupported())("verweigert die Installation ohne passende Plattform, bevor etwas geladen wird", async () => {
+    const fetch = (() => Promise.reject(new Error("darf nicht laden"))) as unknown as typeof globalThis.fetch;
+    await expect(installEric({ version: "43.4.6.0", dir: "/gibt/es/nicht", fetch })).rejects.toThrow(/ERIC_WORKER_COMMAND/);
+  });
+
+  // Dieselbe Sperre auf jedem Rechner, auch in der CI auf x86_64: process.arch für die Dauer des Tests auf arm64
+  it("verweigert die Installation auf arm64 ohne ERIC_WORKER_COMMAND, bevor etwas geladen wird", async () => {
+    const original = Object.getOwnPropertyDescriptor(process, "arch")!;
+    Object.defineProperty(process, "arch", { ...original, value: "arm64" });
+    try {
+      const fetch = (() => Promise.reject(new Error("darf nicht laden"))) as unknown as typeof globalThis.fetch;
+      await expect(installEric({ version: "43.4.6.0", dir: "/gibt/es/nicht", fetch })).rejects.toThrow(/ERIC_WORKER_COMMAND/);
+      await expect(installEric({ version: "43.4.6.0", dir: "/gibt/es/nicht", fetch, workerCommand: "  " })).rejects.toThrow(/ERIC_WORKER_COMMAND/);
+    } finally {
+      Object.defineProperty(process, "arch", original);
+    }
+  });
+
+  it("baut die Download-Adresse aus der Version", () => {
+    expect(ericDownloadUrl("43.4.6.0")).toBe("https://download.elster.de/download/eric/eric_43/ERiC-43.4.6.0-Linux-x86_64.jar");
+    expect(() => ericDownloadUrl("../../etc")).toThrow(/Ungültige/);
+  });
+
+  it("lädt herunter und entpackt nur Linux x86_64", async () => {
+    const dir = join(await tempDir(), "eric");
+    const { fn, urls } = fakeFetch(goodJar);
+    const progress: InstallProgress[] = [];
+    const result = await installEric({
+      version: "43.4.6.0",
+      dir,
+      fetch: fn,
+      baseUrl: "http://elster.test/eric",
+      checkPlatform: false,
+      onProgress: (p) => progress.push(p),
+    });
+    expect(urls).toEqual(["http://elster.test/eric/eric_43/ERiC-43.4.6.0-Linux-x86_64.jar"]);
+    expect(result).toMatchObject({ version: "43.4.6.0", files: 3 });
+    const home = ericHomeIn(dir)!;
+    expect(home).toBe(join(dir, "ERiC-43.4.6.0"));
+    expect(readFileSync(join(home, "lib/libericxerces.so")).equals(big)).toBe(true);
+    expect(existsSync(join(home, "dll"))).toBe(false);
+    expect(await installedEricVersion(home)).toBe("43.4.6.0");
+    expect(progress.at(-1)?.phase).toBe("fertig");
+  });
+
+  // Im Container ist /tmp ein tmpfs (deploy/compose.yml): Das Paket (rund 520 MB) läge dort im Arbeitsspeicher. Es
+  // gehört ins Volume, in das ERiC ohnehin entpackt wird, und ist danach wieder weg.
+  it("lädt das Paket ins Zielverzeichnis statt nach TMPDIR und räumt es danach weg", async () => {
+    const tmp = await tempDir();
+    const dir = join(await tempDir(), "eric");
+    const { fn } = fakeFetch(goodJar);
+    const original = process.env.TMPDIR;
+    process.env.TMPDIR = tmp;
+    const waehrendDesEntpackens: { tmp: string[]; ziel: string[] }[] = [];
+    try {
+      await installEric({
+        version: "43.4.6.0",
+        dir,
+        fetch: fn,
+        baseUrl: "http://elster.test/eric",
+        checkPlatform: false,
+        onProgress: (p) => {
+          if (p.phase !== "entpacken" || waehrendDesEntpackens.length > 0) return;
+          const ziel = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((name) => name.endsWith("eric.jar"));
+          waehrendDesEntpackens.push({ tmp: readdirSync(tmp), ziel });
+        },
+      });
+    } finally {
+      if (original === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = original;
+    }
+    expect(waehrendDesEntpackens).toEqual([{ tmp: [], ziel: [expect.stringMatching(/eric\.jar$/)] }]);
+    expect((await readdir(dir)).sort()).toEqual(["AKTUELL", "ERiC-43.4.6.0"]);
+  });
+
+  // Das Paket liegt jetzt im Volume statt in /tmp: Bricht eine Installation hart ab (Neustart des Containers während des
+  // Downloads), bliebe der Ordner .download-… mit bis zu 520 MB für immer im Volume. Die nächste Installation räumt ihn weg.
+  it("räumt Download-Ordner einer abgebrochenen Installation im Zielverzeichnis weg", async () => {
+    const dir = join(await tempDir(), "eric");
+    await mkdir(join(dir, ".download-abgebrochen"), { recursive: true });
+    await writeFile(join(dir, ".download-abgebrochen", "eric.jar"), big);
+    const { fn } = fakeFetch(goodJar);
+    await installEric({ version: "43.4.6.0", dir, fetch: fn, baseUrl: "http://elster.test/eric", checkPlatform: false });
+    expect((await readdir(dir)).sort()).toEqual(["AKTUELL", "ERiC-43.4.6.0"]);
+  });
+
+  it("schaltet erst auf die neue Version um, wenn sie vollständig ist, und räumt danach auf", async () => {
+    const dir = join(await tempDir(), "eric");
+    // Von Hand entpacktes ERiC direkt im Verzeichnis
+    await mkdir(join(dir, "lib/plugins2"), { recursive: true });
+    await writeFile(join(dir, "lib/libericapi.so"), "hand");
+    expect(ericHomeIn(dir)).toBe(dir);
+
+    const broken = jar({ "ERiC-44.0.0.0/Linux-x86_64/lib/libericapi.so": new TextEncoder().encode("neu") });
+    await expect(installEric({ version: "44.0.0.0", dir, fetch: fakeFetch(broken).fn, checkPlatform: false })).rejects.toThrow(/lib\/plugins/);
+    expect(ericHomeIn(dir)).toBe(dir);
+    await expect(installEric({ version: "44.0.0.0", dir, fetch: fakeFetch(null, 404).fn, checkPlatform: false })).rejects.toThrow(/nicht \(mehr\)/);
+
+    await installEric({ version: "43.4.6.0", dir, fetch: fakeFetch(goodJar).fn, checkPlatform: false });
+    expect(readFileSync(join(ericHomeIn(dir)!, "lib/libericapi.so"), "utf8")).toBe("api");
+    const next = jar({
+      "ERiC-44.1.0.0/Linux-x86_64/lib/libericapi.so": new TextEncoder().encode("v44"),
+      "ERiC-44.1.0.0/Linux-x86_64/lib/plugins2/libcheckUSt_2026.so": new TextEncoder().encode("p"),
+    });
+    await installEric({ version: "44.1.0.0", dir, fetch: fakeFetch(next).fn, checkPlatform: false });
+    expect(ericHomeIn(dir)).toBe(join(dir, "ERiC-44.1.0.0"));
+    // Dieselbe Version erneut: landet neben der laufenden, AKTUELL wird nur umgeschaltet
+    await installEric({ version: "44.1.0.0", dir, fetch: fakeFetch(next).fn, checkPlatform: false });
+    expect((await readdir(dir)).filter((e) => e.startsWith("ERiC-") || e === "AKTUELL").sort()).toEqual(["AKTUELL", "ERiC-44.1.0.0-2"]);
+    expect(await installedEricVersion(ericHomeIn(dir)!)).toBe("44.1.0.0");
+    await installEric({ version: "44.1.0.0", dir, fetch: fakeFetch(next).fn, checkPlatform: false });
+    expect((await readdir(dir)).filter((e) => e.startsWith("ERiC-") || e === "AKTUELL").sort()).toEqual(["AKTUELL", "ERiC-44.1.0.0"]);
+    expect(ericHomeIn(dir)).toBe(join(dir, "ERiC-44.1.0.0"));
+  });
+
+  it("lehnt Pakete ohne Linux-Teil und Pfade außerhalb des Ziels ab", async () => {
+    const dir = join(await tempDir(), "eric");
+    const windows = jar({ "ERiC-43.4.6.0/Windows-x86_64/dll/ericapi.dll": new TextEncoder().encode("win") });
+    await expect(installEric({ version: "43.4.6.0", dir, fetch: fakeFetch(windows).fn, checkPlatform: false })).rejects.toThrow(/keine Dateien/);
+    const evil = jar({ "ERiC/Linux-x86_64/../../../boese.so": new TextEncoder().encode("x") });
+    await expect(installEric({ version: "43.4.6.0", dir, fetch: fakeFetch(evil).fn, checkPlatform: false })).rejects.toThrow(/Unzulässiger Pfad|keine Dateien/);
+    expect(existsSync(join(dir, "..", "boese.so"))).toBe(false);
+  });
+
+  it("prüft die Prüfsumme, sofern angegeben, und meldet sie zurück", async () => {
+    const dir = await tempDir();
+    const sha256 = createHash("sha256").update(goodJar).digest("hex");
+    const options = { version: "43.4.6.0", dir, checkPlatform: false };
+    await expect(installEric({ ...options, fetch: fakeFetch(goodJar).fn, sha256: "0".repeat(64) })).rejects.toThrow(/Prüfsumme/);
+    expect(ericHomeIn(dir)).toBeNull();
+    expect(await installEric({ ...options, fetch: fakeFetch(goodJar).fn, sha256: sha256.toUpperCase() })).toMatchObject({ sha256 });
+    expect(await installEric({ ...options, fetch: fakeFetch(goodJar).fn })).toMatchObject({ sha256 });
+  });
+
+  it("folgt keiner Weiterleitung auf einen anderen Server und bricht zu große Downloads ab", async () => {
+    const dir = await tempDir();
+    const options = { version: "43.4.6.0", dir, checkPlatform: false };
+    const elsewhere = fakeFetch(goodJar, 200, "https://example.com/eric.jar").fn;
+    await expect(installEric({ ...options, fetch: elsewhere })).rejects.toThrow(/example\.com/);
+    const sameHost = fakeFetch(goodJar, 200, "https://download.elster.de/download/eric/anders/eric.jar").fn;
+    await installEric({ ...options, fetch: sameHost });
+    await expect(installEric({ ...options, fetch: fakeFetch(goodJar).fn, maxBytes: 1024 })).rejects.toThrow(/größer als/);
+  });
+
+  it("meldet ein defektes Archiv als Fehler, ohne unhandled rejection und ohne Reste", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const dir = join(await tempDir(), "eric");
+      // Komprimierte Daten mitten im großen Eintrag verfälschen bzw. das Archiv abschneiden
+      const corrupt = goodJar.slice();
+      corrupt.fill(0xff, 200_000, 400_000);
+      await expect(installEric({ version: "43.4.6.0", dir, fetch: fakeFetch(corrupt).fn, checkPlatform: false })).rejects.toThrow();
+      const truncated = goodJar.slice(0, Math.floor(goodJar.length / 2));
+      await expect(installEric({ version: "43.4.6.0", dir, fetch: fakeFetch(truncated).fn, checkPlatform: false })).rejects.toThrow();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(unhandled).toEqual([]);
+      expect(await readdir(dir)).toEqual([]);
+      expect(ericHomeIn(dir)).toBeNull();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+});
