@@ -3,19 +3,62 @@
 Die gemeinsame Anmeldung für Video-Maker und Haben ist **noch nicht fertig**.
 Der bisherige Video-Maker-Login verwaltet ein signiertes Admin-Cookie mit
 serverseitigem Widerruf; Haben besitzt eine eigene Anmeldung und einen
-OIDC-only-Modus. Der vorbereitete SQLite-Adapter in `lib/oidc-storage.ts` ist
-nirgends eingebunden und startet keinen Dienst. Zusätzlich sind eine
-standardmäßig abgeschaltete interne Sitzungsreferenz-Schnittstelle und eine
-unveränderliche Provider-Sitzungszuordnung vorbereitet. Sie sind keine
-Produktionsfreigabe und aktivieren selbst keinen OIDC-Anbieter.
+OIDC-only-Modus. Ein separat startbarer OIDC-Dienst und die notwendige
+Sitzungsbindung sind im WIP vorbereitet, aber nicht produktiv aktiviert. Sie
+ersetzen weder eine Produktionsfreigabe noch einen geprüften Proxy- und
+Browser-Ende-zu-Ende-Test.
 
 Als Protokollimplementierung wurde die OpenID-zertifizierte Bibliothek
 [`oidc-provider`](https://github.com/panva/node-oidc-provider) untersucht. Ihre
 [Sicherheitshinweise](https://github.com/panva/node-oidc-provider/blob/main/SECURITY.md)
 weisen ausdrücklich darauf hin, dass Entwicklungsschlüssel und der interne
 Speicher nicht für den Produktivbetrieb gedacht sind und die Sicherheit eines
-eigenen Speicheradapters in der Verantwortung der Anwendung liegt. Video-Maker
-enthält derzeit weder diese Abhängigkeit noch einen aktivierten OIDC-Anbieter.
+eigenen Speicheradapters in der Verantwortung der Anwendung liegt. Der WIP
+verwendet `oidc-provider` 9.12.0; ein produktiver Anbieter ist nicht aktiviert.
+
+## Vorbereiteter separater OIDC-Dienst
+
+`scripts/videomaker-oidc-service.mjs` startet nur mit vollständiger expliziter
+Konfiguration und bindet ausschließlich an `127.0.0.1`. Der konfigurierte
+HTTPS-Issuer muss den Pfad `/oidc` haben; der registrierte Haben-Callback muss
+auf demselben Ursprung exakt `/buchhaltung/api/auth/callback/oidc` sein. Es gibt
+einen vertraulichen Haben-Client, ausschließlich Authorization Code mit PKCE,
+keine dynamische Clientregistrierung und keine Geräte- oder CIBA-Flows. Der
+vorbereitete Anbieter kennt genau den bestehenden Video-Maker-Admin als
+Inhaber; mehrere Benutzer und Steuerberatungsrollen sind hier nicht umgesetzt.
+Die konfigurierte E-Mail ist ein Profilwert und wird nicht als verifiziert
+ausgegeben. Subjekt, E-Mail und Gruppen werden ausschließlich serverseitig
+vorgegeben, nicht aus Browser-Headern übernommen.
+
+Erforderlich sind `VIDEOMAKER_OIDC_ISSUER`, `VIDEOMAKER_OIDC_REDIRECT`,
+`VIDEOMAKER_OIDC_PORT`, `VIDEOMAKER_OIDC_DATABASE`,
+`VIDEOMAKER_OIDC_CLIENT_ID`, `VIDEOMAKER_OIDC_CLIENT_SECRET`,
+`VIDEOMAKER_OIDC_SUBJECT`, `VIDEOMAKER_OIDC_EMAIL`,
+`VIDEOMAKER_OIDC_CACHE_KEY`, `VIDEOMAKER_OIDC_COOKIE_KEYS` und
+`VIDEOMAKER_OIDC_JWKS` sowie `VIDEOMAKER_OIDC_BINDING_URL`,
+`VIDEOMAKER_OIDC_BINDING_SECRET` und `VIDEOMAKER_OIDC_BINDING_CA`. Cookie-Keys
+sind ein JSON-Array; JWKS ist ein JSON-Objekt mit genau einem privaten RSA-Key
+mit mindestens 2048 Bit, `alg` `RS256`, `use` `sig` und stabiler `kid`. Die
+öffentliche JWKS-Antwort enthält keinen privaten Schlüssel. Geheimnisse sind
+stark zufällig und getrennt bereitzustellen, nicht im Repository oder Frontend.
+Es werden keine Schlüssel automatisch erzeugt und keine Zugangsdaten geloggt.
+
+Die Datenbank muss separat und geschützt sein. Ihre einmalige explizite Anlage
+erfolgt mit `VIDEOMAKER_OIDC_CREATE_DATABASE=1` und absolutem
+`VIDEOMAKER_OIDC_DATABASE` beim Aufruf von
+`node --experimental-strip-types scripts/prepare-videomaker-oidc-database.mjs`.
+Eine bestehende Datei wird nicht geöffnet oder ersetzt. Der Dienst akzeptiert
+nur eine markierte Provider-Datenbank mit geschützten Dateirechten. Vor einem
+echten Betrieb sind außerdem Speicherquoten, Backup, Restore, Schlüsselrotation,
+CA-/Privatschlüsselschutz, ein ausschließlich geeignete Header setzender Proxy
+und der Abgleich aller internen TLS-Pfade einzurichten und zu prüfen.
+
+Der isolierte Anbieter-Test verwendet ausschließlich Testschlüssel und prüft
+Videomaker-Anmeldung, signierten Sitzungs-Claim, PKCE, Replay, Cookie-Tausch
+während der Anmeldung, Logout, Code-Widerruf sowie gespeicherte Tokens und
+Neuanmeldung nach Anbieter-Neustart. Ausstehende Login-Interaktionen sind nur
+im Speicher und müssen nach einem Neustart neu begonnen werden. Die Tests sind
+kein Ersatz für den produktiven Haben-Browserlauf oder eine unabhängige Prüfung.
 
 ## Was bereits getestet ist
 
