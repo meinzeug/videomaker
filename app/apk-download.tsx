@@ -2,6 +2,7 @@
 
 import {useState} from 'react';
 import {Download} from 'lucide-react';
+import {APK_DOWNLOAD_NAME} from '@/lib/apk-download-name';
 
 /** Check availability before starting a browser-managed download. */
 export default function ApkDownload({onError}:{onError:(message:string)=>void}) {
@@ -14,9 +15,9 @@ export default function ApkDownload({onError}:{onError:(message:string)=>void}) 
    if(response.status===401)throw new Error('Bitte melde dich erneut an, um KontraPrompter herunterzuladen.');
    if(response.status===404)throw new Error('Das KontraPrompter-APK ist derzeit nicht verfügbar.');
    if(!response.ok)throw new Error('Der Download konnte nicht gestartet werden.');
-   const link=document.createElement('a');link.href='/api/apk';link.download='KontraPrompter-debug.apk';document.body.appendChild(link);link.click();link.remove();
+   const link=document.createElement('a');link.href='/api/apk';link.download=APK_DOWNLOAD_NAME;document.body.appendChild(link);link.click();link.remove();
   }catch(error){onError(error instanceof Error?error.message:'Der Download konnte nicht gestartet werden.');}
   finally{setChecking(false);}
  }
- return <button type="button" className="icon apk-download" title="KontraPrompter-Testversion (Debug) herunterladen" aria-label="KontraPrompter-Testversion (Debug) herunterladen" aria-busy={checking} disabled={checking} onClick={()=>void start()}><Download size={18} aria-hidden="true"/><span aria-hidden="true">DEBUG</span></button>;
+ return <button type="button" className="icon apk-download" title="KontraPrompter für Android herunterladen" aria-label="KontraPrompter für Android herunterladen" aria-busy={checking} disabled={checking} onClick={()=>void start()}><Download size={18} aria-hidden="true"/><span aria-hidden="true">APK</span></button>;
 }
