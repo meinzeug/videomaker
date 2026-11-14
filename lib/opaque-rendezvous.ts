@@ -6,7 +6,8 @@ export class RendezvousError extends Error {
  constructor(code:'INVALID'|'MISSING'|'DENIED'|'EXPIRED'|'CAPACITY'|'RATE'|'SEQUENCE'){super(code);this.code=code;}
 }
 type Role='owner'|'guest';
-type Actor={role:'owner';owner:string}|{role:'guest';credential:string};
+export type RendezvousActor={role:'owner';owner:string}|{role:'guest';credential:string};
+type Actor=RendezvousActor;
 type Message={sequence:number;ciphertext:Buffer};
 type Direction={next:number;lastHash:Buffer|null;acked:number;messages:Message[];times:number[]};
 type Room={id:string;owner:string;ticketHash:Buffer;guestHash:Buffer|null;created:number;lastSeen:number;joinUntil:number;expires:number;toOwner:Direction;toGuest:Direction};
@@ -38,6 +39,17 @@ export class OpaqueRendezvous {
  private authenticate(room:Room,actor:Actor){
   if(actor.role==='owner'){if(!/^[a-f0-9]{64}$/.test(actor.owner)||actor.owner!==room.owner)fail('DENIED');return;}
   if(actor.role!=='guest'||!validSecret(actor.credential)||!room.guestHash||!equal(digest(actor.credential),room.guestHash))fail('DENIED');
+ }
+ /** Synchronous rollback boundary for a surrounding DB commit; never use with async work. */
+ withRoomRollback<T>(id:string,operation:()=>T):T {
+  const original=this.rooms.get(id);
+  const clone=(value:Direction):Direction=>({...value,messages:[...value.messages],times:[...value.times]});
+  const saved=original?{...original,toOwner:clone(original.toOwner),toGuest:clone(original.toGuest)}:undefined;
+  try{
+   const result=operation();
+   if(result!==null&&(typeof result==='object'||typeof result==='function')&&typeof (result as {then?:unknown}).then==='function')throw Error('ASYNC_RELAY_OPERATION');
+   return result;
+  }catch(error){if(saved)this.rooms.set(id,saved);else this.rooms.delete(id);throw error;}
  }
  create(owner:string){
   if(!/^[a-f0-9]{64}$/.test(owner))return fail('INVALID');const time=this.time();this.prune(time);

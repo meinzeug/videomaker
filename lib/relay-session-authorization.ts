@@ -129,7 +129,7 @@ export function verifyRelaySessionPair(db:Database.Database,owner:string,camera:
  * callback that merely trusts the hash is not a production authorization.
  * This check alone does not fence delivery against concurrent revocation.
  */
-export function verifyRelayPeerBinding(db:Database.Database,owner:string,participant:Participant,clock:()=>Clock,authorizeSessionHash:(sessionHash:string)=>boolean){
+export function verifyRelayPeerBinding(db:Database.Database,owner:string,participant:Participant,clock:()=>Clock,authorizeSessionHash:(sessionHash:string)=>boolean,operation?:()=>unknown){
  if(db.inTransaction)fail('NESTED_RELAY_TRANSACTION_UNSUPPORTED');
  const r=participant.request;
  if(!secret(participant.credential)||!hash(r.tokenHash)||!timingSafeEqual(Buffer.from(sha(participant.credential),'hex'),Buffer.from(r.tokenHash,'hex')))return false;
@@ -156,6 +156,19 @@ export function verifyRelayPeerBinding(db:Database.Database,owner:string,partici
   const peerFinal=find.get(r.pairId,peerRole,owner,peer.session_hash,peer.device_id,r.roomId,peer.token_hash) as Grant|undefined;
   const same=(a:Grant,b:Grant|undefined)=>!!b&&a.challenge_id===b.challenge_id&&a.proof_hash===b.proof_hash&&a.runtime_id===b.runtime_id&&a.created_wall===b.created_wall&&a.created_tick===b.created_tick;
   if(!same(own,ownFinal)||!same(peer,peerFinal))return false;
-  return clockValid(final)&&fresh(own,final,TICKET_MS)&&fresh(peer,final,TICKET_MS)?true:discard(final);
+  if(!clockValid(final)||!fresh(own,final,TICKET_MS)||!fresh(peer,final,TICKET_MS))return discard(final);
+  // Only trusted, synchronous in-memory delivery code may run under this lock.
+  if(operation){
+   if(operation()!==undefined)throw Error('INVALID_RELAY_OPERATION');
+   if(participant.authorize()!==true||authorizeSessionHash(peer.session_hash)!==true)return false;
+   const post=timeForDelivery(clock);paired(db,owner,r);paired(db,owner,peerRequest);
+   const ownPost=find.get(r.pairId,r.role,owner,participant.session,r.deviceId,r.roomId,r.tokenHash) as Grant|undefined;
+   const peerPost=find.get(r.pairId,peerRole,owner,peer.session_hash,peer.device_id,r.roomId,peer.token_hash) as Grant|undefined;
+   if(!same(own,ownPost)||!same(peer,peerPost))return false;
+   if(!post||!fresh(own,post,TICKET_MS)||!fresh(peer,post,TICKET_MS))return post?discard(post):false;
+  }
+  return true;
  }).immediate();
 }
+
+function timeForDelivery(clock:()=>Clock){const value=clock();return clockValid(value)?value:null;}
