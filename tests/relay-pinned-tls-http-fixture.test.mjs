@@ -55,6 +55,8 @@ test('mutually pinned TLS 1.3 crosses an opaque HTTP relay; wrong pin fails', {s
   await probe('server');
   relay.close(room,owner);newRoom();
   await probe('client');
+  relay.close(room,owner);newRoom();
+  await probe('client-alias');
   for(const failure of ['lost-send','lost-ack']){
    relay.close(room,owner);newRoom();dropResponse=failure;
    await probe(failure);assert.equal(dropped,true);
