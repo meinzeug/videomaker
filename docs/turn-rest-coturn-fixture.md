@@ -9,3 +9,13 @@ python3 scripts/test-turn-rest-coturn.py
 Das Skript erzeugt ein zufälliges Testgeheimnis und eine private temporäre Konfiguration, startet weder einen systemd-Dienst noch einen öffentlichen Listener und entfernt den Testserver und die Dateien beim regulären Beenden. Zwei coturn-Testclients tauschen UDP-Pakete mit Credentials aus dem echten TypeScript-Kern; ungültige und abgelaufene Credentials müssen abgewiesen werden. Das Testwerkzeug benötigt mehrere Allocations; die Fixture-Quoten sind daher keine Empfehlung für den Produktivbetrieb. Wie bei Kommandozeilen-Testprogrammen üblich, können die kurzlebigen **Test**-Credentials während des Tests in der lokalen Prozessliste sichtbar sein. Niemals produktive Zugangsdaten einsetzen.
 
 Dieser Test nutzt absichtlich `allow-loopback-peers` und deaktiviertes TLS nur in der Loopback-Fixture. Er belegt weder Geräteidentität noch einen sicheren Signalisierungskanal, TLS, TURN-Refresh/Erneuerung bei langen Sessions, öffentliche Firewall-Freigaben oder Ende-zu-Ende-WebRTC auf Smartphones. Eine produktive Ausgabe oder ein öffentlich erreichbarer Relay bleibt bis zur passenden Authentisierung, Ressourcenbegrenzung und gesonderten Netz-/Geräteprüfung deaktiviert.
+
+## Experimenteller WSS/TCP-Tunnel
+
+```sh
+node --experimental-strip-types --test tests/fixtures/turn-wss-loopback.test.mjs
+```
+
+Die zweite Fixture benötigt zusätzlich `openssl` und die im Lockfile installierten Next.js-Abhängigkeiten. Sie erzeugt ein kurzlebiges selbstsigniertes Testzertifikat, prüft es auf der Clientseite und bindet sämtliche Listener ausschließlich an Loopback. Ein zufälliges Test-Bearer-Token schützt das WebSocket-Upgrade. Es werden falsches Token, nicht vertrauenswürdiges Zertifikat, Verbindungslimit, Textframes, übergroße Frames, Gesamtbytes, Idle-Ende und Rückstau mit anschließendem Fortsetzen geprüft. Abschließend tauschen echte coturn-Testclients TURN/TCP-Nutzdaten über zwei lokale TLS/WebSocket-/TCP-Proxys aus. Bei regulärem Ende werden Testserver und temporäre Schlüsseldateien beendet bzw. entfernt.
+
+Die zufällige Test-Bearerprüfung ist **keine** Geräte- oder Paarungsbindung. Das Beispiel verwendet `_socket` aus der internen, von Next mitgelieferten `ws`-Implementierung, weil diese Version keine öffentliche Pause-Methode bereitstellt. Es ist deshalb nicht als Produktionsproxy übernehmbar. Geräteauthentisierung und deren Widerruf/Fencing, gemeinsame und gerätespezifische Quoten über Prozesse hinweg, sichere Zertifikatsbereitstellung, echter WSS-Zugang über die Domain sowie Android-Anbindung bleiben offen. Die Fixture beweist weder WebRTC- noch Bild-/Ton-Funktion auf den Smartphones.
