@@ -43,15 +43,20 @@ export async function POST(req:Request) {
   if(!sessionAuthorized(database,credential))throw new SessionRevoked();
   const result=await deepComplete(system,actualPrompt,4000,()=>{if(!sessionAuthorized(database,credential))throw new SessionRevoked();});
   const researched=validateResearch(parseJson(result.text),result.citationUrls,result.searchRequests);
+  // The chosen starting sources remain part of an expanded search even if
+  // the search provider does not happen to cite them in its answer.
+  const seen=new Set<string>(),combined=[...sources.map(source=>({title:source.title,url:source.url,publisher:source.source,date:source.date})),...researched.sources].filter(source=>{
+   const key=new URL(source.url).href;if(seen.has(key))return false;seen.add(key);return true;
+  });
   // Reuse the same public-address, redirect and size safeguards as selected
   // sources. A search-result URL alone is not evidence of its contents.
   const retrieved:Awaited<ReturnType<typeof fetchSelectedSources>>=[];
-  for(let offset=0;offset<researched.sources.length;offset+=3){
+  for(let offset=0;offset<combined.length;offset+=3){
    if(!sessionAuthorized(database,credential))throw new SessionRevoked();
-   const group=researched.sources.slice(offset,offset+3).map(source=>({title:source.title,url:source.url,source:source.publisher,date:source.date,description:''}));
+   const group=combined.slice(offset,offset+3).map(source=>({title:source.title,url:source.url,source:source.publisher,date:source.date,description:''}));
    retrieved.push(...await fetchSelectedSources(group));
   }
-  const report={...researched,source_mode:'web' as const,source_access:retrieved.map(({source,status,truncated})=>({url:source.url,status,truncated})),source_excerpts:retrieved.map(({source,status,text,truncated})=>({url:source.url,status,truncated,text})),generation_channel:channel,...(options?{generation_options:options}:{})};
+  const report={...researched,sources:combined,source_mode:'web' as const,source_access:retrieved.map(({source,status,truncated})=>({url:source.url,status,truncated})),source_excerpts:retrieved.map(({source,status,text,truncated})=>({url:source.url,status,truncated,text})),generation_channel:channel,...(options?{generation_options:options}:{})};
   const id=randomUUID();const now=new Date().toISOString();
   database.transaction(()=>{if(!sessionAuthorized(database,credential))throw new SessionRevoked();database.prepare("DELETE FROM research_reports WHERE created_at < datetime('now','-1 day')").run();database.prepare('INSERT INTO research_reports(id,created_at,sources,report) VALUES(?,?,?,?)').run(id,now,JSON.stringify(sources),JSON.stringify(report));}).immediate();
   return NextResponse.json({id,report},{headers:{'Cache-Control':'no-store'}});
