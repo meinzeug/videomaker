@@ -154,3 +154,24 @@ test('malformed metadata correction keeps the original assembled script and part
   assert.equal(JSON.parse(saved.repairRaw).text,'{unvollständig');assert.deepEqual(state.readGrokParts(db,id).map(p=>[p.part,p.state]),[[1,'ready'],[2,'ready']]);assert.equal(calls.length,4);
  });
 });
+
+test('oversized assembled script aborts without truncating already received parts',async()=>{
+ await isolated(['Anfang','Ende'],null,null,async({db,claim,calls,fetch:baseFetch})=>{
+  globalThis.fetch=async(urlArg,init)=>{
+   const response=await baseFetch(urlArg,init);
+   if(calls.length>1){const body=await response.json(),payload=JSON.parse(body.choices[0].message.content);payload.skript=`Teil${calls.length-1} `+'x'.repeat(1_060_000);body.choices[0].message.content=JSON.stringify(payload);return new Response(JSON.stringify(body),{status:200});}
+   return response;
+  };
+  await assert.rejects(runGrokFlow(db,claim,true,()=>{}),/Speichergrenze|zu groß|überschreitet/i);
+  const saved=state.readGrokParts(db,id);assert.deepEqual(saved.map(p=>[p.part,p.state]),[[1,'ready'],[2,'ready']]);
+  assert.ok(saved.every(p=>JSON.parse(JSON.parse(p.response).text).skript.length>1_000_000));
+  assert.equal(calls.length,3,'no silent retry or repair');
+ });
+});
+
+test('default Kontrakurs retains its own optional editorial orientation on every part',async()=>{
+ for(const selected of [null,options('standard')]) await isolated(['Anfang','Ende'],null,selected,async({db,claim,calls})=>{
+  const result=await runGrokFlow(db,claim,true,()=>{});assert.equal(result.state,'received');
+  for(const body of calls.slice(1))assert.equal(body.messages[0].content,prompts.KONTRAKURS_SCRIPT_SYSTEM);
+ });
+});
