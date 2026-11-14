@@ -6,7 +6,7 @@ export const SYSTEM_PROMPT = `Du bist strategischer YouTube-Producer und Scriptw
 export class OpenRouterError extends Error { status:number;reason:string;retryAfter:number;constructor(status:number,message:string,reason='',retryAfter=0){super(message);this.name='OpenRouterError';this.status=status;this.reason=reason;this.retryAfter=retryAfter;} }
 export function isTransientOpenRouterError(error:unknown) {return (error instanceof OpenRouterError && ([429,500,502,503,504].includes(error.status) || (error.status===402 && error.reason==='in_flight_budget_exhausted'))) || (error instanceof Error && error.name==='TimeoutError');}
 export function retryAfterSeconds(error:unknown) {return error instanceof OpenRouterError && Number.isFinite(error.retryAfter) ? Math.max(0,Math.min(120,error.retryAfter)) : 0;}
-async function requestCompletion(system: string, prompt: string, maxTokens=10000, tool?: "search" | "fetch" | "deep") {
+async function requestCompletion(system: string, prompt: string, maxTokens=10000, tool?: "search" | "fetch" | "deep", preserveTruncated=false) {
   if (!process.env.OPENROUTER_API_KEY) throw new Error('OpenRouter-API-Schlüssel fehlt.');
   const response=await fetch('https://openrouter.ai/api/v1/chat/completions', {method:'POST',headers:{Authorization:`Bearer ${process.env.OPENROUTER_API_KEY}`,'Content-Type':'application/json','HTTP-Referer':'https://videomaker.dorfspy.de','X-Title':'Kontrakurs Videomaker'},body:JSON.stringify({model:process.env.OPENROUTER_MODEL || 'openai/gpt-6.1-terra',reasoning:{effort:'xhigh'},provider:{require_parameters:true},max_tokens:maxTokens,...(tool === 'search' ? {tools:[{type:'openrouter:web_search',parameters:{engine:'exa',max_results:5,max_total_results:20}}],max_tool_calls:6} : tool === 'fetch' ? {tools:[{type:'openrouter:web_fetch',parameters:{engine:'openrouter',max_content_tokens:12000}}],max_tool_calls:4} : tool === 'deep' ? {tools:[{type:'openrouter:web_search',parameters:{engine:'exa',max_results:5,max_total_results:30}},{type:'openrouter:web_fetch',parameters:{engine:'openrouter',max_content_tokens:16000}}],max_tool_calls:8} : {}),messages:[{role:'system',content:system},{role:'user',content:prompt}]}),signal:AbortSignal.timeout(240000)});
   const result=await response.json().catch(()=>({}));
@@ -14,12 +14,14 @@ async function requestCompletion(system: string, prompt: string, maxTokens=10000
   if (tool === 'deep' && !(result.usage?.server_tool_use_details?.web_search_requests >= 2)) throw new Error('Die vertiefte Recherche konnte nicht ausreichend im Web suchen. Bitte erneut versuchen.');
   if (tool === 'search' && !(result.usage?.server_tool_use_details?.web_search_requests > 0)) throw new Error('Die Websuche wurde nicht ausgeführt. Bitte erneut versuchen.');
   const choice=result.choices?.[0];
-  if (choice?.finish_reason==='length') throw new Error('Die KI-Antwort wurde abgeschnitten. Bitte erneut versuchen.');
+  if (choice?.finish_reason==='length'&&!preserveTruncated) throw new Error('Die KI-Antwort wurde abgeschnitten. Bitte erneut versuchen.');
   if (typeof choice?.message?.content !== 'string' || !choice.message.content.trim()) throw new Error('OpenRouter lieferte keine Textantwort.');
   const annotations=Array.isArray(choice.message.annotations)?choice.message.annotations:[];
   const citationUrls=annotations.flatMap((a:{type?:string;url_citation?:{url?:unknown}})=>a.type==='url_citation'&&typeof a.url_citation?.url==='string'?[a.url_citation.url]:[]);
-  return {text:choice.message.content as string,citationUrls,searchRequests:Number(result.usage?.server_tool_use_details?.web_search_requests || 0)};
+  return {text:choice.message.content as string,citationUrls,searchRequests:Number(result.usage?.server_tool_use_details?.web_search_requests || 0),truncated:choice?.finish_reason==='length'};
 }
 export async function complete(system:string,prompt:string,maxTokens=10000,tool?:"search"|"fetch"|"deep") {return (await requestCompletion(system,prompt,maxTokens,tool)).text;}
+/** Retain a partial script response instead of discarding it before persistence. */
+export async function completeForGeneration(system:string,prompt:string,maxTokens=32000) {return requestCompletion(system,prompt,maxTokens,undefined,true);}
 export async function deepComplete(system:string,prompt:string,maxTokens=32000) {return requestCompletion(system,prompt,maxTokens,'deep');}
 export function parseJson(text:string) { const cleaned=text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''); return JSON.parse(cleaned); }
