@@ -16,10 +16,10 @@ function authorize(auth,owner,session){try{return typeof auth==='function'&&auth
 function same(row,other){return row&&other&&['room_id','owner_hash','camera_session','camera_device','create_attempt','prompter_session','prompter_device','ticket_hash','secret_epoch','runtime_id','created_wall','created_tick','camera_approved','prompter_approved','closed','camera_next','prompter_next','camera_acked','prompter_acked','camera_last_hash','prompter_last_hash','camera_total','prompter_total'].every(k=>row[k]===other[k]);}
 function failed(db,row){db.prepare('UPDATE studio_signal_rooms SET closed=1 WHERE room_id=?').run(row.room_id);db.prepare('DELETE FROM studio_signal_messages WHERE room_id=?').run(row.room_id);return null;}
 function current(db,row,clock,auth){
- const first=clockNow(clock);if(!fresh(row,first))return failed(db,row);
+ const first=clockNow(clock);if(row.runtime_id!==first.runtimeId)return null;if(!fresh(row,first))return failed(db,row);
  if(!authorize(auth,row.owner_hash,row.camera_session)||(row.prompter_session&&!authorize(auth,row.owner_hash,row.prompter_session)))return failed(db,row);
  let latest=db.prepare('SELECT * FROM studio_signal_rooms WHERE room_id=?').get(row.room_id);const second=clockNow(clock);
- if(!same(row,latest)||!fresh(row,second))return failed(db,row);
+ if(!same(row,latest))return failed(db,row);if(row.runtime_id!==second.runtimeId)return null;if(!fresh(row,second))return failed(db,row);
  // Both sessions are checked once more after any reentrant clock callbacks.
  if(!authorize(auth,row.owner_hash,row.camera_session)||(row.prompter_session&&!authorize(auth,row.owner_hash,row.prompter_session)))return failed(db,row);
  latest=db.prepare('SELECT * FROM studio_signal_rooms WHERE room_id=?').get(row.room_id);if(!same(row,latest))return failed(db,row);return latest;
@@ -55,7 +55,7 @@ export function joinStudioRoomFixture(db,{ownerHash,sessionHash,deviceId,roomId,
  return transaction(db,()=>{
   const row=db.prepare('SELECT * FROM studio_signal_rooms WHERE room_id=?').get(roomId);
   if(!row||row.closed||row.owner_hash!==ownerHash||!equalHash(row.ticket_hash,hash)||row.camera_session===sessionHash||row.camera_device===deviceId||!authorize(auth,ownerHash,sessionHash))return null;
-  const now=clockNow(clock);if(!fresh(row,now,JOIN_TTL))return failed(db,row);
+  const now=clockNow(clock);if(row.runtime_id!==now.runtimeId)return null;if(!fresh(row,now,JOIN_TTL))return row.prompter_session===null?failed(db,row):null;
   if(!current(db,row,clock,auth))return null;
   if(row.prompter_session!==null)return row.prompter_session===sessionHash&&row.prompter_device===deviceId?{roomId,role:'prompter',created:false}:null;
   db.prepare('UPDATE studio_signal_rooms SET prompter_session=?,prompter_device=? WHERE room_id=? AND prompter_session IS NULL AND closed=0').run(sessionHash,deviceId,roomId);

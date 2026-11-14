@@ -2,7 +2,7 @@ import {randomBytes,randomUUID,createHash} from 'node:crypto';
 import {createServer as createControlServer} from 'node:net';
 import {lstatSync,realpathSync,writeFileSync,unlinkSync,chmodSync} from 'node:fs';
 import {join,resolve} from 'node:path';
-import {performance} from 'node:perf_hooks';
+import {relayClock} from '../../lib/relay-clock.ts';
 import Database from 'better-sqlite3';
 import {initializeStudioRendezvousFixture} from './core.mjs';
 import {createStudioRendezvousHttpFixture} from './http-fixture.mjs';
@@ -12,10 +12,10 @@ if(process.env.NODE_ENV!=='test'||process.env.VIDEOMAKER_STUDIO_RENDEZVOUS_FIXTU
 const directory=process.argv[2];if(!directory||!directory.startsWith('/tmp/'))throw Error('PRIVATE_TMP_DIRECTORY_REQUIRED');
 const dir=resolve(directory),st=lstatSync(dir);if(!st.isDirectory()||st.isSymbolicLink()||realpathSync(dir)!==dir||st.uid!==process.getuid()||(st.mode&0o077)!==0)throw Error('PRIVATE_TMP_DIRECTORY_REQUIRED');
 const infoPath=join(dir,'fixture.json'),controlPath=join(dir,'control.sock');process.umask(0o077);
-const sha=s=>createHash('sha256').update(s).digest('hex'),random=()=>randomBytes(32).toString('base64url'),ownerHash=sha(random()),runtimeId=randomUUID();
+const sha=s=>createHash('sha256').update(s).digest('hex'),random=()=>randomBytes(32).toString('base64url'),ownerHash=sha(random());
 const camera={cookie:`fixture_session=${random()}`,sessionHash:sha(random()),deviceId:randomUUID(),role:'camera'},prompter={cookie:`fixture_session=${random()}`,sessionHash:sha(random()),deviceId:randomUUID(),role:'prompter'};
 const sessions=new Map([[camera.cookie,camera],[prompter.cookie,prompter]]),active=new Set([camera.sessionHash,prompter.sessionHash]),db=new Database(':memory:');db.pragma('foreign_keys=ON');initializeStudioRendezvousFixture(db);
-const clock=()=>({runtimeId,wall:Date.now(),tick:Math.floor(performance.now())}),authorize=(owner,session)=>owner===ownerHash&&active.has(session);
+const clock=relayClock,authorize=(owner,session)=>owner===ownerHash&&active.has(session);
 const server=createStudioRendezvousHttpFixture({db,getPrincipal:req=>{const session=sessions.get(req.headers.cookie);return session?{ownerHash,sessionHash:session.sessionHash}:null;},authorize,clock,serverSecret:randomBytes(32)});
 let stopping=false,started=false;
 const control=createControlServer(socket=>{

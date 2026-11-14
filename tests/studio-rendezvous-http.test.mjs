@@ -7,12 +7,12 @@ import {initializeStudioRendezvousFixture} from '../experiments/studio-rendezvou
 import {createStudioRendezvousHttpFixture} from '../experiments/studio-rendezvous/http-fixture.mjs';
 process.env.NODE_ENV='test';process.env.VIDEOMAKER_STUDIO_RENDEZVOUS_FIXTURE='1';
 const origin='https://videomaker.dorfspy.de';
-async function setup(){
+async function setup(ratePolicy){
  const db=new Database(':memory:');db.pragma('foreign_keys=ON');initializeStudioRendezvousFixture(db);
  const ownerHash='a'.repeat(64),camera={cookie:'cam',sessionHash:'b'.repeat(64),deviceId:randomUUID(),role:'camera'},prompter={cookie:'pro',sessionHash:'c'.repeat(64),deviceId:randomUUID(),role:'prompter'},third={cookie:'third',sessionHash:'d'.repeat(64),deviceId:randomUUID(),role:'prompter'};
  const identities=new Map([camera,prompter,third].map(x=>[x.cookie,{ownerHash,sessionHash:x.sessionHash}])),active=new Set([camera,prompter,third].map(x=>x.sessionHash));
  const runtimeId=randomUUID(),clock=()=>({runtimeId,wall:1000,tick:1000}),secret=randomBytes(32),authorize=(o,s)=>o===ownerHash&&active.has(s);
- const server=createStudioRendezvousHttpFixture({db,getPrincipal:req=>identities.get(req.headers.cookie),authorize,clock,serverSecret:secret});server.listen(0,'127.0.0.1');await once(server,'listening');const base=`http://127.0.0.1:${server.address().port}`;
+ const server=createStudioRendezvousHttpFixture({db,getPrincipal:req=>identities.get(req.headers.cookie),authorize,clock,serverSecret:secret,ratePolicy});server.listen(0,'127.0.0.1');await once(server,'listening');const base=`http://127.0.0.1:${server.address().port}`;
  const request=async(client,path,data,extra={})=>{const res=await fetch(base+path,{method:'POST',headers:{'content-type':'application/json',origin,cookie:client.cookie,...extra},body:JSON.stringify(data)});return {status:res.status,value:await res.json()};};
  const close=()=>new Promise(resolve=>server.close(()=>{db.close();resolve();}));
  return {db,camera,prompter,third,active,request,close};
@@ -80,5 +80,22 @@ test('HTTP create retries recover the same room and code without consuming extra
  const f=await setup();try{
   const body={deviceId:f.camera.deviceId,attemptId:randomUUID()},first=await f.request(f.camera,'/fixture/rooms',body),retry=await f.request(f.camera,'/fixture/rooms',body);
   assert.equal(first.status,200);assert.equal(retry.status,200);assert.equal(retry.value.created,false);assert.equal(retry.value.roomId,first.value.roomId);assert.equal(retry.value.joinCode,first.value.joinCode);assert.equal(f.db.prepare('SELECT count(*) n FROM studio_signal_rooms').get().n,1);
+ }finally{await f.close();}
+});
+
+
+test('unauthenticated HTTP attempts are rate-limited before session or request parsing', {timeout:10000},async()=>{
+ const f=await setup({ip:3,owner:3,session:3});try{
+  for(let i=0;i<3;i++)assert.equal((await f.request({cookie:'wrong'},'/fixture/rooms',{deviceId:f.camera.deviceId,attemptId:randomUUID()})).status,403);
+  const limited=await f.request({cookie:'wrong'},'/fixture/rooms',{deviceId:f.camera.deviceId,attemptId:randomUUID()});assert.equal(limited.status,429);assert.equal(limited.value.error,'rate');
+ }finally{await f.close();}
+});
+
+test('logout during a pending long poll prevents the later response from delivering data', {timeout:10000},async()=>{
+ const f=await setup();try{
+  const room=(await f.request(f.camera,'/fixture/rooms',{deviceId:f.camera.deviceId,attemptId:randomUUID()})).value,base=`/fixture/rooms/${room.roomId}`,member=x=>({role:x.role,deviceId:x.deviceId});
+  await f.request(f.prompter,'/fixture/rooms/join',{roomId:room.roomId,joinCode:room.joinCode,deviceId:f.prompter.deviceId});await f.request(f.camera,base+'/approve',member(f.camera));await f.request(f.prompter,base+'/approve',member(f.prompter));
+  const waiting=f.request(f.prompter,base+'/peek',member(f.prompter));await new Promise(resolve=>setTimeout(resolve,50));f.active.delete(f.camera.sessionHash);
+  const result=await waiting;assert.equal(result.status,403);assert.equal(result.value.error,'denied');
  }finally{await f.close();}
 });

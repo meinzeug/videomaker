@@ -1,5 +1,6 @@
 import {createServer} from 'node:http';
 import {EventEmitter} from 'node:events';
+import {initializeStudioRateFixture,admitStudioRateFixture} from './rate-limit.mjs';
 import {createStudioRoomFixture,joinStudioRoomFixture,approveStudioRoomFixture,studioPairingKeyFixture,sendStudioFrameFixture,peekStudioFrameFixture,acknowledgeStudioFrameFixture,closeStudioRoomFixture} from './core.mjs';
 
 // Local test harness only. Never bind this to a public address or adapt it as-is to production.
@@ -15,9 +16,10 @@ function body(req){return new Promise((resolve,reject)=>{
 function exact(input,required){const keys=Object.keys(input).sort(),expected=[...required].sort();return keys.length===expected.length&&keys.every((x,i)=>x===expected[i]);}
 function frame(value){if(typeof value!=='string'||value.length>21848||!/^[A-Za-z0-9+/]*={0,2}$/.test(value))throw Error('invalid');const bytes=Buffer.from(value,'base64');if(!bytes.length||bytes.length>16384||bytes.toString('base64')!==value)throw Error('invalid');return bytes;}
 /** getPrincipal and authorize must be supplied by the isolated test harness. */
-export function createStudioRendezvousHttpFixture({db,getPrincipal,authorize,clock,serverSecret}){
+export function createStudioRendezvousHttpFixture({db,getPrincipal,authorize,clock,serverSecret,ratePolicy}){
  if(process.env.NODE_ENV!=='test'||process.env.VIDEOMAKER_STUDIO_RENDEZVOUS_FIXTURE!=='1')throw Error('STUDIO_RENDEZVOUS_FIXTURE_DISABLED');
  if(typeof getPrincipal!=='function'||typeof authorize!=='function'||typeof clock!=='function'||!Buffer.isBuffer(serverSecret)||serverSecret.length<32)throw Error('INVALID_FIXTURE');
+ initializeStudioRateFixture(db);
  const wake=new EventEmitter(),waiters=new Set();
  const trace=stage=>{if(process.env.VIDEOMAKER_STUDIO_FIXTURE_DIAGNOSTIC==='1')process.stderr.write('fixture guard: '+stage+'\n');};
  const poll=async(room,role,res,read)=>{
@@ -26,8 +28,12 @@ export function createStudioRendezvousHttpFixture({db,getPrincipal,authorize,clo
   try{let result=read();if(result.empty){await pending;if(res.destroyed)throw Error('closed');result=read();}return result;}finally{finish();waiters.delete(key);}
  };
  const server=createServer(async(req,res)=>{
+  let admitted=false;try{admitted=admitStudioRateFixture(db,{ip:req.socket.remoteAddress},serverSecret,clock,ratePolicy);}catch{}
+  if(!admitted){response(res,429,{error:'rate'});req.resume();return;}
   if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)||req.method!=='POST'||req.headers.origin!==ORIGIN||req.headers['content-type']!=='application/json'){trace(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)?'peer':req.method!=='POST'?'method':req.headers.origin!==ORIGIN?'origin':'content-type');response(res,403,{error:'denied'});req.resume();return;}
   let principal;try{principal=getPrincipal(req);}catch{principal=null;}if(!principal){trace('principal');response(res,403,{error:'denied'});req.resume();return;}
+  try{admitted=admitStudioRateFixture(db,{ip:req.socket.remoteAddress,ownerHash:principal.ownerHash,sessionHash:principal.sessionHash},serverSecret,clock,ratePolicy);}catch{admitted=false;}
+  if(!admitted){response(res,429,{error:'rate'});req.resume();return;}
   let stage='body';try{
    const input=await body(req),url=req.url||'',base={ownerHash:principal.ownerHash,sessionHash:principal.sessionHash};let result;stage='route-or-core';
    if(url==='/fixture/rooms'&&exact(input,['deviceId','attemptId']))result=createStudioRoomFixture(db,{...base,deviceId:input.deviceId,attemptId:input.attemptId},serverSecret,clock,authorize);

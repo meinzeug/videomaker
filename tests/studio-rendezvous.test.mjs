@@ -131,3 +131,27 @@ test('slow create authorization cannot extend its QR lease',()=>{
   const created=createStudioRoomFixture(f.db,attempt,f.secret,slowly,f.auth);assert.ok(created.expiresInMs<60000&&created.expiresInMs>0);
  }finally{f.db.close();}
 });
+
+test('a late replayed join cannot close an already joined active room',()=>{
+ const f=setup();try{const room=ready(f);f.setTime(61000);assert.throws(()=>f.join(room));assert.equal(f.db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,0);assert.equal(f.send(f.camera,1,'still-alive').created,true);}finally{f.db.close();}
+});
+
+test('a foreign runtime cannot close or mutate an existing room',()=>{
+ const f=setup();try{ready(f);const foreign=()=>({...f.clock(),runtimeId:randomUUID()});assert.throws(()=>peekStudioFrameFixture(f.db,f.camera,foreign,f.auth));assert.equal(f.db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,0);assert.equal(f.send(f.camera,1,'still-alive').created,true);}finally{f.db.close();}
+});
+
+test('logout between queue insertion and final authorization discards data and closes room',()=>{
+ const f=setup();try{ready(f);let calls=0;const auth=(owner,session)=>++calls<=4&&f.auth(owner,session);
+  assert.throws(()=>sendStudioFrameFixture(f.db,{...f.camera,sequence:1,data:Buffer.from('private')},f.clock,auth));
+  assert.equal(f.db.prepare('SELECT count(*) n FROM studio_signal_messages').get().n,0);assert.equal(f.db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,1);
+ }finally{f.db.close();}
+});
+
+test('concurrent identical create retries yield one room and the same code', {timeout:10000},async()=>{
+ const directory=mkdtempSync(join(tmpdir(),'vm-studio-create-')),path=join(directory,'state.sqlite'),f=setup(new Database(path));
+ try{
+  f.camera.attemptId=randomUUID();const payload=JSON.stringify({path,camera:f.camera,secret:f.secret.toString('base64'),clock:f.clock()});
+  const run=()=>{const child=spawn(process.execPath,['--experimental-strip-types',new URL('./fixtures/studio-create-worker.mjs',import.meta.url).pathname],{stdio:['pipe','pipe','ignore']});let out='';child.stdout.on('data',block=>{out+=block;});child.stdin.end(payload);return once(child,'exit').then(([code])=>({code,out:code===0?JSON.parse(out):null}));};
+  const result=await Promise.all([run(),run(),run()]);assert.ok(result.every(x=>x.code===0));assert.equal(new Set(result.map(x=>x.out.roomId)).size,1);assert.equal(new Set(result.map(x=>x.out.codeHash)).size,1);assert.equal(result.filter(x=>x.out.created).length,1);assert.equal(f.db.prepare('SELECT count(*) n FROM studio_signal_rooms').get().n,1);
+ }finally{f.db.close();rmSync(directory,{recursive:true,force:true});}
+});
