@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { sessionHashRevokedReadOnly } from './session-revocations.ts';
 
@@ -12,6 +12,9 @@ const schema=`
  CREATE TABLE IF NOT EXISTS oidc_binding_time_floor (id INTEGER PRIMARY KEY CHECK(id=1), observed_at INTEGER NOT NULL);
  INSERT OR IGNORE INTO oidc_binding_time_floor(id,observed_at) VALUES(1,0);
  CREATE TABLE IF NOT EXISTS oidc_binding_key_state (id INTEGER PRIMARY KEY CHECK(id=1), fingerprint TEXT NOT NULL, generation INTEGER NOT NULL);
+ CREATE TABLE IF NOT EXISTS oidc_binding_session_epochs (
+  session_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, key_generation INTEGER NOT NULL, epoch INTEGER NOT NULL
+ );
 `;
 type Proof={sessionHash:string;expiresAt:number};
 type Verify=(db:Database.Database,cookie:string)=>Proof|null;
@@ -56,6 +59,22 @@ export function createOidcSessionBindings(db:Database.Database,verify:Verify,clo
   if(db.inTransaction)throw new Error('OIDC-Schlüsselprüfung erfordert eine eigene Transaktion');
   db.transaction(()=>{generation();}).immediate();
  };
+ /** A deleted reset epoch must never be forgotten while its login could become valid again. */
+ const prune=(current:number,currentGeneration:number):void=>{
+  for(const table of ['oidc_session_bindings','oidc_binding_session_epochs'])db.prepare(`DELETE FROM ${table} WHERE expires_at<=? OR key_generation<>? OR EXISTS
+   (SELECT 1 FROM auth_session_revocations r WHERE r.session_hash=${table}.session_hash)`).run(current,currentGeneration);
+ };
+ const sessionEpoch=(proof:Proof,currentGeneration:number):number=>{
+  const row=db.prepare('SELECT epoch,expires_at,key_generation FROM oidc_binding_session_epochs WHERE session_hash=?').get(proof.sessionHash) as {epoch:number;expires_at:number;key_generation:number}|undefined;
+  if(row){
+   if(!Number.isSafeInteger(row.epoch)||row.epoch<0||row.expires_at!==proof.expiresAt||row.key_generation!==currentGeneration)throw new Error('Ungültige OIDC-Sitzungsepoche');
+   return row.epoch;
+  }
+  const total=db.prepare('SELECT COUNT(*) AS n FROM oidc_binding_session_epochs').get() as {n:number};
+  if(total.n>=1024)throw new Error('Zu viele OIDC-Sitzungsepochen');
+  db.prepare('INSERT INTO oidc_binding_session_epochs(session_hash,expires_at,key_generation,epoch) VALUES(?,?,?,0)').run(proof.sessionHash,proof.expiresAt,currentGeneration);
+  return 0;
+ };
  return {
   /** Explicitly observe a rotation at startup, even when there are no user requests. */
   observeKeyGeneration():void {observeGeneration();},
@@ -63,7 +82,6 @@ export function createOidcSessionBindings(db:Database.Database,verify:Verify,clo
   issue(cookie:string):string|null {
    observeGeneration();
    if(typeof cookie!=='string'||cookie.length===0||cookie.length>512)return null;
-   const reference=randomBytes(32).toString('base64url');
    now();
    return db.transaction(()=>{
     const current=now(), currentGeneration=generation(), proof=verify(db,cookie);
@@ -71,9 +89,16 @@ export function createOidcSessionBindings(db:Database.Database,verify:Verify,clo
     if(!/^[a-f0-9]{64}$/.test(proof.sessionHash)||!Number.isSafeInteger(proof.expiresAt)||proof.expiresAt<=current) return null;
     // Verify again here: a faulty or stale verifier must not bypass a committed logout.
     if(sessionHashRevokedReadOnly(db,proof.sessionHash))return null;
-    // Expired/revoked references cannot become active after deletion; the observed time floor and logout tombstones remain.
-    db.prepare(`DELETE FROM oidc_session_bindings WHERE expires_at<=? OR key_generation<>? OR EXISTS
-     (SELECT 1 FROM auth_session_revocations r WHERE r.session_hash=oidc_session_bindings.session_hash)`).run(current,currentGeneration);
+    // Expired/revoked entries cannot revive: observed time and logout tombstones remain.
+    prune(current,currentGeneration);
+    const epoch=sessionEpoch(proof,currentGeneration),secret=sessionSecret();
+    if(!secret||secret.length<32)throw new Error('OIDC-Sitzungsschlüssel fehlt');
+    const reference=createHmac('sha256',secret).update('videomaker-oidc-reference/v2\0').update(`${currentGeneration}\0${epoch}\0${proof.sessionHash}`).digest('base64url');
+    const existing=db.prepare('SELECT session_hash,expires_at,key_generation FROM oidc_session_bindings WHERE reference_hash=?').get(digest(reference)) as {session_hash:string;expires_at:number;key_generation:number}|undefined;
+    if(existing){
+     if(existing.session_hash!==proof.sessionHash||existing.expires_at!==proof.expiresAt||existing.key_generation!==currentGeneration)throw new Error('Ungültige OIDC-Referenzzuordnung');
+     return reference;
+    }
     const total=db.prepare('SELECT COUNT(*) AS n FROM oidc_session_bindings').get() as {n:number};
     const own=db.prepare('SELECT COUNT(*) AS n FROM oidc_session_bindings WHERE session_hash=?').get(proof.sessionHash) as {n:number};
     if(total.n>=1024||own.n>=16)throw new Error('Zu viele OIDC-Sitzungsreferenzen');
@@ -111,9 +136,13 @@ export function createOidcSessionBindings(db:Database.Database,verify:Verify,clo
    if(typeof cookie!=='string'||cookie.length===0||cookie.length>512)return false;
    now();
    return db.transaction(()=>{
-    const current=now();generation();
+    const current=now(),currentGeneration=generation();
     const proof=verify(db,cookie);
     if(!proof||!/^[a-f0-9]{64}$/.test(proof.sessionHash)||!Number.isSafeInteger(proof.expiresAt)||proof.expiresAt<=current||sessionHashRevokedReadOnly(db,proof.sessionHash))return false;
+    prune(current,currentGeneration);
+    const epoch=sessionEpoch(proof,currentGeneration);
+    if(epoch>=Number.MAX_SAFE_INTEGER)throw new Error('OIDC-Sitzungsepoche erschöpft');
+    db.prepare('UPDATE oidc_binding_session_epochs SET epoch=? WHERE session_hash=?').run(epoch+1,proof.sessionHash);
     db.prepare('DELETE FROM oidc_session_bindings WHERE session_hash=?').run(proof.sessionHash);
     return true;
    }).immediate();

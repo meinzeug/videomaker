@@ -99,17 +99,19 @@ test('Ablauf bleibt nach beobachteter Uhrkorrektur zurück ungültig',()=>{
  } finally {db.close();}
 });
 
-test('Referenzen bleiben begrenzt und abgelaufene oder widerrufene Einträge werden sicher freigegeben',()=>{
+test('wiederholte Logins verwenden dieselbe begrenzte Referenz und Reset widerruft sie dauerhaft',()=>{
  const {db,binding,now,advance}=fixture();
  try {
   const cookie=makeCookie(now()+1000);
-  const refs=Array.from({length:16},()=>binding.issue(cookie));
-  assert.throws(()=>binding.issue(cookie),/Zu viele/);
+  const refs=Array.from({length:40},()=>binding.issue(cookie));
+  assert.equal(new Set(refs).size,1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM oidc_session_bindings').get().n,1);
   assert.equal(binding.resetForCookie('forged'),false);
   assert.equal(binding.isActive(refs[0]),true);
   assert.equal(binding.resetForCookie(cookie),true);
   assert.equal(binding.isActive(refs[0]),false);
-  assert.ok(binding.issue(cookie));
+  const renewed=binding.issue(cookie);assert.ok(renewed);assert.notEqual(renewed,refs[0]);
+  assert.equal(binding.isActive(refs[0]),false,'Reset darf die alte Referenz nicht wiederbeleben');
   advance(1001);
   const fresh=binding.issue(makeCookie(now()+1000,'fresh'));
   assert.ok(fresh);assert.equal(binding.isActive(refs[0]),false);
@@ -119,6 +121,42 @@ test('Referenzen bleiben begrenzt und abgelaufene oder widerrufene Einträge wer
   assert.ok(binding.issue(makeCookie(now()+1000,'last')));
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM oidc_session_bindings').get().n,2);
  } finally {db.close();}
+});
+
+test('Anbieterneustarts sättigen keine Referenzquote; Reset bleibt über Datenbankneustart wirksam',()=>{
+ const directory=mkdtempSync(join(tmpdir(),'videomaker-oidc-reference-restarts-'));
+ const filename=join(directory,'fixture.sqlite'),cookie=makeCookie(Date.now()+60_000);let db=new Database(filename);
+ try{
+  sessionRevoked(db,secret,'seed');initializeOidcSessionBindings(db);
+  let binding,first;
+  for(let i=0;i<25;i++){
+   binding=createOidcSessionBindings(db,(database,value)=>verifiedSessionBindingProof(database,value,secret),Date.now,()=>secret);
+   const ref=binding.issue(cookie);if(i===0)first=ref;else assert.equal(ref,first);
+   db.close();db=new Database(filename);
+  }
+  binding=createOidcSessionBindings(db,(database,value)=>verifiedSessionBindingProof(database,value,secret),Date.now,()=>secret);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM oidc_session_bindings').get().n,1);
+  assert.equal(binding.resetForCookie(cookie),true);
+  db.close();db=new Database(filename);
+  binding=createOidcSessionBindings(db,(database,value)=>verifiedSessionBindingProof(database,value,secret),Date.now,()=>secret);
+  const renewed=binding.issue(cookie);assert.notEqual(renewed,first);assert.equal(binding.isActive(first),false);assert.equal(binding.isActive(renewed),true);
+ }finally{if(db.open)db.close();rmSync(directory,{recursive:true,force:true});}
+});
+
+test('gleichzeitige Ausstellungen derselben Sitzung verwenden transaktional dieselbe Referenz',async()=>{
+ const directory=mkdtempSync(join(tmpdir(),'videomaker-oidc-reference-race-'));
+ const filename=join(directory,'fixture.sqlite'),db=new Database(filename),workers=[];
+ try{
+  sessionRevoked(db,secret,'seed');initializeOidcSessionBindings(db);
+  const cookie=makeCookie(Date.now()+60_000),script=new URL('./fixtures/oidc-binding-worker.mjs',import.meta.url);
+  for(let i=0;i<2;i++)workers.push(fork(script,[filename,cookie,'issue'],{stdio:['ignore','ignore','ignore','ipc'],execArgv:['--experimental-strip-types']}));
+  await Promise.all(workers.map(w=>new Promise((resolve,reject)=>{w.once('error',reject);w.once('message',m=>m==='ready'?resolve():reject(new Error('Testprozess nicht bereit')));} )));
+  const pending=workers.map(w=>new Promise((resolve,reject)=>{w.once('error',reject);w.once('message',resolve);w.once('exit',code=>{if(code!==0)reject(new Error('Testprozess fehlgeschlagen'));});}));
+  for(const worker of workers)worker.send('go');
+  const results=await Promise.all(pending);assert.ok(results.every(result=>result.operation==='issue'&&result.reference));
+  assert.equal(results[0].reference,results[1].reference);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM oidc_session_bindings').get().n,1);
+ }finally{for(const w of workers)if(w.connected)w.disconnect();db.close();rmSync(directory,{recursive:true,force:true});}
 });
 
 test('Reset betrifft alle Referenzen genau einer Video-Maker-Sitzung, nicht andere Sitzungen',()=>{

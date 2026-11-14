@@ -53,6 +53,15 @@ echten Betrieb sind außerdem Speicherquoten, Backup, Restore, Schlüsselrotatio
 CA-/Privatschlüsselschutz, ein ausschließlich geeignete Header setzender Proxy
 und der Abgleich aller internen TLS-Pfade einzurichten und zu prüfen.
 
+Insbesondere persistieren Provider-Sitzungszuordnungen sowie Verbrauchs- und
+Widerrufsmarkierungen derzeit ohne vollständige Quoten- und Dateisystemüberwachung
+und ohne geprüfte sichere Retention. Ein produktiver Proxy muss TLS beenden,
+eingehende Forwarded-Header entfernen und vertrauenswürdige Header selbst setzen.
+Ein Restore muss Provider-Datenbank, Video-Maker-Bindungsdaten und zugehörige
+Schlüsselgeneration konsistent behandeln. Für diese Vorgänge gibt es noch kein
+freigegebenes, getestetes Betriebs- und Wiederherstellungsverfahren; der Dienst
+bleibt bis dahin und bis zum unabhängigen Sicherheitsreview deaktiviert.
+
 Der isolierte Anbieter-Test verwendet ausschließlich Testschlüssel und prüft
 Videomaker-Anmeldung, signierten Sitzungs-Claim, PKCE, Replay, Cookie-Tausch
 während der Anmeldung, Logout, Code-Widerruf sowie gespeicherte Tokens und
@@ -207,23 +216,27 @@ eine authentifizierte lokale TLS-Verbindung und eine abgesicherte Proxyführung.
 Die Referenztabelle enthält keinen Browser-Cookie und keine Klartext-Referenz,
 sondern jeweils nur deren Hash, den vorhandenen keyed Widerrufshash und den
 Ablauf der Video-Maker-Sitzung. Ausgabe und Logout werden auf derselben SQLite-
-Datenbank serialisiert. Es gibt maximal 16 aktive Referenzen je Sitzung und
-1.024 insgesamt; abgelaufene oder widerrufene Referenzen werden transaktional
-entfernt. Die Provider-Zuordnung speichert dagegen die Referenz als vertraulichen
+Datenbank serialisiert. Neu ausgegebene Referenzen werden für dieselbe gültige
+Sitzung und Generation per domain-getrenntem HMAC wiederverwendet, auch nach
+einem Anbieter-Neustart. Damit füllen wiederholte Anmeldungen nicht mehr die
+16er-Grenze. Es gibt weiterhin maximal 16 aktive Referenzen je Sitzung, 1.024
+Referenzen und 1.024 Sitzungsepochen insgesamt; abgelaufene oder widerrufene
+Einträge werden transaktional entfernt. Die Provider-Zuordnung speichert dagegen die Referenz als vertraulichen
 Wert in der getrennten Provider-Datenbank und darf sie nie umhängen oder
 protokollieren. Für beide Datenbanken bleiben Zugriffsschutz und konsistente
 Backups nötig.
 
 Ein interner, authentifizierter `reset` kann bei gültigem Video-Maker-Cookie
-alle Referenzen genau dieser Sitzung widerrufen und so nach verwaisten Provider-
-Neustarts die 16er-Grenze freigeben. Das betrifft auch andere Tabs und bereits
+alle Referenzen genau dieser Sitzung widerrufen. Die gespeicherte Sitzungsepoche
+steigt dabei transaktional; eine spätere Ausstellung ergibt eine andere Referenz
+und belebt die alte nicht wieder. Das betrifft auch andere Tabs und bereits
 ausgegebene Tokens dieser Sitzung bei ihrer nächsten Live-Prüfung; andere
 Video-Maker-Sitzungen bleiben bestehen. Der Reset darf nicht unbemerkt bei jeder
-Anmeldung ausgelöst werden. Ein künftiger Provider muss seinen Lebenszyklus
-explizit damit koordinieren und nach dem Reset eine neue Provider-Session erzeugen;
-die alte UID darf nie neu zugeordnet werden. Die Probe und die Route allein
-implementieren diese Orchestrierung noch nicht, daher bleibt die Kapazitätsgrenze
-bis dahin ein Betriebsblocker.
+Anmeldung ausgelöst werden. Alte, noch aktive Zufallsreferenzen vor dieser
+Änderung bleiben bis Ablauf/Widerruf erhalten und können die 16er-Grenze weiterhin
+belegen; ein gezielter Reset wäre dort ein Eingriff in bestehende Sitzungen.
+Initialisierung, Migration und sichere Betriebsverfahren bleiben vor einem
+Produktiveinsatz zu prüfen.
 
 Jede Referenz ist an eine persistente Generation des Video-Maker-`SESSION_SECRET`
 gebunden. Eine beobachtete Änderung erhöht diese Generation transaktional; auch
