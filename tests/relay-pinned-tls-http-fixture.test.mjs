@@ -12,8 +12,8 @@ test('mutually pinned TLS 1.3 crosses an opaque HTTP relay; wrong pin fails', {s
  assert.ok(cp&&camera&&client,'synthetic compiler output and keystores are required');
  const owner='a'.repeat(64),relay=new OpaqueRendezvous();
  const fixtureKeys={owner:randomBytes(32).toString('hex'),guest:randomBytes(32).toString('hex')};
- let room,guest,wire=[];
- function newRoom(){const created=relay.create(owner);room=created.roomId;guest=randomBytes(32).toString('base64url');relay.join(room,created.joinTicket,guest);wire=[];}
+ let room,guest,wire=[],dropResponse=null,dropped=false;
+ function newRoom(){const created=relay.create(owner);room=created.roomId;guest=randomBytes(32).toString('base64url');relay.join(room,created.joinTicket,guest);wire=[];dropResponse=null;dropped=false;}
  newRoom();
  const server=createServer(async(req,res)=>{
   try{
@@ -32,18 +32,19 @@ test('mutually pinned TLS 1.3 crosses an opaque HTTP relay; wrong pin fails', {s
    if(match[3]){relay.send(room,actor,Number(match[3]),body);wire.push(body);}
    else if(match[4]&&body.length===0)relay.acknowledge(room,actor,Number(match[4]));
    else{res.writeHead(400).end();return;}
+   if(!dropped&&((dropResponse==='lost-send'&&match[3])||(dropResponse==='lost-ack'&&match[4]))){dropped=true;res.destroy();return;}
    res.writeHead(200).end();
   }catch{if(!res.headersSent)res.writeHead(400).end();else res.destroy();}
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  const url=`http://127.0.0.1:${server.address().port}`;
  async function probe(wrong){
-  const child=spawn('java',['-Xmx96m','-cp',cp,'de.kontrakurs.kontraprompter.pairing.RelayTlsHttpProbeKt',url,fixtureKeys.owner,fixtureKeys.guest,camera,client,String(wrong)],{stdio:['ignore','pipe','pipe']});
+  const child=spawn('java',['-Xmx96m','-Dsun.net.http.retryPost=false','-cp',cp,'de.kontrakurs.kontraprompter.pairing.RelayTlsHttpProbeKt',url,fixtureKeys.owner,fixtureKeys.guest,camera,client,String(wrong)],{stdio:['ignore','pipe','pipe']});
   let output='',error='';child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>error+=chunk);
   const timer=setTimeout(()=>child.kill('SIGKILL'),16_000);
   const [code,signal]=await new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',(...args)=>resolve(args));}).finally(()=>clearTimeout(timer));
   assert.equal(code,0,`probe failed (${signal}): ${error}`);
-  assert.match(output,wrong==='none'?/PINNED_TLS_OK/:/WRONG_PIN_REJECTED/);
+  assert.match(output,wrong==='none'?/PINNED_TLS_OK/:wrong.startsWith('lost-')?/LOST_RESPONSE_ABORTED/:/WRONG_PIN_REJECTED/);
  }
  try{
   await probe('none');
@@ -54,5 +55,9 @@ test('mutually pinned TLS 1.3 crosses an opaque HTTP relay; wrong pin fails', {s
   await probe('server');
   relay.close(room,owner);newRoom();
   await probe('client');
+  for(const failure of ['lost-send','lost-ack']){
+   relay.close(room,owner);newRoom();dropResponse=failure;
+   await probe(failure);assert.equal(dropped,true);
+  }
  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 });
