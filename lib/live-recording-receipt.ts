@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import {lstatSync} from 'node:fs';
 import path from 'node:path';
 import {recordingFileReceipt} from './recording-receipt.ts';
-import {acquireAuthorizedLiveLease} from './live-recording-lease.ts';
+import {acquireAuthorizedLiveLease,releaseEphemeralLiveLease} from './live-recording-lease.ts';
 import {LiveStagingError} from './live-recording-staging.ts';
 
 type Saved={id:string;project_id:string;recording_id:string;state:string;final_size:number;final_sha256:string;dev:string;ino:string;created_at:string;mime:string;size:number};
@@ -38,9 +38,5 @@ export async function getLiveRecordingReceipt({database,root,id,project,recordin
   const candidate=error as NodeJS.ErrnoException;
   if(candidate.code==='ENOENT'||candidate.code==='ENOTDIR'||candidate.code==='ELOOP'||candidate.message==='STORED_FILE_INVALID'||candidate.message==='STORED_FILE_CHANGED')return fail('RECEIPT_MISSING');
   throw error;
- }finally{try{database.transaction(()=>{
-  lease.release();
-  // A receipt only reads an existing file and owns no upload intent or lock.
-  database.prepare('DELETE FROM recording_upload_owners WHERE token=? AND completed=1 AND NOT EXISTS (SELECT 1 FROM recording_upload_slots WHERE token=?)').run(lease.token,lease.token);
- }).immediate();}catch{/* An expired lease cannot authorize a receipt. */}}
+ }finally{try{releaseEphemeralLiveLease(database,lease);}catch{/* An expired lease cannot authorize a receipt. */}}
 }

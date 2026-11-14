@@ -2,7 +2,7 @@ import {authorized,sameOrigin,sessionAuthorized,sessionValue} from '@/lib/auth';
 import db from '@/lib/db';
 import {cameraUploadIdFor} from '@/lib/camera-project-claims';
 import {acquireRecordingUpload} from '@/lib/recording-upload-guard';
-import {acquireAuthorizedLiveLease} from '@/lib/live-recording-lease';
+import {acquireAuthorizedLiveLease,releaseEphemeralLiveLease} from '@/lib/live-recording-lease';
 import {LiveBodyError,readLiveRecordingBody} from '@/lib/live-recording-body';
 import {createLiveStaging,LIVE_CHUNK_BYTES,LiveStagingError} from '@/lib/live-recording-staging';
 import {publishLiveRecording} from '@/lib/live-recording-publish';
@@ -80,14 +80,15 @@ export async function POST(req:Request,context:Context){
 
 export async function PUT(req:Request,context:Context){
  let lease:ReturnType<typeof acquireRecordingUpload>=null;
+ let leaseDatabase:ReturnType<typeof db>|null=null;
  try{
   const input=await setup(req,context,true);if(input.failure)return input.failure;
   const part=number(req.headers.get('x-live-part')),revision=number(req.headers.get('x-live-revision'));
   const length=number(req.headers.get('content-length')),sha=req.headers.get('x-live-sha256')||'';
   if(part===null||revision===null||length===null||length<1||length>LIVE_CHUNK_BYTES||!req.body)return response({error:'Ungültiger Aufnahmeteil.'},400);
-  lease=acquireAuthorizedLiveLease(input.database,input.assertAuthorized);if(!lease)return response({error:'Zu viele Uploads laufen. Bitte später erneut versuchen.'},429);
+  leaseDatabase=input.database;lease=acquireAuthorizedLiveLease(input.database,input.assertAuthorized);if(!lease)return response({error:'Zu viele Uploads laufen. Bitte später erneut versuchen.'},429);
   const reader=req.body.getReader();let bytes:Buffer;
   try{bytes=await readLiveRecordingBody(reader,length,lease.check);}finally{reader.releaseLock();}
   return response(input.store.put(input.upload,input.project,input.recording,part,revision,bytes,sha));
- }catch(e){return error(e);}finally{try{lease?.release();}catch{/* A failed release stays fenced until the lease expires. */}}
+ }catch(e){return error(e);}finally{try{if(lease&&leaseDatabase)releaseEphemeralLiveLease(leaseDatabase,lease);}catch{/* A failed release stays fenced until the lease expires. */}}
 }
