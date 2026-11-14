@@ -12,3 +12,19 @@ test('remote commands require a known action and a valid project for load',()=>{
  assert.throws(()=>parseCommand({type:'record'}));
  assert.throws(()=>parseCommand({type:'load',projectId:'invalid'}));
 });
+test('remote settings reject absent, nonnumeric, nonfinite and out-of-range values',()=>{
+ for(const type of ['set_speed','set_font_size']){
+  const [min,max]=type==='set_speed'?[5,160]:[20,100];
+  assert.equal(parseCommand({type,value:min}).value,min);
+  assert.equal(parseCommand({type,value:max}).value,max);
+  for(const value of [undefined,null,'44',NaN,Infinity,min-0.01,max+0.01])assert.throws(()=>parseCommand({type,value}));
+ }
+ assert.throws(()=>parseCommand({type:'pause',value:3}));
+});
+test('optional device controls are bounded and cannot be reported by camera role',()=>{
+ const heartbeat={id,name:'Handy',role:'prompter',status:'bereit',ack:[]};
+ assert.equal(parseHeartbeat(heartbeat).speed,null);
+ assert.equal(parseHeartbeat({...heartbeat,controls:{speed:35,fontSize:44}}).fontSize,44);
+ for(const controls of [null,[],{speed:4,fontSize:44},{speed:35,fontSize:101},{speed:'35',fontSize:44},{speed:NaN,fontSize:44}])assert.throws(()=>parseHeartbeat({...heartbeat,controls}));
+ assert.throws(()=>parseHeartbeat({...heartbeat,role:'camera',controls:{speed:35,fontSize:44}}));
+});

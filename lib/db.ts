@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
+import {ensureLiveDeviceControlSchema} from './live-device-schema';
 let instance: Database.Database | undefined;
 export default function db() {
  if (!instance) {
@@ -23,6 +24,7 @@ export default function db() {
     CREATE TABLE IF NOT EXISTS news_packages (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, title TEXT NOT NULL, angle TEXT NOT NULL, sources TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS news_packages_created_idx ON news_packages(created_at DESC);
   `);
+  ensureLiveDeviceControlSchema(instance);
   const columns=instance.prepare('PRAGMA table_info(project_images)').all() as Array<{name:string}>;
   if(!columns.some(column=>column.name==='orientation')) instance.exec("ALTER TABLE project_images ADD COLUMN orientation TEXT NOT NULL DEFAULT 'landscape'");
   if(!columns.some(column=>column.name==='description')) instance.exec("ALTER TABLE project_images ADD COLUMN description TEXT NOT NULL DEFAULT ''");
