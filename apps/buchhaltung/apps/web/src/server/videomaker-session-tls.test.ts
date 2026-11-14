@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { guardVideomakerSession } from "./videomaker-session.ts";
 
+vi.mock("./videomaker-session-binding.ts", () => ({ currentVideomakerReference: async () => null }));
+
 const request = () => new Request("http://localhost:3199/buchhaltung/setup", { headers: { cookie: "kontrakurs_session=12345.test.signature" } });
 const secret = "synthetischer-testschluessel-nicht-produktiv";
 let scratch: string;
@@ -119,6 +121,21 @@ afterAll(() => {
 });
 
 describe("Authentifizierte Video-Maker-Gegenstelle", () => {
+  it("sendet die gebundene Referenz ausschließlich über den verifizierten TLS-Endpunkt", async () => {
+    const reference = "a".repeat(43), bindingSecret = "b".repeat(32);
+    let checked = false;
+    const server = createHttpsServer(good, (req, res) => {
+      checked = req.method === "POST" && req.url === "/api/internal/oidc/session-binding" &&
+        req.headers["x-oidc-binding-operation"] === "match" && req.headers["x-oidc-session-reference"] === reference &&
+        req.headers["x-videomaker-internal-secret"] === bindingSecret && req.headers.cookie === "kontrakurs_session=12345.test.signature";
+      res.writeHead(204).end();
+    });
+    const port = await listen(server);
+    try {
+      expect(await guardVideomakerSession(request(), { ...config(port), bindingSecret }, undefined, async () => reference)).toBeNull();
+      expect(checked).toBe(true);
+    } finally { server.close(); }
+  });
   it("erlaubt nur den passenden Server und prüft jede Sitzung neu", async () => {
     let count = 0;
     const server = createHttpsServer(good, (req, res) => {

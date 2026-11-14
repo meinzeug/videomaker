@@ -49,6 +49,12 @@ export const session = pgTable(
   (t) => [index("session_user_id_idx").on(t.userId)],
 );
 
+/** Private binding: not part of Better Auth's public session response. */
+export const videomakerSessionBindings = pgTable("videomaker_session_bindings", {
+  sessionId: text("session_id").primaryKey().references(() => session.id, { onDelete: "cascade" }),
+  reference: text("reference").notNull(),
+}, (t) => [check("videomaker_session_reference_format", sql`${t.reference} ~ '^[A-Za-z0-9_-]{43}$'`)]);
+
 export const account = pgTable(
   "account",
   {

@@ -135,6 +135,11 @@ function authHooks(sso: boolean): Pick<BetterAuthOptions, "hooks" | "databaseHoo
           },
           // Jede Anmeldung steht im Audit-Log, mit der wirksamen Rolle und Art
           after: async (session, ctx) => {
+            if (sso && process.env.HABEN_VIDEOMAKER_SESSION_GUARD === "required") {
+              const { proof, tx } = requireGrantedProof();
+              if (!proof.videomakerReference) throw forbidden("Die gebundene Anmeldung ist ungültig.");
+              await tx.insert(schema.videomakerSessionBindings).values({ sessionId: session.id, reference: proof.videomakerReference });
+            }
             const role = sso ? (session as { ssoRole?: string }).ssoRole : (await accountState(session.userId, authDatabase()))?.role;
             if (role === "inhaber" || role === "steuerberatung") await recordLogin(session.userId, role, loginMethod(ctx?.path), authTransaction());
           },

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { guardVideomakerSession } from "./videomaker-session.ts";
 
+vi.mock("./videomaker-session-binding.ts", () => ({ currentVideomakerReference: async () => null }));
+
 const config = { mode: "required", endpoint: "https://127.0.0.1:3000/api/internal/buchhaltung/session", secret: "s".repeat(32), caFile: "/tmp/ca.pem" };
 const request = (path = "/buchhaltung/belege", cookie = "kontrakurs_session=12345.test.signature", method = "GET") =>
   new Request(`http://localhost:3199${path}`, { method, headers: { cookie, "x-forwarded-user": "inhaber" } });
@@ -36,6 +38,20 @@ describe("Video-Maker-Sitzungsprüfung", () => {
     expect(init).toEqual({ cookie: "kontrakurs_session=12345.test.signature", secret: config.secret, caFile: config.caFile });
   });
 
+  it("prüft für eine Haben-Sitzung die konkrete Referenz mit dem aktuellen Video-Maker-Cookie", async () => {
+    const reference = "a".repeat(43);
+    const boundConfig = { ...config, bindingSecret: "b".repeat(32) };
+    const send = vi.fn(async () => 204);
+    expect(await guardVideomakerSession(request(), boundConfig, send, async () => reference)).toBeNull();
+    expect(send).toHaveBeenCalledWith("https://127.0.0.1:3000/api/internal/oidc/session-binding", {
+      cookie: "kontrakurs_session=12345.test.signature", secret: boundConfig.bindingSecret, caFile: config.caFile, reference,
+    });
+    expect((await guardVideomakerSession(request(), boundConfig, async () => 401, async () => reference))?.status).toBe(401);
+    expect((await guardVideomakerSession(request(), boundConfig, send, async () => ""))?.status).toBe(401);
+    expect((await guardVideomakerSession(request(), config, send, async () => reference))?.status).toBe(503);
+    expect((await guardVideomakerSession(request(), boundConfig, send, async () => { throw new Error("db"); }))?.status).toBe(503);
+  });
+
   it("weist fehlende, widersprüchliche oder manipulierte Cookies ohne Anfrage ab", async () => {
     const send = vi.fn();
     for (const cookie of ["", "haben=foo", "kontrakurs_session=", "kontrakurs_session=a; kontrakurs_session=b", "kontrakurs_session=a,b"]) {
@@ -63,7 +79,7 @@ describe("Video-Maker-Sitzungsprüfung", () => {
     );
     const requests = Array.from({ length: 16 }, () => guardVideomakerSession(request(), config, send));
     expect((await guardVideomakerSession(request(), config, send))?.status).toBe(503);
-    expect(send).toHaveBeenCalledTimes(16);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(16));
     for (const finish of release) finish();
     expect(await Promise.all(requests)).toEqual(Array.from({ length: 16 }, () => null));
     expect(await guardVideomakerSession(request(), config, async () => 204)).toBeNull();

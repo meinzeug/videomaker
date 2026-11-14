@@ -62,39 +62,39 @@ Browser-Redirects, Cookie-Domain und SameSite-Verhalten bleiben zu prüfen. Er b
 ausdrücklich auch, dass eine bereits erstellte Haben-Sitzung nach Video-Maker-
 Logout ohne zusätzlichen Sitzungsschutz bestehen bleibt.
 
-Die Gegenprobe ruft nach einem echten Haben-Callback auch den vorhandenen
-optionalen Wächter mit dem ausgestellten Haben-Sitzungscookie auf. Er weist das
-ursprüngliche, danach widerrufene Video-Maker-Cookie ab. Eine **andere gültige**
-Video-Maker-Sitzung zusammen mit demselben alten Haben-Cookie lässt er jedoch
-durch: Der Wächter prüft bislang nur, ob irgendeine Video-Maker-Sitzung gültig
-ist, und bindet sie nicht an die Haben-Sitzung. Die Gegenprobe dokumentiert das
-aktuelle Verhalten, keine Sicherheitsfreigabe. Für eine echte Bindung müssen
-der vertrauenswürdige OIDC-Anbieter einen nachweislich an die ursprüngliche
-Video-Maker-Sitzung gebundenen Wert liefern, Haben diesen im geprüften Callback
-unveränderlich der neu erstellten Sitzung zuordnen und der Wächter diese
-Zuordnung mit dem aktuellen Cookie einschließlich Widerruf prüfen. Eine
-Zuordnung erst beim ersten Zugriff nach dem Login ist dafür nicht ausreichend.
-Der dafür notwendige produktive Anbieter und die transaktionale Zuordnung
-existieren noch nicht; der Wächter darf nicht als gebundener gemeinsamer Logout
-dargestellt werden.
+Eine frühere Gegenprobe zeigte, dass der Wächter eine andere gültige
+Video-Maker-Sitzung zusammen mit einem alten Haben-Cookie akzeptierte. Der
+vorbereitete WIP speichert jetzt bei aktiviertem Wächter den Claim aus dem
+signaturgeprüften ID-Token in derselben PostgreSQL-Transaktion wie die neue
+Haben-Sitzung. Der Wächter liest die Zuordnung zur tatsächlich authentifizierten
+Haben-Sitzung und prüft sie mit dem aktuellen Video-Maker-Cookie. Der isolierte
+Test lehnt vertauschte Cookies, fehlende Referenzen und widerrufene Sitzungen ab;
+ein Schreibfehler bei der Bindung rollt auch die neue Haben-Sitzung zurück.
+Vorhandene Haben-Sitzungen ohne diese Zuordnung werden nach Aktivierung
+abgewiesen und benötigen eine neue OIDC-Anmeldung. Der Widerruf schützt
+nachfolgende Anfragen; eine bereits laufende Aktion über zwei getrennte Dienste
+kann er nicht atomar zurücknehmen.
+Ohne Haben-Sitzung bleibt die bisherige Prüfung des Video-Maker-Cookies für den
+Anmeldestart erhalten. Der produktive Anbieter und die nötige TLS-/Proxy- und
+Browserkonfiguration fehlen weiterhin; der Wächter ist nicht freigegeben.
 
 Die vorbereitete interne Referenzschnittstelle hat zusätzlich die Operation
 `match`: Sie prüft das vorgelegte Video-Maker-Cookie und die OIDC-Referenz
 gemeinsam in der Transaktion mit Widerruf und Schlüsselgeneration. Ein gültiges
 Cookie einer anderen Sitzung, eine abgelaufene Referenz und ein widerrufenes
 Cookie werden abgelehnt. Die Schnittstelle liefert nur den Status, keine
-Sitzungsdaten. Dies ist ein Baustein und noch keine Korrektur des Haben-Wächters:
-Der vom Anbieter signierte Referenz-Claim und dessen unveränderliche Bindung an
-die konkrete Haben-Sitzung beim Callback fehlen weiterhin.
+Sitzungsdaten. Der vorbereitete Haben-Wächter nutzt die Operation bei bestehender
+Haben-Sitzung; die Referenz wird nur serverseitig gespeichert und nicht in der
+öffentlichen Better-Auth-Sitzungsantwort ausgegeben.
 
 Die isolierte Haben-Callback-Gegenprobe stellt außerdem im Testanbieter einen
 Claim `videomaker_session_ref` aus der tatsächlich gebundenen Provider-Session
 aus. Der Test prüft die ID-Token-Signatur mit den Provider-JWKS, Issuer und
 Audience sowie die Übereinstimmung der Referenz mit dem ursprünglichen Cookie.
 Ein nachträglich veränderter Claim und das Cookie einer anderen gültigen
-Sitzung werden abgewiesen. Dieser Test weist nur die Transportmöglichkeit nach:
-Der vorhandene Haben-Callback speichert oder verwendet den Claim noch nicht;
-auch ein produktiver Video-Maker-OIDC-Anbieter ist noch nicht angeschlossen.
+Sitzung werden abgewiesen. Der vorbereitete Callback speichert den Claim bei
+aktiviertem Wächter atomar mit der Sitzung. Ein produktiver Video-Maker-OIDC-
+Anbieter ist noch nicht angeschlossen.
 
 Der Lauf benötigt Node 22, installierte Video-Maker- und Haben-Abhängigkeiten,
 die unter `OIDC_PROVIDER_TEST_DIR` separat installierte Testbibliothek

@@ -131,6 +131,10 @@ async function verifiedUserInfo(tokens: OidcTokens) {
   if (!ssoOnly() || state?.serverContext?.ssoIssuer !== issuer) throw denied("Vorgang stammt aus einer anderen Konfiguration");
   if (!tokens.idToken || !tokens.accessToken) throw denied("Token-Antwort ohne ID-Token oder Access-Token");
   const claims = idTokenClaims(tokens.idToken, issuer, config.OIDC_CLIENT_ID!);
+  const videomakerReference = process.env.HABEN_VIDEOMAKER_SESSION_GUARD === "required" ? claims.videomaker_session_ref : undefined;
+  if (process.env.HABEN_VIDEOMAKER_SESSION_GUARD === "required" &&
+      (typeof videomakerReference !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(videomakerReference)))
+    throw denied("ID-Token: gebundene Video-Maker-Referenz fehlt");
   const metadata = await validateDiscovery();
   const profile = metadata.userInfoEndpoint ? await fetchUserInfo(metadata.userInfoEndpoint, tokens.accessToken) : claims;
   if (profile.sub !== claims.sub) throw denied("UserInfo nennt ein anderes Subject als das ID-Token");
@@ -149,7 +153,7 @@ async function verifiedUserInfo(tokens: OidcTokens) {
     return null;
   }
   // Die Frist hängt am Prüfzeitpunkt, nicht an Tokens, die Haben nach dem Callback verwirft
-  setCallbackProof({ ...base, role: decision.role, expiresAt: new Date(checkedAt + SSO_PROOF_MS) });
+  setCallbackProof({ ...base, role: decision.role, expiresAt: new Date(checkedAt + SSO_PROOF_MS), ...(typeof videomakerReference === "string" ? { videomakerReference } : {}) });
   const email = profile.email ?? claims.email;
   const emailVerified = profile.email_verified ?? claims.email_verified;
   if (!validEmail(email)) {

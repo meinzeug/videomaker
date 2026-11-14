@@ -44,13 +44,16 @@ Zertifikatserneuerung und ein Rollback sind auf dem Zielsystem zu testen. Das
 Secret authentifiziert Haben gegenüber Video-Maker. Gemeinsame Anmeldung und
 vollständige Browser- und Proxyprüfung bleiben zusätzlich offen.
 
-Eine weitere Grenze ist mit echtem Haben-OIDC-Callback nachgewiesen: Nach
-Widerruf des ursprünglichen Video-Maker-Cookies kann dasselbe Haben-Cookie mit
-einem anderen gültigen Video-Maker-Cookie den Wächter passieren. Die aktuelle
-Prüfung bindet eine Haben-Sitzung nicht an die Sitzung, aus der ihr Login stammt.
-Ein gemeinsamer, sitzungsgebundener Logout ist damit noch nicht implementiert;
-die erforderliche Zuordnung und ihr Test sind in `docs/oidc-anmeldung.md`
-beschrieben.
+Eine frühere Gegenprobe zeigte, dass eine andere Video-Maker-Sitzung mit einem
+alten Haben-Cookie den Wächter passieren konnte. Im vorbereiteten WIP erhält
+Haben beim verifizierten Callback eine signierte Sitzungsreferenz, speichert sie
+atomar zur Haben-Sitzung und prüft sie bei späteren Anfragen zusammen mit dem
+Video-Maker-Cookie. Das interne Secret für diese Prüfung ist
+`HABEN_VIDEOMAKER_BINDING_SECRET` und muss dem Video-Maker-Wert
+`OIDC_BINDING_INTERNAL_SECRET` entsprechen. Der lokale TLS-Proxy muss zusätzlich
+den festen Pfad `/api/internal/oidc/session-binding` weiterleiten. Ein echter
+produktiver OIDC-Anbieter, Proxy und Browsertest fehlen weiterhin; daher bleibt
+der gesamte Wächter deaktiviert. Testgrenzen stehen in `docs/oidc-anmeldung.md`.
 
 REST/MCP mit eigener Bearer-Authentifizierung und der GET-OIDC-Callback haben
 eng begrenzte Ausnahmen; der Bank-Callback bleibt geschützt. Der Wächter ist

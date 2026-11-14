@@ -13,6 +13,8 @@ export interface SsoProof {
   checkedAt: Date;
   role?: Rolle;
   expiresAt?: Date;
+  /** Private reference from the verified ID token, never from request headers. */
+  videomakerReference?: string;
   rejection?: GroupRejection | "profil";
 }
 

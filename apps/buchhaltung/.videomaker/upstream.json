@@ -5,6 +5,7 @@
   "integrationPatches": [
     "patches/0001-videomaker-unterpfad.patch",
     "patches/0002-native-einrichtung.patch",
-    "patches/0003-videomaker-sitzungsschutz.patch"
+    "patches/0003-videomaker-sitzungsschutz.patch",
+    "patches/0004-videomaker-sitzungsbindung.patch"
   ]
 }

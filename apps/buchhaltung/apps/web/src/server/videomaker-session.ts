@@ -4,8 +4,9 @@ import { request as httpsRequest } from "node:https";
 import { isAbsolute } from "node:path";
 import { appPath } from "../lib/app-path.ts";
 
-type GuardConfig = { mode: string | undefined; endpoint: string | undefined; secret: string | undefined; caFile: string | undefined };
-type GuardFetch = (endpoint: string, options: { cookie: string; secret: string; caFile: string }) => Promise<number>;
+type GuardConfig = { mode: string | undefined; endpoint: string | undefined; secret: string | undefined; caFile: string | undefined; bindingSecret?: string };
+type GuardFetch = (endpoint: string, options: { cookie: string; secret: string; caFile: string; reference?: string }) => Promise<number>;
+type BindingLookup = (request: Request) => Promise<string | null>;
 const LIMIT = 16;
 const STATE = Symbol.for("videomaker.haben.sessionGuard");
 const shared = globalThis as typeof globalThis & { [STATE]?: { active: number; caReads: number } };
@@ -18,6 +19,7 @@ const configuration = (): GuardConfig => ({
   endpoint: process.env.HABEN_VIDEOMAKER_SESSION_URL,
   secret: process.env.HABEN_VIDEOMAKER_INTERNAL_SECRET,
   caFile: process.env.HABEN_VIDEOMAKER_SESSION_CA_FILE,
+  bindingSecret: process.env.HABEN_VIDEOMAKER_BINDING_SECRET,
 });
 
 /** Diese Endpunkte authentifizieren selbst per Bearer-Token bzw. validieren den OIDC-Callback. */
@@ -81,7 +83,7 @@ async function readTrustedCa(path: string): Promise<Buffer> {
 }
 
 /** Nur die konfigurierte CA und der feste DNS-Name authentifizieren die lokale Gegenstelle. */
-async function verifiedRequest(endpoint: string, options: { cookie: string; secret: string; caFile: string }): Promise<number> {
+async function verifiedRequest(endpoint: string, options: { cookie: string; secret: string; caFile: string; reference?: string }): Promise<number> {
   const signal = AbortSignal.timeout(2000);
   if (limits.caReads >= LIMIT) throw new Error("Zu viele CA-Lesevorgänge");
   limits.caReads++;
@@ -102,8 +104,9 @@ async function verifiedRequest(endpoint: string, options: { cookie: string; secr
     const outgoing = httpsRequest(
       endpoint,
       {
-        method: "GET",
-        headers: { cookie: options.cookie, "X-Videomaker-Internal-Secret": options.secret },
+        method: options.reference ? "POST" : "GET",
+        headers: { cookie: options.cookie, "X-Videomaker-Internal-Secret": options.secret,
+          ...(options.reference ? { "X-Oidc-Binding-Operation": "match", "X-Oidc-Session-Reference": options.reference, "Content-Length": "0" } : {}) },
         ca,
         servername: "videomaker-session.internal",
         rejectUnauthorized: true,
@@ -125,7 +128,7 @@ async function verifiedRequest(endpoint: string, options: { cookie: string; secr
  * Bei aktivierter Video-Maker-Sitzungsprüfung keinen gecachten Erfolg verwenden. Die Prüfung
  * ergänzt die Haben-Anmeldung; sie erzeugt selbst keine Haben-Sitzung oder OIDC-Identität.
  */
-export async function guardVideomakerSession(request: Request, config = configuration(), send: GuardFetch = verifiedRequest): Promise<Response | null> {
+export async function guardVideomakerSession(request: Request, config = configuration(), send: GuardFetch = verifiedRequest, lookup: BindingLookup = async request => (await import("./videomaker-session-binding.ts")).currentVideomakerReference(request)): Promise<Response | null> {
   if (!config.mode || config.mode === "off") return null;
   const endpoint = endpointUrl(config.endpoint);
   if (config.mode !== "required" || !endpoint || !config.secret || config.secret.length < 32 || !config.caFile || !isAbsolute(config.caFile)) {
@@ -138,7 +141,16 @@ export async function guardVideomakerSession(request: Request, config = configur
     return new Response("Die Video-Maker-Sitzungsprüfung ist ausgelastet.", { status: 503, headers: { "Cache-Control": "no-store" } });
   limits.active++;
   try {
-    const status = await send(endpoint, { cookie, secret: config.secret, caFile: config.caFile });
+    const reference = await lookup(request);
+    if (reference !== null && !/^[A-Za-z0-9_-]{43}$/.test(reference))
+      return new Response("Bitte erneut bei Video-Maker anmelden.", { status: 401, headers: { "Cache-Control": "no-store" } });
+    if (reference !== null && (!config.bindingSecret || config.bindingSecret.length < 32 || config.bindingSecret.length > 256))
+      return new Response("Die gebundene Video-Maker-Sitzungsprüfung ist nicht verfügbar.", { status: 503, headers: { "Cache-Control": "no-store" } });
+    const bindingUrl = new URL(endpoint);
+    bindingUrl.pathname = "/api/internal/oidc/session-binding";
+    const status = reference === null
+      ? await send(endpoint, { cookie, secret: config.secret, caFile: config.caFile })
+      : await send(bindingUrl.href, { cookie, secret: config.bindingSecret!, caFile: config.caFile, reference });
     if (status === 204) return null;
     if (status === 401 || status === 403) {
       return new Response("Bitte bei Video-Maker anmelden.", { status: 401, headers: { "Cache-Control": "no-store" } });
