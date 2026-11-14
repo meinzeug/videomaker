@@ -4,13 +4,14 @@ import assert from 'node:assert/strict';
 import {createHash,generateKeyPairSync,randomUUID,sign} from 'node:crypto';
 import {readFileSync,realpathSync} from 'node:fs';
 import path from 'node:path';
+import {tmpdir} from 'node:os';
 import Database from 'better-sqlite3';
 import {uploadCameraRecovery} from '../lib/camera-recovery-client.ts';
 
 const base=process.env.CAMERA_LATE_TEST_SERVER,dir=process.env.CAMERA_LATE_TEST_DATA_DIR;
 const enabled=base==='http://127.0.0.1:3335'&&process.env.CAMERA_LATE_TEST_ALLOW_WRITES==='1'&&typeof dir==='string';
 test('paired late error survives project deletion without changing the verified receipt',{skip:!enabled,timeout:120000},async()=>{
- const resolved=realpathSync(dir);assert.equal(path.dirname(resolved),'/tmp');assert.match(path.basename(resolved),/^camera-late-e2e-[A-Za-z0-9]+$/);
+ const resolved=realpathSync(dir);assert.equal(path.dirname(resolved),realpathSync(tmpdir()));assert.match(path.basename(resolved),/^camera-late-e2e-[A-Za-z0-9]+$/);
  assert.equal(readFileSync(path.join(resolved,'disposable-fixture'),'utf8'),'camera-late-fixture\n');
  let cookie='';
  const post=(url,body,extra={})=>fetch(base+url,{method:'POST',headers:{origin:base,cookie,'content-type':'application/json',...extra},body:JSON.stringify(body)});
@@ -74,6 +75,14 @@ test('paired late error survives project deletion without changing the verified 
   response=await poll(conflict);assert.equal(response.status,409);const rejection=await response.json();
   assert.deepEqual({code:rejection.code,deviceId:rejection.deviceId,recordingId:rejection.recordingId,projectId:rejection.projectId,phase:rejection.phase,sequence:rejection.sequence,sizeBytes:rejection.sizeBytes,sha256:rejection.sha256},
    {code:'camera_late_report_conflict',deviceId:source,recordingId:recording,projectId:project,phase:'partial',sequence:conflict.sequence,sizeBytes:conflict.sizeBytes,sha256:conflict.sha256});
+  // A user retry sends the same report with a fresh durable poll sequence. An
+  // unresolved contradiction must remain a conflict, not become an ACK.
+  const retried=heartbeat('partial',recording,project,{sizeBytes:conflict.sizeBytes,sha256:conflict.sha256});
+  response=await poll(retried);assert.equal(response.status,409);const repeated=await response.json();
+  assert.deepEqual({code:repeated.code,deviceId:repeated.deviceId,recordingId:repeated.recordingId,projectId:repeated.projectId,phase:repeated.phase,sequence:repeated.sequence,sizeBytes:repeated.sizeBytes,sha256:repeated.sha256},
+   {code:'camera_late_report_conflict',deviceId:source,recordingId:recording,projectId:project,phase:'partial',sequence:retried.sequence,sizeBytes:conflict.sizeBytes,sha256:conflict.sha256});
+  assert.deepEqual(db.prepare('SELECT * FROM camera_project_upload_receipts WHERE recording_id=?').get(recording),proofBefore);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM camera_late_alerts WHERE recording_id=?').get(recording).n,2);
   assert.equal((await poll(heartbeat('idle'))).status,200,'a later nonconflicting poll remains possible');
   // Fill only this disposable fixture's audit quota. The next late event is
   // retryable (503), and its device sequence must remain uncommitted.
