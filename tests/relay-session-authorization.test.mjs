@@ -160,3 +160,22 @@ test('expiry-sensitive operations cannot be wrapped in a transaction that rolls 
   assert.throws(()=>f.db.transaction(()=>verifyRelaySession(f.db,owner,session,f.request,f.credential,()=>clock(1021),()=>true)).immediate(),/NESTED_RELAY_TRANSACTION_UNSUPPORTED/);
  }finally{f.db.close();}
 });
+
+test('a failed replacement does not delete a different still-valid pending challenge',()=>{
+ const f=fixture();try{
+  const first=f.make().challenge,otherRequest={...f.request,roomId:randomBytes(16).toString('base64url')};let ticks=0;
+  assert.throws(()=>beginRelaySession(f.db,owner,session,otherRequest,()=>clock(++ticks===1?1020:61011),()=>true),/EXPIRED/);
+  assert.equal(f.db.prepare('SELECT challenge_id FROM relay_session_challenges WHERE pair_id=? AND role=?').get(f.pairId,'camera').challenge_id,first.challengeId);
+ }finally{f.db.close();}
+});
+
+test('a different runtime cannot consume or delete a valid challenge or grant',()=>{
+ const f=fixture();try{
+  const {challenge,signature}=f.make(),foreign=randomUUID();
+  assert.throws(()=>completeRelaySession(f.db,owner,session,f.request,challenge.challengeId,signature,()=>clock(1020,1020,foreign),()=>true),/EXPIRED/);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_session_challenges').get().n,1);
+  completeRelaySession(f.db,owner,session,f.request,challenge.challengeId,signature,()=>clock(1020),()=>true);
+  assert.equal(verifyRelaySession(f.db,owner,session,f.request,f.credential,()=>clock(1021,1021,foreign),()=>true),false);
+  assert.equal(verifyRelaySession(f.db,owner,session,f.request,f.credential,()=>clock(1022),()=>true),true);
+ }finally{f.db.close();}
+});

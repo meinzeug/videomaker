@@ -118,3 +118,12 @@ test('an observed expired pairing challenge cannot revive after wall clock rollb
   assert.throws(()=>completeRelayPairing(f.db,owner,input,()=>time(1002,1002),()=>true),/EXPIRED/);
  }finally{f.db.close();}
 });
+
+test('a foreign runtime cannot consume an otherwise valid pairing challenge',()=>{
+ const f=fixture();try{
+  const challenge=beginRelayPairing(f.db,owner,f.pairId,transcript,()=>time(),()=>true),input=f.prepare(challenge),foreign=randomUUID();
+  assert.throws(()=>completeRelayPairing(f.db,owner,input,()=>time(1001,1001,foreign),()=>true),/EXPIRED/);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM relay_pair_challenges').get().n,1);
+  assert.equal(completeRelayPairing(f.db,owner,input,()=>time(1002),()=>true).created,true);
+ }finally{f.db.close();}
+});
