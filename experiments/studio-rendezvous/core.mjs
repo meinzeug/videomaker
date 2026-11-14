@@ -1,4 +1,5 @@
 import {createHash,createHmac,randomUUID,timingSafeEqual} from 'node:crypto';
+import {initializeStudioRuntimeSchemaFixture,studioRuntimeAdmissibleFixture} from './runtime.mjs';
 
 // Isolated, server-trusted signaling fixture. No public route or production migration.
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -16,16 +17,16 @@ function authorize(auth,owner,session){try{return typeof auth==='function'&&auth
 function same(row,other){return row&&other&&['room_id','owner_hash','camera_session','camera_device','create_attempt','prompter_session','prompter_device','ticket_hash','secret_epoch','runtime_id','created_wall','created_tick','camera_approved','prompter_approved','closed','camera_next','prompter_next','camera_acked','prompter_acked','camera_last_hash','prompter_last_hash','camera_total','prompter_total'].every(k=>row[k]===other[k]);}
 function failed(db,row){db.prepare('UPDATE studio_signal_rooms SET closed=1 WHERE room_id=?').run(row.room_id);db.prepare('DELETE FROM studio_signal_messages WHERE room_id=?').run(row.room_id);return null;}
 function current(db,row,clock,auth){
- const first=clockNow(clock);if(row.runtime_id!==first.runtimeId)return null;if(!fresh(row,first))return failed(db,row);
+ const first=clockNow(clock);if(!studioRuntimeAdmissibleFixture(db,first)||row.runtime_id!==first.runtimeId)return null;if(!fresh(row,first))return failed(db,row);
  if(!authorize(auth,row.owner_hash,row.camera_session)||(row.prompter_session&&!authorize(auth,row.owner_hash,row.prompter_session)))return failed(db,row);
  let latest=db.prepare('SELECT * FROM studio_signal_rooms WHERE room_id=?').get(row.room_id);const second=clockNow(clock);
- if(!same(row,latest))return failed(db,row);if(row.runtime_id!==second.runtimeId)return null;if(!fresh(row,second))return failed(db,row);
+ if(!same(row,latest))return failed(db,row);if(!studioRuntimeAdmissibleFixture(db,second)||row.runtime_id!==second.runtimeId)return null;if(!fresh(row,second))return failed(db,row);
  // Both sessions are checked once more after any reentrant clock callbacks.
  if(!authorize(auth,row.owner_hash,row.camera_session)||(row.prompter_session&&!authorize(auth,row.owner_hash,row.prompter_session)))return failed(db,row);
  latest=db.prepare('SELECT * FROM studio_signal_rooms WHERE room_id=?').get(row.room_id);if(!same(row,latest))return failed(db,row);return latest;
 }
 function transaction(db,fn){const value=db.transaction(fn).immediate();if(value===null)deny();return value;}
-export function initializeStudioRendezvousFixture(db){fixture(db);db.exec(`
+export function initializeStudioRendezvousFixture(db){fixture(db);initializeStudioRuntimeSchemaFixture(db);db.exec(`
  CREATE TABLE IF NOT EXISTS studio_signal_rooms(room_id TEXT PRIMARY KEY,owner_hash TEXT NOT NULL,camera_session TEXT NOT NULL,camera_device TEXT NOT NULL,create_attempt TEXT NOT NULL,prompter_session TEXT,prompter_device TEXT,ticket_hash TEXT NOT NULL UNIQUE,secret_epoch TEXT NOT NULL,runtime_id TEXT NOT NULL,created_wall INTEGER NOT NULL,created_tick INTEGER NOT NULL,camera_approved INTEGER NOT NULL DEFAULT 0,prompter_approved INTEGER NOT NULL DEFAULT 0,closed INTEGER NOT NULL DEFAULT 0,camera_next INTEGER NOT NULL DEFAULT 1,prompter_next INTEGER NOT NULL DEFAULT 1,camera_acked INTEGER NOT NULL DEFAULT 0,prompter_acked INTEGER NOT NULL DEFAULT 0,camera_last_hash TEXT,prompter_last_hash TEXT,camera_total INTEGER NOT NULL DEFAULT 0,prompter_total INTEGER NOT NULL DEFAULT 0,UNIQUE(owner_hash,camera_session,create_attempt));
  CREATE TABLE IF NOT EXISTS studio_signal_attempts(owner_hash TEXT NOT NULL,session_hash TEXT NOT NULL,attempt_id TEXT NOT NULL,device_id TEXT NOT NULL,PRIMARY KEY(owner_hash,session_hash,attempt_id));
  CREATE TABLE IF NOT EXISTS studio_signal_messages(room_id TEXT NOT NULL,source TEXT NOT NULL,sequence INTEGER NOT NULL,data BLOB NOT NULL,PRIMARY KEY(room_id,source,sequence),FOREIGN KEY(room_id) REFERENCES studio_signal_rooms(room_id) ON DELETE CASCADE);
@@ -33,7 +34,7 @@ export function initializeStudioRendezvousFixture(db){fixture(db);db.exec(`
 export function createStudioRoomFixture(db,{ownerHash,sessionHash,deviceId,attemptId},serverSecret,clock,auth){
  fixture(db);if(!Buffer.isBuffer(serverSecret)||serverSecret.length<32||!UUID.test(attemptId))deny();checkArgs(ownerHash,sessionHash,deviceId);
  return transaction(db,()=>{
-  if(!authorize(auth,ownerHash,sessionHash))return null;const now=clockNow(clock);
+  if(!authorize(auth,ownerHash,sessionHash))return null;const now=clockNow(clock);if(!studioRuntimeAdmissibleFixture(db,now))return null;
   // Keep live paired rooms; remove abandoned unjoined attempts once their QR expires.
   db.prepare('DELETE FROM studio_signal_rooms WHERE runtime_id=? AND (closed=1 OR created_wall>? OR created_tick>? OR created_wall<=? OR created_tick<=? OR (prompter_session IS NULL AND (created_wall<=? OR created_tick<=?)))').run(now.runtimeId,now.wall,now.tick,now.wall-ROOM_TTL,now.tick-ROOM_TTL,now.wall-JOIN_TTL,now.tick-JOIN_TTL);
   const epoch=createHmac('sha256',serverSecret).update('studio-signaling-epoch/v1').digest('hex');
@@ -55,7 +56,7 @@ export function joinStudioRoomFixture(db,{ownerHash,sessionHash,deviceId,roomId,
  return transaction(db,()=>{
   const row=db.prepare('SELECT * FROM studio_signal_rooms WHERE room_id=?').get(roomId);
   if(!row||row.closed||row.owner_hash!==ownerHash||!equalHash(row.ticket_hash,hash)||row.camera_session===sessionHash||row.camera_device===deviceId||!authorize(auth,ownerHash,sessionHash))return null;
-  const now=clockNow(clock);if(row.runtime_id!==now.runtimeId)return null;if(!fresh(row,now,JOIN_TTL))return row.prompter_session===null?failed(db,row):null;
+  const now=clockNow(clock);if(!studioRuntimeAdmissibleFixture(db,now)||row.runtime_id!==now.runtimeId)return null;if(!fresh(row,now,JOIN_TTL))return row.prompter_session===null?failed(db,row):null;
   if(!current(db,row,clock,auth))return null;
   if(row.prompter_session!==null)return row.prompter_session===sessionHash&&row.prompter_device===deviceId?{roomId,role:'prompter',created:false}:null;
   db.prepare('UPDATE studio_signal_rooms SET prompter_session=?,prompter_device=? WHERE room_id=? AND prompter_session IS NULL AND closed=0').run(sessionHash,deviceId,roomId);
@@ -106,4 +107,27 @@ export function acknowledgeStudioFrameFixture(db,{ownerHash,sessionHash,deviceId
 }
 export function closeStudioRoomFixture(db,{ownerHash,sessionHash,deviceId,roomId,role},clock,auth){
  fixture(db);return transaction(db,()=>{const row=member(db,ownerHash,sessionHash,deviceId,roomId,role,clock,auth);if(!row)return null;failed(db,row);return {closed:true};});
+}
+
+/** Commit-order fence for a synchronous HTTP peek response on the SQLite writer lock. */
+export function deliverStudioPeekFixture(db,{ownerHash,sessionHash,deviceId,roomId,role},clock,auth,deliver){
+ fixture(db);if(typeof deliver!=='function')throw Error('INVALID_DELIVERY');
+ return transaction(db,()=>{
+  const row=member(db,ownerHash,sessionHash,deviceId,roomId,role,clock,auth);if(!row||!row.camera_approved||!row.prompter_approved)return null;
+  const source=role==='camera'?'prompter':'camera',message=db.prepare('SELECT sequence,data FROM studio_signal_messages WHERE room_id=? AND source=? ORDER BY sequence LIMIT 1').get(roomId,source);
+  if(!current(db,row,clock,auth))return null;
+  const frame=message?{sequence:message.sequence,data:Buffer.from(message.data)}:{empty:true};
+  // Only trusted synchronous transport enqueue is permitted; pending Promises are never valid.
+  return deliver(frame)===true?true:null;
+ });
+}
+
+/** Enqueue an already computed result only while both bound sessions still hold the writer lock. */
+export function deliverStudioResultFixture(db,{ownerHash,sessionHash,deviceId,roomId,role},clock,auth,deliver){
+ fixture(db);if(typeof deliver!=='function')throw Error('INVALID_DELIVERY');
+ return transaction(db,()=>{
+  const row=member(db,ownerHash,sessionHash,deviceId,roomId,role,clock,auth);if(!row)return null;
+  if(!current(db,row,clock,auth))return null;
+  return deliver()===true?true:null;
+ });
 }

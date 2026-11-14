@@ -1,12 +1,13 @@
 import {createServer} from 'node:http';
 import {EventEmitter} from 'node:events';
 import {initializeStudioRateFixture,admitStudioRateFixture} from './rate-limit.mjs';
-import {createStudioRoomFixture,joinStudioRoomFixture,approveStudioRoomFixture,studioPairingKeyFixture,sendStudioFrameFixture,peekStudioFrameFixture,acknowledgeStudioFrameFixture,closeStudioRoomFixture} from './core.mjs';
+import {prepareStudioRuntimeFixture,cleanupStudioAttemptsFixture} from './runtime.mjs';
+import {createStudioRoomFixture,joinStudioRoomFixture,approveStudioRoomFixture,studioPairingKeyFixture,sendStudioFrameFixture,peekStudioFrameFixture,acknowledgeStudioFrameFixture,closeStudioRoomFixture,deliverStudioPeekFixture,deliverStudioResultFixture} from './core.mjs';
 
 // Local test harness only. Never bind this to a public address or adapt it as-is to production.
 const ORIGIN='https://videomaker.dorfspy.de',MAX_BODY=24576,MAX_BODY_MS=5000;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const response=(res,status,body)=>{if(res.destroyed||res.writableEnded)return;const bytes=Buffer.from(JSON.stringify(body));res.writeHead(status,{'content-type':'application/json','cache-control':'no-store','content-length':bytes.length,'x-content-type-options':'nosniff'});res.end(bytes);};
+const response=(res,status,body)=>{if(res.destroyed||res.writableEnded)return false;const bytes=Buffer.from(JSON.stringify(body));res.writeHead(status,{'content-type':'application/json','cache-control':'no-store','content-length':bytes.length,'x-content-type-options':'nosniff'});res.end(bytes);return true;};
 function body(req){return new Promise((resolve,reject)=>{
  let size=0,done=false,chunks=[];const finish=(err,value)=>{if(done)return;done=true;clearTimeout(timer);req.removeListener('data',onData);req.removeListener('end',onEnd);req.removeListener('error',onError);if(err)reject(err);else resolve(value);};
  const onData=part=>{size+=part.length;if(size>MAX_BODY){finish(Error('body'));req.destroy();return;}chunks.push(part);};
@@ -19,13 +20,15 @@ function frame(value){if(typeof value!=='string'||value.length>21848||!/^[A-Za-z
 export function createStudioRendezvousHttpFixture({db,getPrincipal,authorize,clock,serverSecret,ratePolicy}){
  if(process.env.NODE_ENV!=='test'||process.env.VIDEOMAKER_STUDIO_RENDEZVOUS_FIXTURE!=='1')throw Error('STUDIO_RENDEZVOUS_FIXTURE_DISABLED');
  if(typeof getPrincipal!=='function'||typeof authorize!=='function'||typeof clock!=='function'||!Buffer.isBuffer(serverSecret)||serverSecret.length<32)throw Error('INVALID_FIXTURE');
- initializeStudioRateFixture(db);
+ initializeStudioRateFixture(db);prepareStudioRuntimeFixture(db,clock);
  const wake=new EventEmitter(),waiters=new Set();
  const trace=stage=>{if(process.env.VIDEOMAKER_STUDIO_FIXTURE_DIAGNOSTIC==='1')process.stderr.write('fixture guard: '+stage+'\n');};
  const poll=async(room,role,res,read)=>{
-  const key=room+':'+role;if(waiters.has(key))throw Error('STUDIO_RENDEZVOUS_BACKPRESSURE');waiters.add(key);
-  let finish;const pending=new Promise(resolve=>{let done=false;finish=()=>{if(done)return;done=true;clearTimeout(timer);wake.off(room,finish);res.off('close',finish);resolve();};const timer=setTimeout(finish,1000);wake.once(room,finish);res.once('close',finish);});
-  try{let result=read();if(result.empty){await pending;if(res.destroyed)throw Error('closed');result=read();}return result;}finally{finish();waiters.delete(key);}
+  const key=room+':'+role;if(waiters.has(key))throw Error('STUDIO_RENDEZVOUS_BACKPRESSURE');waiters.add(key);const deadline=performance.now()+1000;
+  try{while(true){
+   let finish;const pending=new Promise(resolve=>{let done=false;finish=()=>{if(done)return;done=true;clearTimeout(timer);wake.off(room,finish);res.off('close',finish);resolve();};const timer=setTimeout(finish,Math.max(1,Math.min(250,deadline-performance.now())));wake.once(room,finish);res.once('close',finish);});
+   try{const result=read();if(!result.empty||performance.now()>=deadline)return result;await pending;if(res.destroyed)throw Error('closed');}finally{finish();}
+  }}finally{waiters.delete(key);}
  };
  const server=createServer(async(req,res)=>{
   let admitted=false;try{admitted=admitStudioRateFixture(db,{ip:req.socket.remoteAddress},serverSecret,clock,ratePolicy);}catch{}
@@ -35,26 +38,27 @@ export function createStudioRendezvousHttpFixture({db,getPrincipal,authorize,clo
   try{admitted=admitStudioRateFixture(db,{ip:req.socket.remoteAddress,ownerHash:principal.ownerHash,sessionHash:principal.sessionHash},serverSecret,clock,ratePolicy);}catch{admitted=false;}
   if(!admitted){response(res,429,{error:'rate'});req.resume();return;}
   let stage='body';try{
-   const input=await body(req),url=req.url||'',base={ownerHash:principal.ownerHash,sessionHash:principal.sessionHash};let result;stage='route-or-core';
-   if(url==='/fixture/rooms'&&exact(input,['deviceId','attemptId']))result=createStudioRoomFixture(db,{...base,deviceId:input.deviceId,attemptId:input.attemptId},serverSecret,clock,authorize);
-   else if(url==='/fixture/rooms/join'&&exact(input,['roomId','deviceId','joinCode']))result=joinStudioRoomFixture(db,{...base,...input},clock,authorize);
+   const input=await body(req),url=req.url||'',base={ownerHash:principal.ownerHash,sessionHash:principal.sessionHash};let result,deliveryMember;stage='route-or-core';
+   if(url==='/fixture/rooms'&&exact(input,['deviceId','attemptId'])){result=createStudioRoomFixture(db,{...base,deviceId:input.deviceId,attemptId:input.attemptId},serverSecret,clock,authorize);deliveryMember={...base,roomId:result.roomId,deviceId:input.deviceId,role:'camera'};}
+   else if(url==='/fixture/rooms/join'&&exact(input,['roomId','deviceId','joinCode'])){result=joinStudioRoomFixture(db,{...base,...input},clock,authorize);deliveryMember={...base,roomId:input.roomId,deviceId:input.deviceId,role:'prompter'};}
    else{
     const match=/^\/fixture\/rooms\/([0-9a-f-]{36})\/(approve|key|send|peek|ack|close)$/.exec(url);if(!match||!UUID.test(match[1]))throw Error('denied');
     const operation=match[2],keys=operation==='send'?['deviceId','role','sequence','data']:operation==='ack'?['deviceId','role','sequence']:['deviceId','role'];if(!exact(input,keys))throw Error('denied');
-    const member={...base,roomId:match[1],deviceId:input.deviceId,role:input.role};
+    const member={...base,roomId:match[1],deviceId:input.deviceId,role:input.role};if(operation!=='close')deliveryMember=member;
     switch(operation){
      case 'approve':result=approveStudioRoomFixture(db,member,clock,authorize);break;
      case 'key':result=studioPairingKeyFixture(db,member,serverSecret,clock,authorize);break;
      case 'send':result=sendStudioFrameFixture(db,{...member,sequence:input.sequence,data:frame(input.data)},clock,authorize);wake.emit(member.roomId);break;
-     case 'peek':result=await poll(member.roomId,member.role,res,()=>peekStudioFrameFixture(db,member,clock,authorize));if(result.data)result={sequence:result.sequence,data:result.data.toString('base64')};break;
+     case 'peek':await poll(member.roomId,member.role,res,()=>peekStudioFrameFixture(db,member,clock,authorize));deliverStudioPeekFixture(db,member,clock,authorize,value=>response(res,200,value.data?{sequence:value.sequence,data:value.data.toString('base64')}:value));return;
      case 'ack':result=acknowledgeStudioFrameFixture(db,{...member,sequence:input.sequence},clock,authorize);break;
      case 'close':result=closeStudioRoomFixture(db,member,clock,authorize);wake.emit(member.roomId);break;
     }
    }
-   response(res,200,result);
+   if(deliveryMember)deliverStudioResultFixture(db,deliveryMember,clock,authorize,()=>response(res,200,result));else response(res,200,result);
   }catch(error){trace(stage);if(error?.message==='STUDIO_RENDEZVOUS_BACKPRESSURE')response(res,429,{error:'backpressure'});else response(res,403,{error:'denied'});}
  });
  server.headersTimeout=6000;server.requestTimeout=6000;server.maxHeadersCount=32;
+ const maintenance=setInterval(()=>{try{if(prepareStudioRuntimeFixture(db,clock).ready)cleanupStudioAttemptsFixture(db,clock);}catch{/* Runtime errors deny guarded operations; never expose internals. */}},2000);maintenance.unref?.();server.on('close',()=>clearInterval(maintenance));
  // Guard both bind and peer address: this test server cannot listen publicly.
  const listen=server.listen.bind(server);server.listen=(port,host,...rest)=>{if(host!=='127.0.0.1'&&host!=='::1')throw Error('LOOPBACK_REQUIRED');return listen(port,host,...rest);};
  return server;

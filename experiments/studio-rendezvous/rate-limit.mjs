@@ -1,5 +1,6 @@
 import {createHmac} from 'node:crypto';
 import {isIP} from 'node:net';
+import {initializeStudioRuntimeSchemaFixture,studioRuntimeAdmissibleFixture} from './runtime.mjs';
 
 // Test-only, shared-SQLite fixed-window admission. No raw IPs or session IDs stored.
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -11,7 +12,7 @@ function normalizedIp(value){
  if(value.startsWith('::ffff:')&&isIP(value.slice(7))===4)value=value.slice(7);
  const type=isIP(value);if(type===4)return value;if(type===6){try{const normalized=new URL('http://['+value+']/').hostname.slice(1,-1);const mapped=/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(normalized);if(mapped){const hi=parseInt(mapped[1],16),lo=parseInt(mapped[2],16);return [hi>>8,hi&255,lo>>8,lo&255].join('.');}return normalized;}catch{return null;}}return null;
 }
-export function initializeStudioRateFixture(db){fixture(db);db.exec('CREATE TABLE IF NOT EXISTS studio_signal_rates(scope TEXT NOT NULL,key_hash TEXT NOT NULL,runtime_id TEXT NOT NULL,start_tick INTEGER NOT NULL,attempts INTEGER NOT NULL,blocked INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(scope,key_hash))');}
+export function initializeStudioRateFixture(db){fixture(db);initializeStudioRuntimeSchemaFixture(db);db.exec('CREATE TABLE IF NOT EXISTS studio_signal_rates(scope TEXT NOT NULL,key_hash TEXT NOT NULL,runtime_id TEXT NOT NULL,start_tick INTEGER NOT NULL,attempts INTEGER NOT NULL,blocked INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(scope,key_hash))');}
 /** Peer IP must come from a trusted transport/proxy; owner/session from verified authentication. */
 export function admitStudioRateFixture(db,{ip,ownerHash,sessionHash},secret,clock,override){
  fixture(db);if(!Buffer.isBuffer(secret)||secret.length<32||typeof clock!=='function')return false;
@@ -19,7 +20,7 @@ export function admitStudioRateFixture(db,{ip,ownerHash,sessionHash},secret,cloc
  const policy=override??limits;if(!policy||Object.keys(limits).some(k=>!Number.isSafeInteger(policy[k])||policy[k]<1||policy[k]>10000))return false;
  const keys=[['ip',canonical],...(ownerHash===undefined?[]:[['owner',ownerHash]]),...(sessionHash===undefined?[]:[['session',sessionHash]])].map(([scope,value])=>({scope,hash:createHmac('sha256',secret).update('studio-signal-rate/v1\0').update(scope).update('\0').update(value).digest('hex')}));
  return db.transaction(()=>{
-  const now=clock();if(!now||!UUID.test(now.runtimeId)||!Number.isSafeInteger(now.tick)||now.tick<0)return false;
+  const now=clock();if(!now||!UUID.test(now.runtimeId)||!Number.isSafeInteger(now.tick)||now.tick<0||!studioRuntimeAdmissibleFixture(db,now))return false;
   // Same-runtime elapsed windows can be discarded; blocked/foreign-runtime rows remain fail-closed.
   db.prepare('DELETE FROM studio_signal_rates WHERE runtime_id=? AND blocked=0 AND start_tick<=?').run(now.runtimeId,now.tick-WINDOW);
   const fetch=db.prepare('SELECT * FROM studio_signal_rates WHERE scope=? AND key_hash=?');let needs=0;const records=[];

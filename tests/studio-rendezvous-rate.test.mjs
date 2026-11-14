@@ -8,10 +8,11 @@ import {tmpdir} from 'node:os';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {initializeStudioRateFixture,admitStudioRateFixture} from '../experiments/studio-rendezvous/rate-limit.mjs';
+import {prepareStudioRuntimeFixture} from '../experiments/studio-rendezvous/runtime.mjs';
 process.env.NODE_ENV='test';process.env.VIDEOMAKER_STUDIO_RENDEZVOUS_FIXTURE='1';
 function setup(db=new Database(':memory:')){
  db.pragma('foreign_keys=ON');initializeStudioRateFixture(db);const secret=randomBytes(32),runtimeId=randomUUID(),identity={ip:'127.0.0.1',ownerHash:'a'.repeat(64),sessionHash:'b'.repeat(64)},policy={ip:3,owner:3,session:3};let tick=100;
- const clock=()=>({runtimeId,tick}),admit=(fields=identity,source=clock)=>admitStudioRateFixture(db,fields,secret,source,policy);
+ const clock=()=>({runtimeId,tick}),admit=(fields=identity,source=clock)=>admitStudioRateFixture(db,fields,secret,source,policy);prepareStudioRuntimeFixture(db,clock);
  return {db,secret,identity,clock,admit,setTime:value=>{tick=value;}};
 }
 

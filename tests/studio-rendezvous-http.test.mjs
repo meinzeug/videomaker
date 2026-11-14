@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,randomBytes,createHmac} from 'node:crypto';
 import {once} from 'node:events';
+import {setTimeout as delay} from 'node:timers/promises';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {spawn} from 'node:child_process';
 import Database from 'better-sqlite3';
 import {initializeStudioRendezvousFixture} from '../experiments/studio-rendezvous/core.mjs';
 import {createStudioRendezvousHttpFixture} from '../experiments/studio-rendezvous/http-fixture.mjs';
@@ -98,4 +103,23 @@ test('logout during a pending long poll prevents the later response from deliver
   const waiting=f.request(f.prompter,base+'/peek',member(f.prompter));await new Promise(resolve=>setTimeout(resolve,50));f.active.delete(f.camera.sessionHash);
   const result=await waiting;assert.equal(result.status,403);assert.equal(result.value.error,'denied');
  }finally{await f.close();}
+});
+
+
+test('logout from a second process fences an already waiting HTTP poll', {timeout:10000},async()=>{
+ const directory=mkdtempSync(join(tmpdir(),'vm-studio-poll-')),path=join(directory,'state.sqlite'),db=new Database(path);db.pragma('foreign_keys=ON');initializeStudioRendezvousFixture(db);
+ const ownerHash='a'.repeat(64),camera={cookie:'cam',sessionHash:'b'.repeat(64),deviceId:randomUUID(),role:'camera'},prompter={cookie:'pro',sessionHash:'c'.repeat(64),deviceId:randomUUID(),role:'prompter'};
+ db.exec('CREATE TABLE synthetic_sessions(session_hash TEXT PRIMARY KEY,active INTEGER NOT NULL)');const insert=db.prepare('INSERT INTO synthetic_sessions VALUES(?,1)');insert.run(camera.sessionHash);insert.run(prompter.sessionHash);
+ const identities=new Map([[camera.cookie,camera],[prompter.cookie,prompter]]),runtimeId=randomUUID(),clock=()=>({runtimeId,wall:1000,tick:1000});
+ const auth=(owner,session)=>owner===ownerHash&&db.prepare('SELECT active FROM synthetic_sessions WHERE session_hash=?').get(session)?.active===1;
+ const server=createStudioRendezvousHttpFixture({db,getPrincipal:req=>{const item=identities.get(req.headers.cookie);return item?{ownerHash,sessionHash:item.sessionHash}:null;},authorize:auth,clock,serverSecret:randomBytes(32)});
+ server.listen(0,'127.0.0.1');await once(server,'listening');const base=`http://127.0.0.1:${server.address().port}`;
+ const req=async(client,path,body)=>{const r=await fetch(base+path,{method:'POST',headers:{origin,'content-type':'application/json',cookie:client.cookie},body:JSON.stringify(body)});return {status:r.status,value:await r.json()};};
+ try{
+  const room=(await req(camera,'/fixture/rooms',{deviceId:camera.deviceId,attemptId:randomUUID()})).value,url=`/fixture/rooms/${room.roomId}`,member=x=>({deviceId:x.deviceId,role:x.role});
+  await req(prompter,'/fixture/rooms/join',{roomId:room.roomId,joinCode:room.joinCode,deviceId:prompter.deviceId});await req(camera,url+'/approve',member(camera));await req(prompter,url+'/approve',member(prompter));
+  const pending=req(prompter,url+'/peek',member(prompter));await delay(50);
+  const child=spawn(process.execPath,['--experimental-strip-types',new URL('./fixtures/studio-revoke-worker.mjs',import.meta.url).pathname],{stdio:['pipe','ignore','ignore']});child.stdin.end(JSON.stringify({path,sessionHash:camera.sessionHash}));const [exitCode]=await once(child,'exit');assert.equal(exitCode,0);
+  const result=await pending;assert.equal(result.status,403);assert.equal(result.value.error,'denied');assert.equal(db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,1);
+ }finally{await new Promise(resolve=>server.close(resolve));db.close();rmSync(directory,{recursive:true,force:true});}
 });

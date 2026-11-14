@@ -7,15 +7,16 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {initializeStudioRendezvousFixture,createStudioRoomFixture,joinStudioRoomFixture,approveStudioRoomFixture,studioPairingKeyFixture,sendStudioFrameFixture,peekStudioFrameFixture,acknowledgeStudioFrameFixture,closeStudioRoomFixture} from '../experiments/studio-rendezvous/core.mjs';
+import {initializeStudioRendezvousFixture,createStudioRoomFixture,joinStudioRoomFixture,approveStudioRoomFixture,studioPairingKeyFixture,sendStudioFrameFixture,peekStudioFrameFixture,acknowledgeStudioFrameFixture,closeStudioRoomFixture,deliverStudioPeekFixture,deliverStudioResultFixture} from '../experiments/studio-rendezvous/core.mjs';
 import {fixture} from './fixtures/relay-delivery-fixture.mjs';
 import {resolveRelayBrowserSession} from '../lib/relay-browser-sessions.ts';
 import {revokeSession} from '../lib/session-revocations.ts';
+import {prepareStudioRuntimeFixture} from '../experiments/studio-rendezvous/runtime.mjs';
 process.env.NODE_ENV='test';process.env.VIDEOMAKER_STUDIO_RENDEZVOUS_FIXTURE='1';
 function setup(db=new Database(':memory:')){
  db.pragma('foreign_keys=ON');initializeStudioRendezvousFixture(db);
  const ownerHash='a'.repeat(64),camera={ownerHash,sessionHash:'b'.repeat(64),deviceId:randomUUID(),role:'camera',attemptId:randomUUID()},prompter={ownerHash,sessionHash:'c'.repeat(64),deviceId:randomUUID(),role:'prompter'},secret=randomBytes(32),runtimeId=randomUUID();let now=1000;const active=new Set([camera.sessionHash,prompter.sessionHash]);
- const clock=()=>({runtimeId,wall:now,tick:now}),auth=(o,s)=>o===ownerHash&&active.has(s);
+ const clock=()=>({runtimeId,wall:now,tick:now}),auth=(o,s)=>o===ownerHash&&active.has(s);prepareStudioRuntimeFixture(db,clock);
  const open=()=>{camera.attemptId=randomUUID();const room=createStudioRoomFixture(db,camera,secret,clock,auth);camera.roomId=room.roomId;prompter.roomId=room.roomId;return room;};
  const join=room=>joinStudioRoomFixture(db,{...prompter,joinCode:room.joinCode},clock,auth);
  const approve=who=>approveStudioRoomFixture(db,who,clock,auth);
@@ -78,7 +79,7 @@ test('caps rooms per owner and cannot run in production',()=>{
 
 test('existing browser session resolver enforces completed logout',()=>{
  const f=fixture();try{initializeStudioRendezvousFixture(f.db);const runtimeId=f.db.prepare('SELECT runtime_id FROM relay_session_tokens LIMIT 1').get().runtime_id,clock=()=>({runtimeId,wall:1023,tick:1023});
-  const auth=(owner,session)=>resolveRelayBrowserSession(f.db,f.secret,owner,session,()=>1023),camera={ownerHash:f.owner,sessionHash:f.camera.session,deviceId:randomUUID(),role:'camera',attemptId:randomUUID()},prompter={ownerHash:f.owner,sessionHash:f.prompter.session,deviceId:randomUUID(),role:'prompter'};
+  prepareStudioRuntimeFixture(f.db,clock);const auth=(owner,session)=>resolveRelayBrowserSession(f.db,f.secret,owner,session,()=>1023),camera={ownerHash:f.owner,sessionHash:f.camera.session,deviceId:randomUUID(),role:'camera',attemptId:randomUUID()},prompter={ownerHash:f.owner,sessionHash:f.prompter.session,deviceId:randomUUID(),role:'prompter'};
   const room=createStudioRoomFixture(f.db,camera,Buffer.alloc(32,1),clock,auth);camera.roomId=room.roomId;prompter.roomId=room.roomId;joinStudioRoomFixture(f.db,{...prompter,joinCode:room.joinCode},clock,auth);approveStudioRoomFixture(f.db,camera,clock,auth);approveStudioRoomFixture(f.db,prompter,clock,auth);
   revokeSession(f.db,f.secret,f.camera.cookie,1024);assert.throws(()=>peekStudioFrameFixture(f.db,prompter,clock,auth));assert.equal(f.db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,1);
  }finally{f.db.close();}
@@ -102,7 +103,7 @@ test('secret rotation cannot silently yield different keys to both devices',()=>
 test('browser expiry tombstone commits with room closure and cannot revive on clock rollback',()=>{
  const f=fixture();try{
   initializeStudioRendezvousFixture(f.db);const runtimeId=f.db.prepare('SELECT runtime_id FROM relay_session_tokens LIMIT 1').get().runtime_id;let wall=1023;
-  const clock=()=>({runtimeId,wall,tick:1023}),auth=(owner,session)=>resolveRelayBrowserSession(f.db,f.secret,owner,session,()=>wall);
+  const clock=()=>({runtimeId,wall,tick:1023}),auth=(owner,session)=>resolveRelayBrowserSession(f.db,f.secret,owner,session,()=>wall);prepareStudioRuntimeFixture(f.db,clock);
   const camera={ownerHash:f.owner,sessionHash:f.camera.session,deviceId:randomUUID(),role:'camera',attemptId:randomUUID()},secret=Buffer.alloc(32,1),room=createStudioRoomFixture(f.db,camera,secret,clock,auth);camera.roomId=room.roomId;
   wall=10000;assert.throws(()=>peekStudioFrameFixture(f.db,camera,clock,auth));assert.equal(f.db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,1);
   assert.equal(f.db.prepare('SELECT expired FROM relay_browser_sessions WHERE session_hash=?').get(f.camera.session).expired,1);
@@ -154,4 +155,22 @@ test('concurrent identical create retries yield one room and the same code', {ti
   const run=()=>{const child=spawn(process.execPath,['--experimental-strip-types',new URL('./fixtures/studio-create-worker.mjs',import.meta.url).pathname],{stdio:['pipe','pipe','ignore']});let out='';child.stdout.on('data',block=>{out+=block;});child.stdin.end(payload);return once(child,'exit').then(([code])=>({code,out:code===0?JSON.parse(out):null}));};
   const result=await Promise.all([run(),run(),run()]);assert.ok(result.every(x=>x.code===0));assert.equal(new Set(result.map(x=>x.out.roomId)).size,1);assert.equal(new Set(result.map(x=>x.out.codeHash)).size,1);assert.equal(result.filter(x=>x.out.created).length,1);assert.equal(f.db.prepare('SELECT count(*) n FROM studio_signal_rooms').get().n,1);
  }finally{f.db.close();rmSync(directory,{recursive:true,force:true});}
+});
+
+
+test('fenced peek rechecks both sessions and never calls the writer after logout',()=>{
+ const f=setup();try{ready(f);f.send(f.camera,1,'sensitive');f.active.delete(f.camera.sessionHash);let called=false;
+  assert.throws(()=>deliverStudioPeekFixture(f.db,f.prompter,f.clock,f.auth,()=>{called=true;return true;}));assert.equal(called,false);assert.equal(f.db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,1);
+ }finally{f.db.close();}
+});
+
+test('fenced peek refuses an asynchronous delivery callback',()=>{
+ const f=setup();try{ready(f);assert.throws(()=>deliverStudioPeekFixture(f.db,f.prompter,f.clock,f.auth,()=>Promise.resolve(true)));}finally{f.db.close();}
+});
+
+
+test('a computed key is never written if either session logs out before the response fence',()=>{
+ const f=setup();try{ready(f);const value=f.key(f.camera);assert.ok(value.token);f.active.delete(f.prompter.sessionHash);let delivered=false;
+  assert.throws(()=>deliverStudioResultFixture(f.db,f.camera,f.clock,f.auth,()=>{delivered=true;return true;}));assert.equal(delivered,false);assert.equal(f.db.prepare('SELECT closed FROM studio_signal_rooms').get().closed,1);
+ }finally{f.db.close();}
 });
