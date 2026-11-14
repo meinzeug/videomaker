@@ -59,6 +59,15 @@ test('Einrichtungsskript schreibt ohne ausdrückliche Aktivierung keine Datenban
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
 
+test('Dienst gibt bei fehlerhafter Konfiguration keine eingegebenen Geheimnisse aus',()=>{
+ const secret='synthetisches-geheimnis-darf-nicht-im-log-stehen';
+ const result=spawnSync(process.execPath,['--experimental-strip-types',new URL('../scripts/videomaker-oidc-service.mjs',import.meta.url).pathname],{
+  env:{...process.env,VIDEOMAKER_OIDC_JWKS:secret,VIDEOMAKER_OIDC_COOKIE_KEYS:secret},encoding:'utf8',
+ });
+ assert.equal(result.status,1);
+ assert.equal(`${result.stdout}${result.stderr}`.includes(secret),false);
+});
+
 test('Dienst startet nur mit expliziter Konfiguration auf Loopback und veröffentlicht keine privaten Schlüssel',async()=>{
  const dir=mkdtempSync(join(homedir(),'.videomaker-provider-start-test-')),file=join(dir,'provider.sqlite');
  const {privateKey}=generateKeyPairSync('rsa',{modulusLength:2048});

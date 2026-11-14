@@ -26,4 +26,4 @@ try{
  const stop=()=>{if(stopping)return;stopping=true;server.close(()=>{db.close();});};
  process.once('SIGINT',stop);process.once('SIGTERM',stop);
  server.on('error',()=>{console.error('OIDC-Dienst konnte nicht gestartet werden.');if(!stopping){stopping=true;db.close();}process.exitCode=1;});
-}catch(error){db?.close();console.error(`OIDC-Dienst nicht gestartet: ${error instanceof Error?error.message:'Fehler'}`);process.exitCode=1;}
+}catch{db?.close();console.error('OIDC-Dienst nicht gestartet. Konfiguration und Datenbank prüfen.');process.exitCode=1;}
