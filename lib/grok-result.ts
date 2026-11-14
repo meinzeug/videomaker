@@ -1,6 +1,7 @@
 import type {FactSheet} from './fact-sheet.ts';
 import {canonicalSourceUrl} from './research.ts';
 import {quoteAttributions,speakerMatches} from './quote-speaker.ts';
+import {containsInternalResearchNote} from './script-internal-notes.ts';
 
 
 export type GrokScript={titles:string[];script:string;thumbnail:string;broll:string[];pin_kommentar:string;hinweise_fuer_dennis:string[];quellen:string[];quellenbelege?:Array<{aussage:string;belege:Array<{text:string;quelle:string;ungeprueft?:boolean}>;ungeprueft:boolean}>};
@@ -18,6 +19,7 @@ export function parseGrokScript(text:string,truncated:boolean,facts:FactSheet,_c
  const issues:Array<{code:string;message:string;pattern?:string}>=[];
  if(!Array.isArray(data.titel)||data.titel.length!==3||!titles||titles.length!==3)issues.push({code:'titel',message:'Das Feld titel muss ein Array mit genau drei nichtleeren Strings sein.'});
  if(!script.trim())issues.push({code:'skript',message:'Das Feld skript muss ein nichtleerer String mit dem vollständigen Telepromptertext sein.'});
+ if(containsInternalResearchNote(script))issues.push({code:'internal_research',message:'Der Sprechertext enthält einen internen Hinweis zum Faktenblatt oder Quellenabruf. Solche Hinweise gehören ausschließlich in die internen Hinweise.'});
  if(!thumbnail)issues.push({code:'thumbnail_text',message:'Das Feld thumbnail_text muss ein nichtleerer String sein.'});
  if(!pin)issues.push({code:'pin_kommentar',message:'Das Feld pin_kommentar muss ein nichtleerer String mit ein bis zwei Sätzen sein.'});
  if(!Array.isArray(data.quellen)||data.quellen.some(x=>typeof x!=='string'))issues.push({code:'quellen',message:'Das Feld quellen muss ein Array aus Strings im Format Quelle – URL sein.'});

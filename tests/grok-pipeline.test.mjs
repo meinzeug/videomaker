@@ -26,6 +26,14 @@ test('autonomous and optional styles do not impose previous editorial limits',()
  assert.match(SOURCE_ONLY_SCRIPT_SYSTEM,/keine eigene Bewertung/);
  assert.match(KONTRAKURS_SCRIPT_SYSTEM,/Kontrakurs.*Orientierung/);
 });
+
+test('only specific internal source-process notes are rejected, not ordinary research or public documents',()=>{
+ const facts=validateFactSheet(rawFacts,source,report);
+ for(const text of ['Weder Zeitpunkt noch Wortlaut liegen im Faktenblatt vor.','Stand der Recherche ist unklar.','Das PDF ist nicht lesbar.','Die Quelle konnte nicht abgerufen werden.','According to the provided fact sheet this is unknown.','The PDF could not be read.']){
+  const parsed=parseGrokScript(answer(text),false,facts);assert.ok(parsed.issues.some(issue=>issue.code==='internal_research'),text);
+ }
+ for(const text of ['Nach Recherche der Zeitung äußerte sich der Minister.','Der Stand der Recherche der Zeitung wurde veröffentlicht.','Im Faktenblatt des Ministeriums steht eine Übersicht.','Die Quelle berichtete über die Recherche.','The source of the report is unavailable.'])assert.ok(parseGrokScript(answer(text),false,facts).project,text);
+});
 test('literal quotes require the exact text in a retrieved original, never a fallback description',()=>{
  const facts=validateFactSheet({...rawFacts,zitate:[...rawFacts.zitate,{text:'erfunden',quelle:url},{text:'wiederholt',quelle:'https://evil.example/x'}]},source,report);
  assert.deepEqual(facts.zitate,[rawFacts.zitate[0]]);assert.match(facts.hinweise_fuer_dennis.join(' '),/2 Zitat/);
