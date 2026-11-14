@@ -5,7 +5,7 @@ import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import Database from 'better-sqlite3';
-import {revokeSession,sessionRevoked} from '../lib/session-revocations.ts';
+import {revokeSession,sessionRevoked,relaySessionId} from '../lib/session-revocations.ts';
 
 const secret='local-test-secret-at-least-32-characters';
 const owner=value=>createHmac('sha256',secret).update('camera-session/v1\0').update(value).digest('hex');
@@ -38,6 +38,22 @@ test('logout works before camera tables exist',()=>{
  assert.equal(sessionRevoked(db,secret,'old-cookie'),true);
  assert.equal(sessionRevoked(db,secret,'another-cookie'),false);
  db.close();
+});
+test('logout revokes only its relay grants and challenges in the same transaction',()=>{
+ for(const fail of [false,true]){
+  const db=fixture(),cookie='relay-cookie',other='other-cookie';
+  try{
+   db.exec('CREATE TABLE relay_session_tokens(session_hash TEXT NOT NULL);CREATE TABLE relay_session_challenges(session_hash TEXT NOT NULL)');
+   for(const table of ['relay_session_tokens','relay_session_challenges'])db.prepare(`INSERT INTO ${table} VALUES(?),(?)`).run(relaySessionId(secret,cookie),relaySessionId(secret,other));
+   if(fail)db.exec("CREATE TRIGGER fail_relay_delete BEFORE DELETE ON relay_session_challenges BEGIN SELECT RAISE(ABORT,'injected failure'); END");
+   if(fail)assert.throws(()=>revokeSession(db,secret,cookie,1000));else revokeSession(db,secret,cookie,1000);
+   assert.equal(sessionRevoked(db,secret,cookie),!fail);
+   for(const table of ['relay_session_tokens','relay_session_challenges']){
+    assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table} WHERE session_hash=?`).get(relaySessionId(secret,cookie)).n,fail?1:0);
+    assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table} WHERE session_hash=?`).get(relaySessionId(secret,other)).n,1);
+   }
+  }finally{db.close();}
+ }
 });
 test('credential deletion failure rolls back revocation and all deletes',()=>{
  const db=fixture(),cookie='test-cookie';

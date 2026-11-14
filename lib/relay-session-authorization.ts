@@ -136,9 +136,10 @@ export function verifyRelayPeerBinding(db:Database.Database,owner:string,partici
  return db.transaction(()=>{
   if(participant.authorize()!==true)return false;
   const initial=clock();validate(owner,participant.session,r,initial);paired(db,owner,r);
-  const own=db.prepare('SELECT * FROM relay_session_tokens WHERE pair_id=? AND role=? AND owner_hash=? AND session_hash=? AND device_id=? AND room_id=? AND token_hash=?').get(r.pairId,r.role,owner,participant.session,r.deviceId,r.roomId,r.tokenHash) as ClockRow|undefined;
+  type Grant=ClockRow&{challenge_id:string;proof_hash:string};
+  const own=db.prepare('SELECT * FROM relay_session_tokens WHERE pair_id=? AND role=? AND owner_hash=? AND session_hash=? AND device_id=? AND room_id=? AND token_hash=?').get(r.pairId,r.role,owner,participant.session,r.deviceId,r.roomId,r.tokenHash) as Grant|undefined;
   const peerRole=r.role==='camera'?'prompter':'camera';
-  const peer=db.prepare('SELECT * FROM relay_session_tokens WHERE pair_id=? AND role=? AND owner_hash=? AND room_id=?').get(r.pairId,peerRole,owner,r.roomId) as (ClockRow&{session_hash:string;device_id:string;token_hash:string})|undefined;
+  const peer=db.prepare('SELECT * FROM relay_session_tokens WHERE pair_id=? AND role=? AND owner_hash=? AND room_id=?').get(r.pairId,peerRole,owner,r.roomId) as (Grant&{session_hash:string;device_id:string;token_hash:string})|undefined;
   const discard=(at:Clock)=>{
    for(const [role,token] of [[r.role,own],[peerRole,peer]] as const)if(token&&clockValid(at)&&token.runtime_id===at.runtimeId&&!fresh(token,at,TICKET_MS))db.prepare('DELETE FROM relay_session_tokens WHERE pair_id=? AND role=? AND owner_hash=? AND room_id=?').run(r.pairId,role,owner,r.roomId);
    return false;
@@ -149,7 +150,12 @@ export function verifyRelayPeerBinding(db:Database.Database,owner:string,partici
   validate(owner,peer.session_hash,peerRequest,initial);paired(db,owner,peerRequest);
   if(!fresh(own,initial,TICKET_MS)||!fresh(peer,initial,TICKET_MS))return discard(initial);
   if(authorizeSessionHash(peer.session_hash)!==true||participant.authorize()!==true||authorizeSessionHash(peer.session_hash)!==true)return false;
-  paired(db,owner,r);paired(db,owner,peerRequest);const final=clock();
+  const final=clock();paired(db,owner,r);paired(db,owner,peerRequest);
+  const find=db.prepare('SELECT * FROM relay_session_tokens WHERE pair_id=? AND role=? AND owner_hash=? AND session_hash=? AND device_id=? AND room_id=? AND token_hash=?');
+  const ownFinal=find.get(r.pairId,r.role,owner,participant.session,r.deviceId,r.roomId,r.tokenHash) as Grant|undefined;
+  const peerFinal=find.get(r.pairId,peerRole,owner,peer.session_hash,peer.device_id,r.roomId,peer.token_hash) as Grant|undefined;
+  const same=(a:Grant,b:Grant|undefined)=>!!b&&a.challenge_id===b.challenge_id&&a.proof_hash===b.proof_hash&&a.runtime_id===b.runtime_id&&a.created_wall===b.created_wall&&a.created_tick===b.created_tick;
+  if(!same(own,ownFinal)||!same(peer,peerFinal))return false;
   return clockValid(final)&&fresh(own,final,TICKET_MS)&&fresh(peer,final,TICKET_MS)?true:discard(final);
  }).immediate();
 }

@@ -150,6 +150,26 @@ test('single bearer check discards an expired grant even when the peer is absent
  }finally{f.db.close();}
 });
 
+test('single bearer check detects grant revocation or replacement during authorization',()=>{
+ for(const mode of ['revoke-own','revoke-peer','replace-own','replace-peer','clock-revoke']){
+  const f=fixture();try{
+   const {challenge,signature}=f.make();completeRelaySession(f.db,owner,session,f.request,challenge.challengeId,signature,()=>clock(1020),()=>true);
+   const peerCredential=randomBytes(32).toString('base64url'),peerRequest={...f.request,deviceId:f.prompter.deviceId,role:'prompter',tokenHash:createHash('sha256').update(peerCredential).digest('hex')};
+   const pc=beginRelaySession(f.db,owner,otherSession,peerRequest,()=>clock(1021),()=>true);
+   const proof=sign('sha256',relaySessionMessage(owner,otherSession,peerRequest,pc.challengeId,pc.nonce),f.prompter.keys.privateKey);
+   completeRelaySession(f.db,owner,otherSession,peerRequest,pc.challengeId,proof,()=>clock(1022),()=>true);
+   const self={session,request:f.request,credential:f.credential,authorize:()=>true};let calls=0,reads=0;
+   const peerAuth=()=>{if(++calls===1&&mode!=='clock-revoke'){
+    const target=mode.endsWith('own')?session:otherSession;
+    if(mode.startsWith('revoke'))revokeRelayOwnerSession(f.db,target);
+    else f.db.prepare('UPDATE relay_session_tokens SET proof_hash=? WHERE session_hash=?').run('f'.repeat(64),target);
+   }return true;};
+   const now=()=>{if(++reads===2&&mode==='clock-revoke')revokeRelayOwnerSession(f.db,otherSession);return clock(1023);};
+   assert.equal(verifyRelayPeerBinding(f.db,owner,self,now,peerAuth),false,mode);
+  }finally{f.db.close();}
+ }
+});
+
 test('begin never returns a challenge that expired while rechecking authorization',()=>{
  const f=fixture();try{
   const first=f.make().challenge;let ticks=0;
