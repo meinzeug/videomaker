@@ -84,3 +84,17 @@ test('creation tokens bind browser owner, generation and deadline',()=>{
  assert.throws(()=>f.store.create({...f.body,creationToken:f.body.creationToken.slice(0,-1)+'x'},owner,clock(1001),true),/Freigabe/);
  f.device(15000);assert.throws(()=>f.store.create(f.body,owner,clock(16000),true),/Freigabe/);
 });
+
+test('a new preview waits until the phone confirms closing the prior peer',()=>{
+ const f=fixture();f.device(1000);f.store.create(f.body,owner,clock(1001),true);
+ assert.equal(f.device(1002).session.sessionId,f.sessionId); // the offer may have reached the phone
+ f.store.close(f.sessionId,owner,clock(1003));
+ const fresh={...f.body,sessionId:randomUUID(),creationToken:f.store.availableDevices(clock(1004),owner).creationToken};
+ assert.equal(f.store.availableDevices(clock(1004),owner).devices[0].available,false);
+ assert.throws(()=>f.store.create(fresh,owner,clock(1004),true),/nicht freigegeben/);
+ assert.deepEqual(f.device(1005,{sessionId:f.sessionId,after:1,events:[]}),{session:null});
+ assert.equal(f.store.availableDevices(clock(1006),owner).devices[0].available,false);
+ assert.deepEqual(f.device(1007),{session:null}); // Android polls idle only after its close callback
+ assert.equal(f.store.availableDevices(clock(1008),owner).devices[0].available,true);
+ assert.equal(f.store.create(fresh,owner,clock(1009),true).created,true);
+});

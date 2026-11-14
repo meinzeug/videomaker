@@ -86,7 +86,7 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
    <button className="secondary-action" disabled={!camera||!camera.recordingId||!['preparing','recording'].includes(camera.phase)||!!pending||loading||connectionError} onClick={()=>camera?.recordingId&&void send({id:crypto.randomUUID(),type:'record_stop',recordingId:camera.recordingId,deviceId:camera.id})}>Aufnahme stoppen</button>
    {pending&&<><button className="secondary-action" disabled={loading||connectionError} onClick={()=>void send(pending)}>Anfrage erneut senden</button><button className="secondary-action" disabled={loading} onClick={()=>{setPending(null);setMessage('Anfrage ausgeblendet. Maßgeblich ist der gemeldete Zustand der Kamera.');}}>Anfrage ausblenden</button></>}
    {camera?.recoverableClaim?.projectId===projectId&&<button className="secondary-action" disabled={loading||connectionError||!!pending||!['idle','error','partial'].includes(camera.phase)} onClick={()=>void resolveFailure()}>Aufnahmesperre auflösen</button>}</div>
-  {camera&&preview&&<CameraPreview deviceId={camera.id} generation={preview.generation} creationToken={preview.creationToken} available={preview.devices.some(item=>item.deviceId===camera.id&&item.available)}/>}
+  {camera&&preview&&<CameraPreview deviceId={camera.id} cameraFront={camera.cameraFront} generation={preview.generation} creationToken={preview.creationToken} available={preview.devices.some(item=>item.deviceId===camera.id&&item.available)}/>}
   {message&&<p role="status">{message}</p>}
  </section>;
 }

@@ -66,7 +66,7 @@ function parseAfter(value:unknown):number{if(!Number.isSafeInteger(value)||Numbe
 function eventSize(event:PreviewEvent){return bytes(JSON.stringify(event));}
 export class CameraPreviewStore {
  private readonly sessions=new Map<string,PreviewSession>();
- private readonly available=new Map<string,{runtimeId:string;wall:number;tick:number}>();
+ private readonly available=new Map<string,{runtimeId:string;wall:number;tick:number;draining:boolean}>();
  private readonly usedSessionIds=new Map<string,{runtimeId:string;wall:number;tick:number}>();
  private readonly tokenKey=randomBytes(32);
  private blockedUntil:{runtimeId:string;wall:number;tick:number}|null=null;
@@ -90,14 +90,19 @@ export class CameraPreviewStore {
   const device=this.available.get(s.deviceId);if(!device||device.runtimeId!==c.runtimeId||c.wall<device.wall||c.tick<device.tick)return 0;
   return Math.min(PREVIEW_MAX_MS-(c.wall-s.createdWall),PREVIEW_MAX_MS-(c.tick-s.createdTick),PREVIEW_BROWSER_LEASE_MS-(c.wall-s.browserWall),PREVIEW_BROWSER_LEASE_MS-(c.tick-s.browserTick),PREVIEW_DEVICE_LEASE_MS-(c.wall-device.wall),PREVIEW_DEVICE_LEASE_MS-(c.tick-device.tick),s.offerAck?PREVIEW_MAX_MS:PREVIEW_OFFER_MS-(c.wall-s.createdWall),s.offerAck?PREVIEW_MAX_MS:PREVIEW_OFFER_MS-(c.tick-s.createdTick));
  }
+ private dropSession(session:PreviewSession,clock:CameraClock){
+  this.markUsed(session.browserOwner,session.id,clock);this.sessions.delete(session.id);
+  const device=this.available.get(session.deviceId);
+  if(device&&session.deviceDelivered>0)this.available.set(session.deviceId,{...device,draining:true});
+ }
  private sweep(clock:CameraClock){
   validateClock(clock);
   for(const [id,used] of this.usedSessionIds)if(used.runtimeId!==clock.runtimeId||(clock.wall>=used.wall&&clock.tick>=used.tick&&clock.wall-used.wall>=TOMBSTONE_MS&&clock.tick-used.tick>=TOMBSTONE_MS))this.usedSessionIds.delete(id);
   if(this.blockedUntil&&(this.blockedUntil.runtimeId!==clock.runtimeId||(clock.wall>=this.blockedUntil.wall&&clock.tick>=this.blockedUntil.tick&&clock.wall-this.blockedUntil.wall>=TOMBSTONE_MS&&clock.tick-this.blockedUntil.tick>=TOMBSTONE_MS)))this.blockedUntil=null;
   for(const [id,d] of this.available)if(d.runtimeId!==clock.runtimeId||clock.wall<d.wall||clock.tick<d.tick||clock.wall-d.wall>=PREVIEW_DEVICE_LEASE_MS||clock.tick-d.tick>=PREVIEW_DEVICE_LEASE_MS)this.available.delete(id);
-  for(const [id,s] of this.sessions)if(this.remaining(s,clock)<=0||!this.available.has(s.deviceId)){this.markUsed(s.browserOwner,id,clock);this.sessions.delete(id);}
+  for(const [id,s] of this.sessions)if(this.remaining(s,clock)<=0||!this.available.has(s.deviceId)){this.dropSession(s,clock);}
  }
- availableDevices(clock:CameraClock,browserOwner:string){this.sweep(clock);if(!/^[a-f0-9]{64}$/.test(browserOwner))return invalid();return {generation:clock.runtimeId,creationToken:this.createToken(browserOwner,clock),devices:[...this.available.keys()].map(deviceId=>({deviceId,available:true}))};}
+ availableDevices(clock:CameraClock,browserOwner:string){this.sweep(clock);if(!/^[a-f0-9]{64}$/.test(browserOwner))return invalid();return {generation:clock.runtimeId,creationToken:this.createToken(browserOwner,clock),devices:[...this.available].map(([deviceId,state])=>({deviceId,available:!state.draining}))};}
  create(input:unknown,browserOwner:string,clock:CameraClock,deviceAvailable:boolean){
   this.sweep(clock);
   if(!object(input)||typeof input.generation!=='string'||!uuid.test(input.generation)||typeof input.sessionId!=='string'||!uuid.test(input.sessionId)||typeof input.deviceId!=='string'||!uuid.test(input.deviceId)||!validSdp(input.offer,'offer')||!/^[a-f0-9]{64}$/.test(browserOwner))return invalid();
@@ -106,7 +111,7 @@ export class CameraPreviewStore {
   const offerHash=sha(input.offer),existing=this.sessions.get(input.sessionId);
   if(existing){if(existing.browserOwner!==browserOwner||existing.deviceId!==input.deviceId||existing.offerHash!==offerHash)throw new CameraPreviewError('conflict','Vorschau-Sitzung ist bereits anders belegt.');existing.browserWall=clock.wall;existing.browserTick=clock.tick;return {sessionId:existing.id,leaseRemainingMs:this.remaining(existing,clock),created:false};}
   if(this.usedSessionIds.has(`${browserOwner}:${input.sessionId}`))throw new CameraPreviewError('conflict','Vorschau-Sitzung wurde bereits beendet.');
-  if(!deviceAvailable||!this.available.has(input.deviceId))throw new CameraPreviewError('conflict','Kamera hat die Vorschau nicht freigegeben oder ist nicht erreichbar.');
+  if(!deviceAvailable||!this.available.has(input.deviceId)||this.available.get(input.deviceId)?.draining)throw new CameraPreviewError('conflict','Kamera hat die Vorschau nicht freigegeben oder ist nicht erreichbar.');
   if([...this.sessions.values()].some(session=>session.deviceId===input.deviceId))throw new CameraPreviewError('conflict','Für diese Kamera läuft bereits eine Vorschau.');
   if(this.sessions.size>=MAX_GLOBAL)throw new CameraPreviewError('capacity','Zu viele Vorschauen gleichzeitig.');
   if(this.blockedUntil||this.usedSessionIds.size>=MAX_TOMBSTONES)throw new CameraPreviewError('capacity','Vorschau-Sitzungslimit erreicht; bitte später erneut versuchen.');
@@ -146,15 +151,20 @@ export class CameraPreviewStore {
   if(!input.available){if(events.length)return invalid();this.available.delete(deviceId);for(const [id,value] of this.sessions)if(value.deviceId===deviceId){this.markUsed(value.browserOwner,id,clock);this.sessions.delete(id);}return {session:null};}
   if(!this.available.has(deviceId)&&this.available.size>=64)throw new CameraPreviewError('capacity','Zu viele verfügbare Kameras.');
   const s=[...this.sessions.values()].find(session=>session.deviceId===deviceId);
-  if(!s){if(events.length)return invalid();this.available.set(deviceId,{runtimeId:clock.runtimeId,wall:clock.wall,tick:clock.tick});return {session:null};}
+  if(!s){
+   // A poll naming an old session makes the device close its peer. Only its
+   // later idle poll proves that the close callback has completed.
+   if(input.sessionId===null&&(after!==0||events.length))return invalid();
+   this.available.set(deviceId,{runtimeId:clock.runtimeId,wall:clock.wall,tick:clock.tick,draining:input.sessionId!==null});return {session:null};
+  }
   if(input.sessionId!==null&&input.sessionId!==s.id)throw new CameraPreviewError('conflict','Vorschau-Sitzung ist veraltet.');
   if(input.sessionId===null&&(after!==0||events.length))return invalid();
   if(after>s.deviceDelivered)throw new CameraPreviewError('conflict','Ungültige Vorschau-Bestätigung.');
-  const other=this.append(s,'device',events,after);this.available.set(deviceId,{runtimeId:clock.runtimeId,wall:clock.wall,tick:clock.tick});if(after>=1)s.offerAck=true;
+  const other=this.append(s,'device',events,after);this.available.set(deviceId,{runtimeId:clock.runtimeId,wall:clock.wall,tick:clock.tick,draining:false});if(after>=1)s.offerAck=true;
   const outgoing=other.filter(event=>event.seq>after);s.deviceDelivered=Math.max(s.deviceDelivered,outgoing.at(-1)?.seq??0);
   return {session:{sessionId:s.id,deviceId:s.deviceId,leaseRemainingMs:this.remaining(s,clock),events:outgoing}};
  }
- close(id:string,browserOwner:string,clock:CameraClock){this.sweep(clock);if(!uuid.test(id)||!/^[a-f0-9]{64}$/.test(browserOwner))return invalid();this.markUsed(browserOwner,id,clock);const s=this.sessions.get(id);if(s&&s.browserOwner===browserOwner)this.sessions.delete(id);return {closed:true};}
+ close(id:string,browserOwner:string,clock:CameraClock){this.sweep(clock);if(!uuid.test(id)||!/^[a-f0-9]{64}$/.test(browserOwner))return invalid();this.markUsed(browserOwner,id,clock);const s=this.sessions.get(id);if(s&&s.browserOwner===browserOwner)this.dropSession(s,clock);return {closed:true};}
 }
 declare global {var __cameraPreviewStore:CameraPreviewStore|undefined;}
 export function cameraPreviewStore(){return globalThis.__cameraPreviewStore??=new CameraPreviewStore();}

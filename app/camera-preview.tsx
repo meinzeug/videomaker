@@ -1,5 +1,6 @@
 'use client';
 import {useEffect,useRef,useState} from 'react';
+import {cameraLensChanged} from '@/lib/camera-preview-reconnect';
 
 type SignalEvent={id:string;kind:'answer'|'ice'|'ice_end'|'end';data:string;mid:string|null;mLineIndex:number|null;seq?:number};
 type Session={id:string;deviceId:string;generation:string;pc:RTCPeerConnection;pending:SignalEvent[];after:number;closed:boolean;timer:ReturnType<typeof setTimeout>|null;frameTimer:ReturnType<typeof setTimeout>|null;frameCheckTimer:ReturnType<typeof setTimeout>|null;deadline:number;abort:AbortController;iceCount:number;framesSeen:boolean;lastFrame:number};
@@ -14,19 +15,39 @@ function localCandidate(value:string){
 }
 
 /** The separate peer never owns or stops the Android camera, recorder or phone peer. */
-export default function CameraPreview({deviceId,available,generation,creationToken}:{deviceId:string;available:boolean;generation:string;creationToken:string}){
+export default function CameraPreview({deviceId,available,generation,creationToken,cameraFront}:{deviceId:string;available:boolean;generation:string;creationToken:string;cameraFront:boolean|null}){
  const [phase,setPhase]=useState<Phase>('idle'),[message,setMessage]=useState('');
  const video=useRef<HTMLVideoElement>(null),current=useRef<Session|null>(null),mounted=useRef(true);
+ const wanted=useRef(false),release=useRef<Promise<void>>(Promise.resolve()),lens=useRef<{deviceId:string;front:boolean|null}|null>(null);
+ const pendingReconnect=useRef<{deviceId:string;generation:string;front:boolean;wait:Promise<void>}|null>(null);
+ const config=useRef({deviceId,generation,available,cameraFront});config.current={deviceId,generation,available,cameraFront};
  function close(session:Session,reason?:string){
   if(session.closed)return;session.closed=true;session.abort.abort();if(session.timer)clearTimeout(session.timer);if(session.frameTimer)clearTimeout(session.frameTimer);if(session.frameCheckTimer)clearTimeout(session.frameCheckTimer);
   session.pc.onicecandidate=null;session.pc.ontrack=null;session.pc.onconnectionstatechange=null;session.pc.close();
   if(video.current)video.current.srcObject=null;
   if(current.current===session)current.current=null;
-  void fetch(`/api/camera-preview/sessions/${encodeURIComponent(session.id)}`,{method:'DELETE',keepalive:true}).catch(()=>{});
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),3000);
+  release.current=fetch(`/api/camera-preview/sessions/${encodeURIComponent(session.id)}`,{method:'DELETE',keepalive:true,signal:controller.signal}).then(()=>{}).catch(()=>{}).finally(()=>clearTimeout(timeout));
   if(mounted.current){setPhase(reason?'error':'idle');setMessage(reason||'');}
  }
- useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;const session=current.current;if(session)close(session);};},[]);
+ useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;wanted.current=false;pendingReconnect.current=null;const session=current.current;if(session)close(session);};},[]);
  useEffect(()=>{const session=current.current;if(session&&(!available||session.deviceId!==deviceId||session.generation!==generation))close(session,'Die Kamerafreigabe ist nicht mehr verfügbar.');},[available,deviceId,generation]);
+ useEffect(()=>{
+  const next={deviceId,front:cameraFront};
+  if(cameraLensChanged(lens.current,next)&&wanted.current&&typeof cameraFront==='boolean'){
+   const session=current.current;if(session)close(session);
+   pendingReconnect.current={deviceId,generation,front:cameraFront,wait:release.current};
+   setPhase('connecting');setMessage('Livebild wird nach dem Kamerawechsel erneut verbunden …');
+  }
+  lens.current=next;
+  if(pendingReconnect.current&&(pendingReconnect.current.deviceId!==deviceId||pendingReconnect.current.generation!==generation))pendingReconnect.current=null;
+  const pending=pendingReconnect.current;if(!pending||!available)return;
+  void pending.wait.then(()=>{
+   const latest=config.current;
+   if(!mounted.current||!wanted.current||pendingReconnect.current!==pending||!latest.available||latest.deviceId!==pending.deviceId||latest.generation!==pending.generation||latest.cameraFront!==pending.front)return;
+   pendingReconnect.current=null;void start();
+  });
+ },[deviceId,generation,available,cameraFront]);
  async function start(){
   if(current.current||!available)return;
   if(!window.isSecureContext||typeof RTCPeerConnection==='undefined'){setPhase('error');setMessage('Livebild benötigt eine sichere Verbindung und WebRTC.');return;}
@@ -78,5 +99,5 @@ export default function CameraPreview({deviceId,available,generation,creationTok
    await exchange();
   }catch(error){close(session,error instanceof Error?error.message:'Die Vorschau konnte nicht gestartet werden.');}
  }
- return <div className="camera-preview"><div className="device-actions"><button type="button" className="secondary-action" disabled={!available||phase==='connecting'||phase==='live'} onClick={()=>void start()}>Livebild öffnen</button>{phase!=='idle'&&<button type="button" className="secondary-action" onClick={()=>{const s=current.current;if(s)close(s);else {setPhase('idle');setMessage('');}}}>Livebild schließen</button>}</div>{!available&&<p>Die Webvorschau muss am Kameragerät ausdrücklich freigegeben sein.</p>}{message&&<p role="status">{message}</p>}<video ref={video} muted playsInline autoPlay aria-label="Smartphone-Livebild" hidden={phase==='idle'||phase==='error'}/></div>;
+ return <div className="camera-preview"><div className="device-actions"><button type="button" className="secondary-action" disabled={!available||phase==='connecting'||phase==='live'} onClick={()=>{wanted.current=true;void start();}}>Livebild öffnen</button>{phase!=='idle'&&<button type="button" className="secondary-action" onClick={()=>{wanted.current=false;pendingReconnect.current=null;const s=current.current;if(s)close(s);else {setPhase('idle');setMessage('');}}}>Livebild schließen</button>}</div>{!available&&<p>Die Webvorschau muss am Kameragerät ausdrücklich freigegeben sein.</p>}{message&&<p role="status">{message}</p>}<video ref={video} muted playsInline autoPlay aria-label="Smartphone-Livebild" hidden={phase==='idle'||phase==='error'}/></div>;
 }
