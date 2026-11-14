@@ -288,6 +288,8 @@ test('internal research-process notes are identified without forbidding public f
   'Im vorliegenden Faktenblatt steht dazu nichts.',
   'Stand der Recherche: Die Angabe ist unklar.',
   'Das PDF war nicht abrufbar.',
+  'According to the provided fact sheet, the source was not available.',
+  'The PDF could not be read.',
  ]){
   const result=parseGrokScript(answer(text),false,facts);
   assert.equal(result.project,null,text);assert.ok(result.issues.some(x=>x.code==='internal_research'),text);
@@ -295,8 +297,10 @@ test('internal research-process notes are identified without forbidding public f
  for(const text of [
   'Das Faktenblatt der Bundesregierung nennt die geplante Änderung.',
   'Die Recherche der Journalistin untersuchte die Abläufe.',
+  'Der Stand der Recherche der Zeitung wurde veröffentlicht.',
   'Die Quelle des Gutachtens ist seit Jahren nicht zugänglich.',
   'Das PDF des Ministeriums ist öffentlich nicht abrufbar.',
+  'The government fact sheet describes the planned change.',
  ]) assert.ok(parseGrokScript(answer(text),false,facts).project,`legitimate external reference must not be banned: ${text}`);
 });
 
