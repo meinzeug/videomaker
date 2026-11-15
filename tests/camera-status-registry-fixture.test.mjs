@@ -102,3 +102,27 @@ test('pending proof from disconnected channel is not accepted after reconnect',(
 test('invalid or unavailable clock fails closed',()=>{
  const f=fixture();try{const q=f.open();assert.deepEqual(acceptStatusFixture(f.db,b,q.requestId,s,f.signed(q),()=>{throw Error('clock');}),{state:'unknown'});assert.deepEqual(readStatusFixture(f.db,b,q.requestId,()=>Number.NaN),{state:'unknown'});}finally{f.db.close();}
 });
+
+test('slow opening and slow final read cannot return stale state',()=>{
+ const f=fixture();try{
+  let calls=0;const slowOpen=()=>++calls===1?1_000_000:1_010_000;
+  assert.deepEqual(openStatusFixture(f.db,b,slowOpen),{state:'unknown'});
+  assert.equal(f.db.prepare('SELECT count(*) n FROM status_fixture_requests').get().n,0);
+  f.set(1_010_001);const q=f.open();assert.equal(acceptStatusFixture(f.db,b,q.requestId,s,f.signed(q),f.clock).state,'complete');
+  calls=0;const slowRead=()=>++calls===1?1_010_001:1_020_001;
+  assert.deepEqual(readStatusFixture(f.db,b,q.requestId,slowRead),{state:'unknown'});
+ }finally{f.db.close();}
+});
+test('revocation during final read cannot return known status',()=>{
+ const f=fixture();try{const q=f.open();assert.equal(acceptStatusFixture(f.db,b,q.requestId,s,f.signed(q),f.clock).state,'complete');let calls=0;
+  const revoking=()=>{if(++calls===2)f.db.prepare('UPDATE status_fixture_sessions SET revoked=1 WHERE session_hash=?').run(device);return f.clock();};
+  assert.deepEqual(readStatusFixture(f.db,b,q.requestId,revoking),{state:'unknown'});
+ }finally{f.db.close();}
+});
+
+test('the same key associated with another camera makes either identity ambiguous',()=>{
+ const f=fixture();try{const key=f.keys.publicKey.export({format:'der',type:'spki'});
+  f.db.prepare('INSERT INTO status_fixture_pairs VALUES(?,?,?,?,?,1,0,1)').run(owner,b.prompterId,randomUUID(),randomUUID(),key);
+  assert.deepEqual(f.open(),{state:'unknown'});
+ }finally{f.db.close();}
+});

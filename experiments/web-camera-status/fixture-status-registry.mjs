@@ -16,7 +16,7 @@ function liveSessions(db,b){
  if(!browser||!device||b.browserSession===b.deviceSession||browser.owner!==b.owner||device.owner!==b.owner||device.device_id!==b.prompterId)return false;
  return true;
 }
-function activePair(db,b){return db.prepare('SELECT * FROM status_fixture_pairs WHERE owner=? AND prompter_id=? AND camera_id=? AND epoch=? AND revoked=0 AND connected=1').get(b.owner,b.prompterId,b.cameraId,b.pairEpoch);}
+function activePair(db,b){return db.prepare('SELECT p.* FROM status_fixture_pairs p WHERE p.owner=? AND p.prompter_id=? AND p.camera_id=? AND p.epoch=? AND p.revoked=0 AND p.connected=1 AND NOT EXISTS (SELECT 1 FROM status_fixture_pairs other WHERE other.camera_public_key=p.camera_public_key AND other.camera_id<>p.camera_id)').get(b.owner,b.prompterId,b.cameraId,b.pairEpoch);}
 function validContext(b){return b&&[b.owner,b.browserSession,b.deviceSession].every(v=>typeof v==='string'&&HASH.test(v))&&[b.cameraId,b.prompterId,b.pairEpoch].every(v=>typeof v==='string'&&UUID.test(v))&&b.cameraId!==b.prompterId;}
 const sameRequest=(a,b)=>!!a&&!!b&&['id','owner','browser_session','device_session','camera_id','prompter_id','epoch','nonce','created_ms','link_generation','state','result','key_hash'].every(k=>a[k]===b[k]);
 function matches(r,b){return r&&r.owner===b.owner&&r.browser_session===b.browserSession&&r.device_session===b.deviceSession&&r.camera_id===b.cameraId&&r.prompter_id===b.prompterId&&r.epoch===b.pairEpoch;}
@@ -34,6 +34,8 @@ export function openStatusFixture(db,input,clock){enabled(db);const b=copyContex
  const now=observe(db,clock),pair=activePair(db,b);if(now===null||!liveSessions(db,b)||!pair||db.prepare('SELECT count(*) n FROM status_fixture_requests').get().n>=MAX_REQUESTS)return unknown();
  const requestId=randomUUID(),nonce=randomBytes(32).toString('base64url');
  db.prepare('INSERT INTO status_fixture_requests VALUES(?,?,?,?,?,?,?,?,?,?,\'pending\',NULL,NULL)').run(requestId,b.owner,b.browserSession,b.deviceSession,b.cameraId,b.prompterId,b.pairEpoch,nonce,now,pair.link_generation);
+ const inserted=db.prepare('SELECT * FROM status_fixture_requests WHERE id=?').get(requestId),end=observe(db,clock),last=db.prepare('SELECT * FROM status_fixture_requests WHERE id=?').get(requestId),endPair=activePair(db,b);
+ if(!fresh(inserted,end)||!sameRequest(inserted,last)||!liveSessions(db,b)||!endPair||inserted.link_generation!==endPair.link_generation||keyHash(endPair.camera_public_key)!==keyHash(pair.camera_public_key)){db.prepare('DELETE FROM status_fixture_requests WHERE id=?').run(requestId);return unknown();}
  return {state:'pending',requestId,nonce};
  }).immediate();}
 /** The key is read from the bound pair row, never from the proof request. */
@@ -52,6 +54,8 @@ export function readStatusFixture(db,input,requestId,clock){enabled(db);const b=
  const now=observe(db,clock),r=db.prepare('SELECT * FROM status_fixture_requests WHERE id=?').get(requestId);
  const pair=activePair(db,b);
  if(!matches(r,b)||!fresh(r,now)||!liveSessions(db,b)||!pair||r.link_generation!==pair.link_generation||r.state!=='complete'||r.key_hash!==keyHash(pair.camera_public_key))return unknown();
+ const end=observe(db,clock),current=db.prepare('SELECT * FROM status_fixture_requests WHERE id=?').get(requestId),endPair=activePair(db,b);
+ if(!fresh(r,end)||!sameRequest(r,current)||!liveSessions(db,b)||!endPair||r.link_generation!==endPair.link_generation||r.key_hash!==keyHash(endPair.camera_public_key))return unknown();
  return {state:'known',status:JSON.parse(r.result)};
  }).immediate();}
 
