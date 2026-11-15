@@ -20,7 +20,7 @@ export default function ImageChoiceDialog({title,sources,channels,initial,error,
  function toggleTone(tone:ScriptTone){setChosenTones(previous=>previous.includes(tone)?previous.filter(value=>value!==tone):[...previous,tone]);}
  return <dialog ref={dialog} className="image-choice-dialog" aria-labelledby="image-choice-title" aria-describedby="image-choice-description" onClose={onClose}>
   {sessionExpired&&<div className="alert" role="status">Deine Anmeldung ist nicht mehr gültig. <button type="button" onClick={onReauthenticate}>Erneut anmelden</button></div>}
-  {generationUncertain&&<div className="alert" role="status">Der Erstellungsstatus ist ungeklärt. Deine Auswahl bleibt erhalten; prüfe zuerst den Status. <button type="button" onClick={onReviewStatus}>Status prüfen</button></div>}
+  {generationUncertain&&<div className="alert" role="status">Der Status ist ungeklärt. Eine bereits gesendete Web-Recherche kann Kosten verursacht haben. Deine Auswahl bleibt erhalten; prüfe zuerst den Status. <button type="button" onClick={onReviewStatus}>Status prüfen</button></div>}
   <div className="image-choice-header"><div><p className="eyebrow">SKRIPT VORBEREITEN</p><h2 id="image-choice-title">Gestalte dein Skript.</h2></div><button type="button" className="icon image-choice-close" aria-label="Dialog schließen" onClick={()=>dialog.current?.close()}><X size={20}/></button></div>
   <p id="image-choice-description" className="image-choice-intro">Lege für „{title}“ Quellen, Ton und Bildoption fest. Alle weiteren Vorgaben sind optional.</p>
   {error&&<p className="alert" role="alert">{error}</p>}
