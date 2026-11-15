@@ -37,6 +37,47 @@ test('late authorization rollback never delivers and deadline crossing expires',
   assert.equal(deliverStatusProbe(f.db,f.identity,id,crossing,f.auth).state,'expired');
  }finally{f.db.close();}
 });
+test('slow authorization expires every delivery state and never resurrects a completed result',()=>{
+ for(const state of ['queued','delivered','complete']){
+  const f=fixture();try{
+   const {id}=beginStatusProbe(f.db,f.identity,f.clock,f.auth);
+   if(state!=='queued')deliverStatusProbe(f.db,f.identity,id,f.clock,f.auth);
+   if(state==='complete')completeStatusProbe(f.db,f.identity,id,snap(),f.clock,f.auth,()=>true);
+   let calls=0;const slow=()=>{if(++calls===1)f.setClock(11000);return true;};
+   assert.deepEqual(deliverStatusProbe(f.db,f.identity,id,f.clock,slow),{id,state:'expired'});
+   const stored=f.db.prepare('SELECT state,result FROM web_camera_status_probe_fixture WHERE id=?').get(id);
+   assert.deepEqual(stored,{state:'expired',result:null});
+   f.setClock(1000);assert.deepEqual(readStatusProbe(f.db,f.identity,id,f.clock,f.auth),{id,state:'expired'});
+  }finally{f.db.close();}
+ }
+});
+test('completion cannot call camera proof after slow authorization crosses deadline',()=>{
+ const f=fixture();try{const {id}=beginStatusProbe(f.db,f.identity,f.clock,f.auth);deliverStatusProbe(f.db,f.identity,id,f.clock,f.auth);
+  let proofs=0;const slow=()=>{f.setClock(11000);return true;};
+  assert.deepEqual(completeStatusProbe(f.db,f.identity,id,snap(),f.clock,slow,()=>{proofs++;return true;}),{id,state:'expired'});
+  assert.equal(proofs,0);f.setClock(1000);assert.equal(readStatusProbe(f.db,f.identity,id,f.clock,f.auth).state,'expired');
+ }finally{f.db.close();}
+});
+test('proof crossing deadline expires and clears a status instead of completing',()=>{
+ const f=fixture();try{const {id}=beginStatusProbe(f.db,f.identity,f.clock,f.auth);deliverStatusProbe(f.db,f.identity,id,f.clock,f.auth);
+  assert.deepEqual(completeStatusProbe(f.db,f.identity,id,snap(),f.clock,f.auth,()=>{f.setClock(11000);return true;}),{id,state:'expired'});
+  f.setClock(1000);assert.deepEqual(readStatusProbe(f.db,f.identity,id,f.clock,f.auth),{id,state:'expired'});
+ }finally{f.db.close();}
+});
+test('expiry seen before an authorization clock rollback remains permanent',()=>{
+ const f=fixture();try{const {id}=beginStatusProbe(f.db,f.identity,f.clock,f.auth);f.setClock(11000);
+  const rollback=()=>{f.setClock(1000);return true;};
+  assert.deepEqual(deliverStatusProbe(f.db,f.identity,id,f.clock,rollback),{id,state:'expired'});
+  assert.deepEqual(readStatusProbe(f.db,f.identity,id,f.clock,f.auth),{id,state:'expired'});
+ }finally{f.db.close();}
+});
+test('mutating clock callback cannot bypass the final row fence',()=>{
+ const f=fixture();try{const {id}=beginStatusProbe(f.db,f.identity,f.clock,f.auth);let calls=0;
+  const clock=()=>{if(++calls===2)f.db.prepare("UPDATE web_camera_status_probe_fixture SET state='expired' WHERE id=?").run(id);return f.clock();};
+  assert.throws(()=>deliverStatusProbe(f.db,f.identity,id,clock,f.auth));
+  assert.equal(readStatusProbe(f.db,f.identity,id,f.clock,f.auth).state,'queued');
+ }finally{f.db.close();}
+});
 test('concurrent query is fenced per camera and other pair cannot inspect it',()=>{
  const f=fixture();try{const {id}=beginStatusProbe(f.db,f.identity,f.clock,f.auth);assert.throws(()=>beginStatusProbe(f.db,{...f.identity,pairEpoch:randomUUID()},f.clock,f.auth));
   assert.throws(()=>deliverStatusProbe(f.db,{...f.identity,cameraId:randomUUID()},id,f.clock,f.auth));
