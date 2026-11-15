@@ -8,7 +8,6 @@ import shutil
 import signal
 import socket
 import subprocess
-import tempfile
 import time
 import urllib.request
 import json
@@ -36,7 +35,8 @@ def main():
     cache = WORK / '.next-live-owner-fixture'
     if original.count(NEEDLE)!=1 or cache.exists() or listeners()[0]:
         raise RuntimeError('unexpected configuration, cache, or listener')
-    fixture=Path(tempfile.mkdtemp(prefix='.videomaker-live-http.',dir=HOME))
+    fixture=HOME / ('.videomaker-live-http.'+secrets.token_hex(12))
+    fixture.mkdir(mode=0o700)
     (fixture/'.fixture').write_text(MARKER)
     proof=secrets.token_hex(32);proc=None;preserve=False
     handlers={sig:signal.signal(sig,interrupted) for sig in (signal.SIGINT,signal.SIGTERM)}

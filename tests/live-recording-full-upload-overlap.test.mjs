@@ -60,6 +60,47 @@ test('legacy arbitrary upload is allowed normally and temporarily postponed duri
  }
 });
 
+for(const differentProject of [false,true])test(`WEB-camera full upload cannot overlap the same LAN take${differentProject?' in another project':''}`,()=>{
+ const root=mkdtempSync(path.join(tmpdir(),'videomaker-live-web-full-'));
+ const filename=path.join(root,'synthetic.sqlite'),db=new Database(filename);let store,lease;
+ const p=randomUUID(),q=differentProject?randomUUID():p,recording=randomUUID(),liveId=cameraUploadIdFor(recording,p),webId=cameraUploadIdFor(recording,q),sha='a'.repeat(64);
+ try{
+  db.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);initializeLiveStaging(db);
+  store=createLiveStaging(db,root,()=>4n*1024n*1024n*1024n);store.begin(liveId,p,recording);
+  // Simulates an inconsistent/restored mapping without inventing a new device claim.
+  db.prepare('INSERT INTO camera_project_upload_ids(upload_id,recording_id,project_id) VALUES(?,?,?)').run(webId,recording,q);
+  db.prepare("INSERT INTO camera_project_device_manifests(recording_id,project_id,device_id,phase,size,sha256,observed_at) VALUES(?,?,?,'ready',?,?,?)").run(recording,q,randomUUID(),1,sha,1);
+  lease=acquireRecordingUpload(db);assert.ok(lease);
+  assert.throws(()=>lockAndValidateCameraUpload(db,lease.token,webId,recording,q,1,sha,lease.check),/LAN-Upload/);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM camera_project_upload_locks').get().n,0);
+ }finally{
+  if(lease){releaseCameraUploadLock(db,lease.token);lease.release();}
+  if(store&&db.prepare('SELECT 1 FROM live_recording_stages WHERE id=?').get(liveId))store.cancel(liveId,p,recording);
+  db.close();unlinkSync(filename);rmdirSync(path.join(root,'.live-recording-staging'));rmdirSync(root);
+ }
+});
+
+test('an existing WEB full-upload lock and orphaned mapping both prevent LAN begin',()=>{
+ const root=mkdtempSync(path.join(tmpdir(),'videomaker-web-full-first-'));
+ const filename=path.join(root,'synthetic.sqlite'),db=new Database(filename);let store,lease;
+ const p=randomUUID(),recording=randomUUID(),id=cameraUploadIdFor(recording,p),sha='a'.repeat(64);
+ try{
+  db.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);initializeLiveStaging(db);
+  store=createLiveStaging(db,root,()=>4n*1024n*1024n*1024n);
+  db.prepare('INSERT INTO camera_project_upload_ids(upload_id,recording_id,project_id) VALUES(?,?,?)').run(id,recording,p);
+  db.prepare("INSERT INTO camera_project_device_manifests(recording_id,project_id,device_id,phase,size,sha256,observed_at) VALUES(?,?,?,'ready',?,?,?)").run(recording,p,randomUUID(),1,sha,1);
+  lease=acquireRecordingUpload(db);assert.ok(lease);
+  lockAndValidateCameraUpload(db,lease.token,id,recording,p,1,sha,lease.check);
+  assert.throws(()=>store.begin(id,p,recording),/FULL_UPLOAD_IN_PROGRESS/);
+  releaseCameraUploadLock(db,lease.token);
+  assert.throws(()=>store.begin(id,p,recording),/WEB_CLAIM/);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM live_recording_stages').get().n,0);
+ }finally{
+  if(lease){releaseCameraUploadLock(db,lease.token);lease.release();}
+  db.close();unlinkSync(filename);rmdirSync(path.join(root,'.live-recording-staging'));rmdirSync(root);
+ }
+});
+
 test('concurrent processes cannot simultaneously reserve live and whole-file paths',async()=>{
  const root=mkdtempSync(path.join(tmpdir(),'videomaker-live-path-race-'));
  const filename=path.join(root,'synthetic.sqlite'),db=new Database(filename);

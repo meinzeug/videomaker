@@ -146,6 +146,12 @@ export function assertCameraUploadConsistent(db:Database.Database,recordingId:st
 export function lockAndValidateCameraUpload(db:Database.Database,token:string,uploadId:string,cameraRecordingId:string|null,projectId:string,size:number,sha256:string|null,check:()=>void,pathOwner?:{mode:'live'|'full';recordingId:string;authorize:()=>void}){
  return db.transaction(()=>{
   check();
+  if(cameraRecordingId){
+   const has=(name:string)=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+   if((has('live_recording_stages')&&db.prepare('SELECT 1 FROM live_recording_stages WHERE recording_id=? COLLATE NOCASE LIMIT 1').get(cameraRecordingId))||
+      (has('live_upload_path_owners')&&db.prepare('SELECT 1 FROM live_upload_path_owners WHERE recording_id=? COLLATE NOCASE LIMIT 1').get(cameraRecordingId)))
+    throw new CameraUploadGateError('camera_upload_busy','Diese Aufnahme ist einem LAN-Upload zugeordnet; Ursprung bitte prüfen.');
+  }
   if(pathOwner){
    if(cameraRecordingId)throw new CameraUploadGateError('camera_manifest_mismatch','LAN- und Webaufnahme dürfen nicht vermischt werden.');
    pathOwner.authorize();

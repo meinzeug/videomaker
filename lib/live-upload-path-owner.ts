@@ -36,6 +36,11 @@ export function claimUploadPath(db:Database.Database,recording:unknown,project:u
  if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='camera_project_claims'").get() &&
     db.prepare('SELECT 1 FROM camera_project_claims WHERE recording_id=? COLLATE NOCASE LIMIT 1').get(recording))
   throw new UploadPathOwnerError('WEB_CLAIM');
+ for(const table of ['camera_project_upload_ids','camera_project_device_manifests']){
+  if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table) &&
+     db.prepare(`SELECT 1 FROM ${table} WHERE recording_id=? COLLATE NOCASE LIMIT 1`).get(recording))
+   throw new UploadPathOwnerError('WEB_CLAIM');
+ }
  if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lan_capture_projects'").get()) {
   const conflict=db.prepare('SELECT 1 FROM lan_capture_projects WHERE recording_id=? COLLATE NOCASE AND (project_id IS NULL OR project_id<>?) LIMIT 1').get(recording,project);
   if(conflict)throw new UploadPathOwnerError('BINDING_MISMATCH');

@@ -97,6 +97,18 @@ test('Kamera-Webclaim und abweichender LAN-Import sperren beide Pfade',()=>{
  }
 });
 
+test('verwaiste Web-Upload- und Manifest-Metadaten sperren LAN-Besitz auch ohne Webclaim',()=>{
+ for(const table of ['camera_project_upload_ids','camera_project_device_manifests']){
+  const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p);
+  try{
+   f.db.exec(`CREATE TABLE ${table}(recording_id TEXT PRIMARY KEY)`);
+   f.db.prepare(`INSERT INTO ${table} VALUES(?)`).run(r);
+   assert.throws(()=>tx(f.db,r,p,u,'live'),/WEB_CLAIM/);
+   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_owners').get().n,0);
+  }finally{f.close();}
+ }
+});
+
 test('neuer Webclaim kann vorhandene LAN-Besitzzuordnung nicht nachträglich übernehmen',()=>{
  const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p);
  try{
