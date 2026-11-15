@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createHmac,generateKeyPairSync,randomBytes,randomUUID} from 'node:crypto';
+import {createHash,createHmac,generateKeyPairSync,randomBytes,randomUUID,sign} from 'node:crypto';
 import Database from 'better-sqlite3';
-import {beginStudioDeviceEnrollment} from '../lib/studio-device-enrollment.ts';
+import {beginStudioDeviceEnrollment,completeStudioDeviceEnrollment} from '../lib/studio-device-enrollment.ts';
 import {revokeSession} from '../lib/session-revocations.ts';
 const previousSecret=process.env.SESSION_SECRET;
 const secret='synthetic-studio-test-secret-0123456789';
@@ -80,5 +80,51 @@ test('browser cookie expiry after final auth check rolls back challenge',()=>{
   assert.equal(beginStudioDeviceEnrollment(f.db,token,f.input),null);
   assert.equal(f.db.prepare('SELECT COUNT(*) n FROM studio_device_enrollment_challenges').get().n,0);
   assert.equal(f.db.prepare('SELECT floor_ms FROM studio_device_enrollment_clock WHERE id=1').get().floor_ms,2001);
+ }finally{Date.now=realNow;f.close();}
+});
+
+function signedEnrollment(f,keys,token){
+ const input={deviceId:randomUUID(),publicKey:keys.publicKey.export({format:'der',type:'spki'})};const challenge=beginStudioDeviceEnrollment(f.db,token,input);assert.ok(challenge);
+ const hash=createHash('sha256').update(input.publicKey).digest('hex');
+ const text=`videomaker-studio-device-auth/enroll/v2\n${input.deviceId}\n${challenge.challengeId}\n${challenge.nonce}\n${hash}\nprojects:read,recordings:upload\n${challenge.ownerHash}\n${challenge.workspaceHash}\n${challenge.confirmingSessionHash}\n`;
+ return {input,challenge,signature:sign('sha256',Buffer.from(text),keys.privateKey)};
+}
+test('real session completes signed enrollment; only exact proof retry is acknowledged',()=>{
+ const f=setup();try{
+  const keys=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),token=f.token(),entry=signedEnrollment(f,keys,token);
+  const bad=Buffer.from(entry.signature);bad[bad.length-1]^=1;
+  const input={deviceId:entry.input.deviceId,challengeId:entry.challenge.challengeId,signature:entry.signature};
+  assert.equal(completeStudioDeviceEnrollment(f.db,token,{...input,signature:bad}),null);
+  assert.equal(completeStudioDeviceEnrollment(f.db,f.token(),input),null);
+  assert.deepEqual(completeStudioDeviceEnrollment(f.db,token,input),{enrolled:true,created:true});
+  assert.deepEqual(completeStudioDeviceEnrollment(f.db,token,input),{enrolled:true,created:false});
+  assert.equal(completeStudioDeviceEnrollment(f.db,token,{...input,signature:bad}),null);
+  assert.equal(completeStudioDeviceEnrollment(f.db,token,{...input,challengeId:randomUUID()}),null);
+  f.db.prepare('UPDATE studio_device_keys SET revoked=1 WHERE device_id=?').run(input.deviceId);
+  assert.equal(completeStudioDeviceEnrollment(f.db,token,input),null);
+  assert.throws(()=>f.db.prepare('UPDATE studio_device_keys SET revoked=0 WHERE device_id=?').run(input.deviceId),/immutable/);
+  assert.throws(()=>f.db.prepare('UPDATE studio_device_keys SET owner_hash=? WHERE device_id=?').run('c'.repeat(64),input.deviceId),/immutable/);
+  assert.throws(()=>f.db.prepare('DELETE FROM studio_device_keys WHERE device_id=?').run(input.deviceId),/retained/);
+  assert.throws(()=>f.db.prepare('INSERT OR REPLACE INTO studio_device_keys SELECT * FROM studio_device_keys WHERE device_id=?').run(input.deviceId),/already exists/);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM studio_device_keys').get().n,1);
+ }finally{f.close();}
+});
+test('enrollment completion rejects changed authority or browser logout',()=>{
+ for(const mode of ['authority','logout']){const f=setup();try{
+  const token=f.token(),entry=signedEnrollment(f,generateKeyPairSync('ec',{namedCurve:'prime256v1'}),token);
+  if(mode==='authority')f.db.prepare('UPDATE studio_device_authority SET owner_hash=?').run('c'.repeat(64));else revokeSession(f.db,secret,token,Date.now());
+  assert.equal(completeStudioDeviceEnrollment(f.db,token,{deviceId:entry.input.deviceId,challengeId:entry.challenge.challengeId,signature:entry.signature}),null);
+  const exists=f.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='studio_device_keys'").get();if(exists)assert.equal(f.db.prepare('SELECT COUNT(*) n FROM studio_device_keys').get().n,0);
+ }finally{f.close();}}
+});
+test('session expiry during key insert rolls back registration and preserves challenge',()=>{
+ const f=setup(),realNow=Date.now;let now=1000;try{
+  Date.now=()=>now;const body=`2000.${randomBytes(18).toString('base64url')}`,token=`${body}.${createHmac('sha256',secret).update(body).digest('base64url')}`,entry=signedEnrollment(f,generateKeyPairSync('ec',{namedCurve:'prime256v1'}),token);
+  // Initialize the real key schema with a failed proof, then simulate slow write.
+  const input={deviceId:entry.input.deviceId,challengeId:entry.challenge.challengeId,signature:entry.signature};assert.equal(completeStudioDeviceEnrollment(f.db,token,{...input,signature:Buffer.from([1])}),null);
+  f.db.function('synthetic_completion_delay',()=>{now=2001;return 0});f.db.exec('CREATE TRIGGER synthetic_completion_delay_trigger AFTER INSERT ON studio_device_keys BEGIN SELECT synthetic_completion_delay(); END');
+  assert.equal(completeStudioDeviceEnrollment(f.db,token,input),null);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM studio_device_keys').get().n,0);assert.equal(f.db.prepare('SELECT COUNT(*) n FROM studio_device_enrollment_challenges WHERE device_id=?').get(input.deviceId).n,1);
+  assert.equal(f.db.prepare('SELECT floor_ms FROM studio_device_enrollment_clock').get().floor_ms,2001);
  }finally{Date.now=realNow;f.close();}
 });
