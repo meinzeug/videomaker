@@ -42,6 +42,15 @@ test('explicit tone and content mode are distinct from factual source constraint
  assert.equal(scriptDirection(null),'');
 });
 
+test('standard mode does not deny an explicit substantive free-text instruction',()=>{
+ const selected=normalizeScriptOptions(options({mode:'standard',tones:[],dramaturgy:'Beginne mit dem Ergebnis',instructions:'Ordne die Auswirkungen auf Familien ein'}));
+ const direction=scriptDirection(selected);
+ assert.match(direction,/Thema und den Nutzervorgaben/);
+ assert.doesNotMatch(direction,/keine zusätzliche inhaltliche Vorgabe/);
+ assert.equal(selected.instructions,'Ordne die Auswirkungen auf Familien ein');
+ assert.equal(selected.dramaturgy,'Beginne mit dem Ergebnis');
+});
+
 test('claims bind normalized options and recover the same snapshot after research deletion',()=>{
  const db=new Database(':memory:');db.exec('CREATE TABLE research_reports(id TEXT PRIMARY KEY,created_at TEXT,sources TEXT,report TEXT); CREATE TABLE channels(id TEXT PRIMARY KEY,name TEXT,platform TEXT,handle TEXT)');ensureGenerationClaimsSchema(db);
  const o=normalizeScriptOptions(options());db.prepare('INSERT INTO research_reports VALUES(?,?,?,?)').run(id,now,'[]',JSON.stringify({generation_channel:null,generation_options:o,summary:'Ausgewählt'}));

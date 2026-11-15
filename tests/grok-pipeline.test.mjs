@@ -36,6 +36,21 @@ test('single-call writer receives explicit selected tone, mode and user instruct
  }finally{globalThis.fetch=oldFetch;if(oldKey===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=oldKey;db.close();}
 });
 
+test('standard-mode free-text content guidance reaches the writer without a contradictory default',async()=>{
+ const selected={mode:'standard',scope:'selected',tones:[],dramaturgy:'Mit einer Frage beginnen',instructions:'Ordne die Auswirkungen auf Familien ein',allowIncompleteSources:false};
+ const {db,claim}=fixture(null,selected),oldKey=process.env.OPENROUTER_API_KEY,oldFetch=globalThis.fetch,calls=[];
+ process.env.OPENROUTER_API_KEY='fake-test-key';
+ globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);calls.push(request);return response(calls.length===1?JSON.stringify(rawFacts):answer('Eine belegte Aussage.'));};
+ try{
+  assert.equal((await runGrokFlow(db,claim,true,()=>{})).state,'received');
+  const prompt=calls[1].messages.find(message=>message.role==='user').content;
+  assert.match(prompt,/"instructions":"Ordne die Auswirkungen auf Familien ein"/);
+  assert.match(prompt,/"dramaturgy":"Mit einer Frage beginnen"/);
+  assert.match(prompt,/Thema und den Nutzervorgaben/);
+  assert.doesNotMatch(prompt,/keine zusätzliche inhaltliche Vorgabe/);
+ }finally{globalThis.fetch=oldFetch;if(oldKey===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=oldKey;db.close();}
+});
+
 test('autonomous and optional styles do not impose previous editorial limits',()=>{
  for(const prompt of [AUTONOMOUS_SCRIPT_SYSTEM,KONTRAKURS_SCRIPT_SYSTEM,SOURCE_ONLY_SCRIPT_SYSTEM]){
   assert.doesNotMatch(prompt,/900–1.400|Wenn ihr weiter Klartext|Ich bin gespannt, wie ihr das seht/);
