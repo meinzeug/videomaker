@@ -11,6 +11,7 @@ import subprocess
 import time
 import urllib.request
 import json
+from fixture_atomic_files import durable_copy, replace_from_prepared
 
 WORK = Path(__file__).resolve().parents[1]
 HOME = Path.home().resolve()
@@ -41,9 +42,17 @@ def main():
     proof=secrets.token_hex(32);proc=None;preserve=False
     handlers={sig:signal.signal(sig,interrupted) for sig in (signal.SIGINT,signal.SIGTERM)}
     injected=original.replace(NEEDLE,REPLACEMENT)
+    backups={config:fixture/'original-next.config.ts',next_env:fixture/'original-next-env.d.ts',tsconfig:fixture/'original-tsconfig.json'}
+    prepared=False
     try:
+        # All originals must be on disk before changing any worktree file.
+        for file, data in ((config,original),(next_env,original_env),(tsconfig,original_ts)):
+            durable_copy(backups[file],data)
+        staged=fixture/'prepared-next.config.ts'
+        durable_copy(staged,injected)
+        prepared=True
         subprocess.run(['ffmpeg','-nostdin','-v','error','-f','lavfi','-i','color=c=black:s=64x64:r=10:d=1','-f','lavfi','-i','sine=frequency=440:duration=1','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest',str(fixture/'sample.mp4')],check=True,timeout=30)
-        config.write_bytes(injected)
+        replace_from_prepared(staged,config)
         env=os.environ.copy();env.update(DATA_DIR=str(fixture),ADMIN_PASSWORD='isolated-live-test',SESSION_SECRET='synthetic-live-test-secret-only-0123456789',VIDEOMAKER_PUBLIC_ORIGIN=f'http://127.0.0.1:{PORT}',LIVE_RECORDING_UPLOAD_TEST_ENABLE='1',LIVE_RECORDING_FIXTURE_PROOF=proof,NODE_ENV='development',NODE_OPTIONS='--max-old-space-size=768')
         with (fixture/'server.log').open('w+') as log:
             proc=subprocess.Popen(['./node_modules/.bin/next','dev','--hostname','127.0.0.1','--port',str(PORT)],cwd=WORK,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
@@ -72,17 +81,20 @@ def main():
             except ProcessLookupError:pass
             try:proc.wait(timeout=10)
             except subprocess.TimeoutExpired:os.killpg(proc.pid,signal.SIGKILL);proc.wait()
-        if config.exists() and config.read_bytes()==injected:config.write_bytes(original)
-        elif config.exists() and config.read_bytes()==original:pass
-        else:preserve=True;(fixture/'original-next.config.ts').write_bytes(original)
+        current_config=config.read_bytes() if config.exists() else None
+        if prepared and current_config==injected:replace_from_prepared(backups[config],config)
+        elif current_config==original:pass
+        else:preserve=True
         current=next_env.read_bytes() if next_env.exists() else None
         generated=original_env.replace(b'./.next/types/',b'./.next-live-owner-fixture/dev/types/')
-        if current in (original_env,generated):next_env.write_bytes(original_env)
-        else:preserve=True;(fixture/'original-next-env.d.ts').write_bytes(original_env)
+        if prepared and current==generated and current!=original_env:replace_from_prepared(backups[next_env],next_env)
+        elif current==original_env:pass
+        else:preserve=True
         ts_generated=original_ts.replace(b'".next/dev/types/**/*.ts"\n',b'".next/dev/types/**/*.ts",\n    ".next-live-owner-fixture/types/**/*.ts",\n    ".next-live-owner-fixture/dev/types/**/*.ts"\n')
         current_ts=tsconfig.read_bytes() if tsconfig.exists() else None
-        if current_ts in (original_ts,ts_generated):tsconfig.write_bytes(original_ts)
-        else:preserve=True;(fixture/'original-tsconfig.json').write_bytes(original_ts)
+        if prepared and current_ts==ts_generated and current_ts!=original_ts:replace_from_prepared(backups[tsconfig],tsconfig)
+        elif current_ts==original_ts:pass
+        else:preserve=True
         if (fixture/'.fixture').read_text()!=MARKER:raise RuntimeError('fixture marker changed; preserve everything')
         if preserve:raise RuntimeError(f'configuration changed; fixture retained at {fixture}')
         if cache.exists():shutil.rmtree(cache)
