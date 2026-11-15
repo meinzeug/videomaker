@@ -1,5 +1,5 @@
 'use client';
-import {sessionFetch} from './session-fetch';
+import {sessionFetch,isStaleSessionResponse} from './session-fetch';
 import {useEffect,useState} from 'react';
 import {ArrowRight, Clapperboard, RefreshCw} from 'lucide-react';
 import type {Channel} from '@/lib/channels';
@@ -12,7 +12,7 @@ export default function ProductionQueue({channels,onOpen}:{channels:Channel[];on
   const controller=new AbortController();setResult(null);setError('');
   const params=channel?`?channel=${encodeURIComponent(channel)}`:'';
   void sessionFetch(`/api/production-queue${params}`,{cache:'no-store',signal:controller.signal}).then(async response=>{
-   const data=await response.json();if(!response.ok)throw new Error(data.error||'Produktionsübersicht nicht verfügbar.');
+   const data=await response.json();if(isStaleSessionResponse(response))throw new Error('Die Anmeldung wurde erneuert. Bitte erneut laden.');if(!response.ok)throw new Error(data.error||'Produktionsübersicht nicht verfügbar.');
    if(!controller.signal.aborted)setResult(data as Result);
   }).catch(e=>{if(!controller.signal.aborted)setError(e instanceof Error?e.message:'Produktionsübersicht nicht verfügbar.');});
   return()=>controller.abort();

@@ -1,5 +1,5 @@
 'use client';
-import {sessionFetch} from './session-fetch';
+import {sessionFetch,isStaleSessionResponse} from './session-fetch';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import type {Project} from './studio-types';
 import type {ScriptOptions} from '@/lib/script-options';
@@ -16,7 +16,7 @@ export default function GenerationRecovery({refreshKey,active=false,onProject}:{
  const refresh=useCallback(async()=>{
   const sequence=++refreshSequence.current;
   try{
-   const response=await sessionFetch('/api/generate',{cache:'no-store'}),body=await response.json();
+   const response=await sessionFetch('/api/generate',{cache:'no-store'}),body=await response.json();if(isStaleSessionResponse(response))throw new Error('Die Anmeldung wurde erneuert. Bitte den Status erneut laden.');
    if(!response.ok||!body||!Array.isArray(body.claims)||typeof body.total!=='number'||!(body.nextBefore===null||typeof body.nextBefore==='string'))throw new Error(body?.error||'Erstellungsstatus nicht verfügbar.');
    if(mounted.current&&refreshSequence.current===sequence){setResult(body as Result);setError('');}
   }catch(e){if(mounted.current&&refreshSequence.current===sequence)setError(e instanceof Error?e.message:'Erstellungsstatus nicht verfügbar.');}
@@ -27,7 +27,7 @@ export default function GenerationRecovery({refreshKey,active=false,onProject}:{
   const before=result?.nextBefore;if(!before||running.current)return;
   const sequence=refreshSequence.current;running.current=true;setWorking('more');setError('');
   try{
-   const response=await sessionFetch(`/api/generate?before=${encodeURIComponent(before)}`,{cache:'no-store'}),body=await response.json();
+   const response=await sessionFetch(`/api/generate?before=${encodeURIComponent(before)}`,{cache:'no-store'}),body=await response.json();if(isStaleSessionResponse(response))throw new Error('Die Anmeldung wurde erneuert. Bitte den Status erneut laden.');
    if(!response.ok||!body||!Array.isArray(body.claims)||typeof body.total!=='number'||!(body.nextBefore===null||typeof body.nextBefore==='string'))throw new Error(body?.error||'Weitere Einträge konnten nicht geladen werden.');
    if(mounted.current&&sequence===refreshSequence.current)setResult(previous=>{
     if(!previous||previous.nextBefore!==before)return previous;
@@ -40,7 +40,7 @@ export default function GenerationRecovery({refreshKey,active=false,onProject}:{
  async function inspect(claim:Claim,download:false|'response'|'parts'=false){
   if(running.current)return;running.current=true;setWorking(claim.researchId);setError('');setNotice('');
   try{
-   const response=await sessionFetch(`/api/generate?researchId=${encodeURIComponent(claim.researchId)}`,{cache:'no-store'}),body=await response.json();
+   const response=await sessionFetch(`/api/generate?researchId=${encodeURIComponent(claim.researchId)}`,{cache:'no-store'}),body=await response.json();if(isStaleSessionResponse(response))throw new Error('Die Anmeldung wurde erneuert. Bitte den Status erneut prüfen.');
    if(!response.ok)throw new Error(body?.error||'Erstellungsstatus nicht verfügbar.');
    if(!mounted.current)return;
    if(download){
@@ -53,7 +53,7 @@ export default function GenerationRecovery({refreshKey,active=false,onProject}:{
    if(body.state==='complete'&&body.project){onProject(body.project as Project);setNotice('Das gespeicherte Skript wurde geöffnet.');await refresh();return;}
    if(body.state==='received'||(body.state==='pending'&&resumable(body.pipelinePhase))){
     const finish=await sessionFetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({researchId:claim.researchId,imageMode:claim.imageMode,channelId:claim.channelId||null,scriptOptions:claim.scriptOptions??null})});
-    const project=await finish.json();if(!finish.ok)throw new Error(project?.error||'Das Skript konnte noch nicht fertiggestellt werden.');if(!mounted.current)return;
+    const project=await finish.json();if(isStaleSessionResponse(finish))throw new Error('Die frühere Sitzung wurde erneuert. Bitte den Erstellungsstatus prüfen; es wird nichts automatisch wiederholt.');if(!finish.ok)throw new Error(project?.error||'Das Skript konnte noch nicht fertiggestellt werden.');if(!mounted.current)return;
     onProject(project as Project);setNotice('Das gespeicherte Skript wurde geöffnet.');await refresh();return;
    }
    if(body.state==='pending')setNotice(typeof body.failure==='string'?body.failure:body.pipelinePhase==='facts_invalid'||body.pipelinePhase==='parts_invalid'?'Das gespeicherte Faktenblatt oder ein Skriptteil ist unvollständig und kann nicht automatisch fortgesetzt werden.':'Ein Modellaufruf läuft möglicherweise noch oder sein Ergebnis ist unklar. Es wird kein zweiter Aufruf gestartet.');
