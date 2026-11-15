@@ -36,3 +36,13 @@ Stand: 15. November 2026. Diese Übergabe beschreibt beobachtete Zustände, kein
 ## Übergaberegel
 
 Bei jeder Fortsetzung zuerst aktuellen Stand in beiden Git-Repositories, verfügbare Geräte, CI und produktive Version lesen; keine historischen Commit- oder Testaussagen ungeprüft als aktuellen Zustand ausgeben. Fertige, geprüfte Schritte in `main` integrieren und sicher deployen; unvollständige oder nur synthetisch getestete Funktionen klar kennzeichnen. Diese Datei nach wesentlichen Fortschritten aktualisieren.
+
+### Gesicherte Zwischenstände vom selben Tag
+
+Diese Stände sind nicht automatisch produktiv und können bei späterer Fortsetzung veraltet sein:
+
+- Android-Oberflächenmerge `2a6983e` auf `wip/redesign-on-p2p-main-20261115`; der Appcode ist mit dem erfolgreich auf beiden Geräten getesteten `9781bc2` identisch, zusätzlich ist ein Main-Test erhalten. CI-Zweig `wip/redesign-on-main-ci-20261115`, Run `43727725057`; vor Übernahme und APK-Veröffentlichung aktuellen CI-/main-Stand prüfen.
+- Web-v4-Serverkern `5a90b16` auf `wip/camera-v4-web-current-20261115`, Produktionsgate bleibt geschlossen. CI `43727861636` grün; seitdem wurden zusätzliche nicht abgeschlossene Korrekturen für ungeklärte Kontrollbefehle und Projektbindung bearbeitet. Vor Zusammenführung neuesten Branchstatus und Tests prüfen.
+- Web-Kamerapanel `0d3aa03` auf `wip/camera-panel-current-20261115`: acht gezielte Tests und TypeScript bestanden; erwartet weitere noch zu integrierende Serverfelder und darf nicht allein freigeschaltet werden.
+- Android-v4-Port `0e6f9cb` und Koexistenztests `3165920` auf getrennten WIP-Ständen; die Port-CI `43727417906` war grün. Das belegt keine gemeinsame Web-/P2P-Aufnahmesteuerung. Webbesitz und P2P-Aufnahme schließen sich derzeit aus; Lebenszyklus-/Fehler-STOP muss auf den richtigen Take begrenzt werden.
+- Dringende übergreifende Lücke: ein STOP für einen noch unbekannten Take darf einen verspätet ankommenden START nicht unbemerkt zulassen. Das verlangt eine gemeinsame Server-/Android-Strategie einschließlich atomarer Startberechtigung/Fence, Wiederholung, Wiederherstellung und echten integrierten Tests. UI-Timeout oder lokales Abbrechen allein löst es nicht. Kamera-Produktionsgate bis zum belastbaren gemeinsamen Nachweis geschlossen halten.
