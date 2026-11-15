@@ -18,6 +18,11 @@ function validSignature(value:string) {
   const parts=value.split('.');
   return parts.length===3 && safeEqual(parts[2], signature(`${parts[0]}.${parts[1]}`));
 }
+/** Signature-only check for monotonic device-auth expiry observation, never authorization. */
+export function sessionSignatureValidIgnoringExpiry(value:string) {
+  const secret=process.env.SESSION_SECRET;
+  return !!secret && secret.length>=32 && validSignature(value);
+}
 export async function logout() {
   const jar=await cookies(),value=jar.get(name)?.value,secret=process.env.SESSION_SECRET;
   // Commit revocation before clearing the browser cookie. A DB error must not
