@@ -303,3 +303,46 @@ test('v4 uncertain decisions survive process restart and cannot be replaced or e
   assert.equal(receiveCameraHeartbeat(db,v4(),clock(1100),owner,undefined,true)[0].type,'record_stop');
  }finally{db.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('v4 START enqueue acknowledges only executor queueing and is never delivered again',()=>{
+ const db=new Database(':memory:');db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY)');ensureCameraRemoteSchema(db);db.prepare('INSERT INTO projects VALUES(?)').run(project);
+ try{
+  const v4=(phase='idle',paused=null,ack=[])=>parseCameraHeartbeat({...beat(phase,paused),capability:'remote-record-v4',ack});
+  receiveCameraHeartbeat(db,v4(),clock(1000),owner,undefined,true);
+  const start=cmd('record_start');queueCameraRequest(db,device,start,clock(1010));
+  assert.equal(receiveCameraHeartbeat(db,v4(),clock(1020),owner,undefined,true)[0].id,start.id);
+  receiveCameraHeartbeat(db,v4('idle',null,[{id:start.id,result:'accepted'}]),clock(1021),owner,undefined,true);
+  assert.equal(db.prepare('SELECT result FROM camera_remote_commands WHERE id=?').get(start.id).result,'queued');
+  assert.deepEqual(receiveCameraHeartbeat(db,v4('idle',null,[{id:start.id,result:'enqueued'}]),clock(1030),owner,undefined,true),[]);
+  const listing=listCameraDevices(db,clock(1031)).devices[0];assert.equal(listing.lastCommand.result,'enqueued');assert.equal(listing.lastCommand.receiptCapability,'remote-record-v4');assert.equal(listing.phase,'idle');
+  assert.deepEqual(receiveCameraHeartbeat(db,v4('idle',null,[{id:start.id,result:'accepted'}]),clock(1040),owner,undefined,true),[]);
+  assert.equal(listCameraDevices(db,clock(1041)).devices[0].lastCommand.result,'enqueued');
+  receiveCameraHeartbeat(db,v4('recording',false),clock(1050),owner,undefined,true);
+  assert.equal(queueCameraRequest(db,device,cmd('record_pause'),clock(1051)).created,true);
+  queueCameraRequest(db,device,cmd('record_stop'),clock(1060));
+  assert.equal(receiveCameraHeartbeat(db,v4('recording',false),clock(1070),owner,undefined,true)[0].type,'record_stop');
+ }finally{db.close();}
+});
+
+test('a delivered v4 command cannot acquire a weaker v3 receipt or be redelivered to v3',()=>{
+ const db=fixture();try{
+  const pause=cmd('record_pause');queueCameraRequest(db,device,pause,clock(1040));
+  const v4=(ack=[])=>parseCameraHeartbeat({...beat('recording',false),capability:'remote-record-v4',ack});
+  assert.equal(receiveCameraHeartbeat(db,v4(),clock(1050),owner,undefined,true)[0].id,pause.id);
+  assert.deepEqual(receiveCameraHeartbeat(db,beat('recording',false,[{id:pause.id,result:'accepted'}]),clock(1060),owner,undefined,true),[]);
+  assert.equal(db.prepare('SELECT result FROM camera_remote_controls WHERE id=?').get(pause.id).result,'queued');
+  assert.deepEqual(receiveCameraHeartbeat(db,v4([{id:pause.id,result:'uncertain'}]),clock(1070),owner,undefined,true),[]);
+  assert.equal(listCameraDevices(db,clock(1071)).devices[0].uncertain,true);
+ }finally{db.close();}
+});
+
+test('historical delivery without a persisted capability is never rebound or acknowledged',()=>{
+ const db=fixture();try{
+  const old=cmd('record_pause');
+  db.prepare("INSERT INTO camera_remote_controls(id,device_id,recording_id,type,created_at,expires_at,runtime_id,created_tick,expires_tick,delivered_at) VALUES(?,?,?,'record_pause',?,?,?,?,?,?)").run(old.id,device,recording,1040,11030,runtime,1040,11030,1050);
+  db.prepare('INSERT INTO camera_remote_control_projects(id,project_id) VALUES(?,?)').run(old.id,project);
+  assert.deepEqual(receiveCameraHeartbeat(db,beat('recording',false,[{id:old.id,result:'accepted'}]),clock(1060),owner,undefined,true),[]);
+  assert.equal(db.prepare('SELECT result FROM camera_remote_controls WHERE id=?').get(old.id).result,'queued');
+  assert.equal(db.prepare('SELECT count(*) n FROM camera_remote_delivery_caps WHERE id=?').get(old.id).n,0);
+ }finally{db.close();}
+});

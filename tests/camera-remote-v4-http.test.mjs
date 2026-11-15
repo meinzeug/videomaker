@@ -32,8 +32,11 @@ test('isolated paired camera v4 uncertainty and STOP recovery',{skip:!enabled,ti
  r=await fetch(base+'/api/camera-devices',{headers:{cookie:browser}});assert.equal((await r.json()).devices[0].cameraFront,true);
  r=await post('/api/projects',browser,{title:'Synthetic camera test',script:'fixture',sources:[],titles:[],thumbnail:'',broll:[]});assert.equal(r.status,201);const project=(await r.json()).id,recording=randomUUID(),startId=randomUUID();
  assert.equal((await post(path,browser,{id:startId,type:'record_start',recordingId:recording,projectId:project})).status,201);
- r=await poll('idle',null,null,null,true,true);assert.equal((await r.json()).commands[0].id,startId);
- assert.equal((await poll('recording',recording,project,false,true,false,[{id:startId,result:'accepted'}])).status,200);
+ capability='remote-record-v4';r=await poll('idle',null,null,null,true,true);assert.equal((await r.json()).commands[0].id,startId);
+ capability='remote-record-v3';r=await poll('idle',null,null,null,true,true,[{id:startId,result:'accepted'}]);assert.deepEqual((await r.json()).commands,[]);
+ capability='remote-record-v4';r=await poll('idle',null,null,null,true,true,[{id:startId,result:'enqueued'}]);assert.deepEqual((await r.json()).commands,[]);
+ r=await fetch(base+'/api/camera-devices',{headers:{cookie:browser}});const queued=(await r.json()).devices[0];assert.equal(queued.lastCommand.result,'enqueued');assert.equal(queued.phase,'idle');
+ assert.equal((await poll('recording',recording,project,false,true,false)).status,200);
  const pause=randomUUID(),pauseBody={id:pause,type:'record_pause',recordingId:recording,projectId:null};
  assert.equal((await post(path,browser,pauseBody)).status,201);assert.equal((await post(path,browser,pauseBody)).status,200);
  r=await poll('recording',recording,project,false,true,false);const pauseDelivery=(await r.json()).commands[0];assert.equal(pauseDelivery.id,pause);assert.equal(pauseDelivery.projectId,project);

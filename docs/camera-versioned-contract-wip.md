@@ -100,12 +100,14 @@ Produktionsdaten oder fremde laufende Prozesse verwenden.
 ## Unklare Geräteentscheidung (v4, nicht freigegeben)
 
 Der Android-WIP schreibt bei Start, Pause, Fortsetzen und Kamerawechsel vor
-Aufruf der LiveSession einen nicht quittierbaren Zustand `admitting`. Erst nach
-einer positiven Rückgabe wird `accepted` gespeichert; eine negative Rückgabe,
+Aufruf der LiveSession einen nicht quittierbaren Zustand `admitting`. Nach
+einer positiven Rückgabe wird für Start `enqueued` und für andere Aktionen
+`accepted` gespeichert; eine negative Rückgabe,
 Ausnahme oder ein Neustart vor dem zweiten Speicherschritt wird `uncertain`.
-Ein solches Kommando wird nicht erneut ausgeführt. `accepted` bedeutet hier nur
-die erfolgreiche Zulassung bzw. Rückgabe des Geräts, weder eine fertige Datei
-noch einen erfolgreichen Cloud-Upload. STOP bleibt ein eigener, wiederholbarer,
+Ein solches Kommando wird nicht erneut ausgeführt. `enqueued` belegt bei Start lediglich die Einreihung am Kamera-Executor,
+keine Recorder-Zulassung. `accepted` bedeutet bei anderen Aktionen lediglich
+die erfolgreiche Rückgabe des Geräts, weder eine fertige Datei noch einen
+erfolgreichen Cloud-Upload. STOP bleibt ein eigener, wiederholbarer,
 aufnahmegebundener Notpfad. Ein Fehler des Journals selbst bleibt ein gesonderter
 Sicherheitsfall und wird nicht als harmlose Netzwerkstörung abgefangen.
 
@@ -143,3 +145,17 @@ STOP. Das Skript verwendet ausschließlich den WIP
 Verzeichnis. Wie beim v3-Test gelten Zeitlimits, Prozessgruppenprüfung und
 Cleanup; bei SIGKILL oder Stromausfall können Reste eine manuelle Prüfung
 benötigen. Das ist kein Android-/Browser-Gerätetest und keine Produktionsfreigabe.
+
+Die Zustellung eines neuen Befehls wird im selben SQLite-Schreibvorgang dauerhaft
+an Geräte-ID und Protokollversion gebunden. Ein ACK einer anderen Version kann
+den Zustand nicht setzen; eine erneute Zustellung an eine andere Version wird
+unterdrückt. Schon vor der Migration zugestellte Aufträge ohne belegbare Version
+werden weder erneut zugestellt noch als v4-Beleg interpretiert. Bei START ist
+`enqueued` dauerhaft, unterdrückt Wiederholung und wird im Dashboard als bloße
+Einreihung gezeigt. Ein echter asynchroner Recorder-Zulassungsbeleg fehlt.
+
+Nach Ergänzung von `enqueued` und Versionsbindung bestand der isolierte
+HTTP-Test erneut. Zusätzlich geprüft wurden ein v4-START, ein verworfenes
+v3-ACK, die sichtbare Warteschlangeneinreihung und die anschließende tatsächliche
+Aufnahmetelemetrie. Die Prüfung simuliert das Gerät und belegt keinen nativen
+Recorder-Start.
