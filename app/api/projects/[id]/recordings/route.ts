@@ -6,6 +6,7 @@ import {prepareRecordingIntent,commitRecordingIntent,linkRecordingDurably,syncDi
 import {acquireRecordingUpload,cleanupStaleRecordingUploads,readRecordingChunk,recordingFreeBytes,requireRecordingSpace} from '@/lib/recording-upload-guard';
 import {CAMERA_PROJECT_CLAIMS_SCHEMA,CameraUploadGateError,assertCameraUploadConsistent,cameraUploadIdFor,ensureCameraClaimUploadMappings,lockAndValidateCameraUpload,releaseCameraUploadLock,recordCameraVerifiedUpload} from '@/lib/camera-project-claims';
 import { createHash } from 'node:crypto';
+import {recordVerifiedFullUpload} from '@/lib/live-upload-path-owner';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -23,7 +24,7 @@ export async function GET(_req:Request,{params}:Context) {
 }
 
 /** A receipt describes bytes read from the stored file, not merely the request. */
-async function existingReceipt(item:Recording, projectId:string, mime:string, length:number, expectedHash:string|null, heartbeat:()=>void, cameraRecordingId:string|null, credential:string) {
+async function existingReceipt(item:Recording, projectId:string, mime:string, length:number, expectedHash:string|null, heartbeat:()=>void, cameraRecordingId:string|null, credential:string, lanRecordingId:string|null) {
  if(item.project_id!==projectId||item.mime!==mime||(length>0&&item.size!==length))return NextResponse.json({error:'Aufnahme-ID bereits für andere Daten vergeben.'},{status:409});
  let receipt;
  try {receipt=await recordingFileReceipt(recordingPath(item.id,item.mime),item.size,heartbeat);}
@@ -46,6 +47,8 @@ async function existingReceipt(item:Recording, projectId:string, mime:string, le
   if(!sessionAuthorized(database,credential))return 'unauthorized';
   const stillPresent=database.prepare('SELECT 1 FROM project_recordings WHERE id=? AND project_id=? AND mime=? AND size=? AND created_at=?').get(item.id,projectId,item.mime,item.size,item.created_at);
   if(!stillPresent)return 'changed';
+  heartbeat();
+  if(lanRecordingId)recordVerifiedFullUpload(database,lanRecordingId,projectId,item.id,receipt.sizeBytes,receipt.sha256,item.created_at,item.mime);
   if(cameraRecordingId&&(database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('camera_project_claims','camera_project_upload_receipts','camera_remote_devices')").get() as {n:number}).n===3)
    recordCameraVerifiedUpload(database,cameraRecordingId,projectId,item.id,receipt.sha256,receipt.sizeBytes,Date.now());
   return 'ok';
@@ -103,7 +106,7 @@ export async function POST(req:Request,{params}:Context) {
    if(size!==existing.size)return NextResponse.json({error:'Aufnahme-ID bereits für andere Daten vergeben.'},{status:409});
    const digest=incoming.digest('hex');
    if(expectedHash&&digest!==expectedHash)return NextResponse.json({error:'Prüfsumme stimmt nicht. Die Aufnahme wurde nicht übernommen.'},{status:422});
-   return await existingReceipt(existing,id,mime,size,digest,lease.check,cameraRecordingId,credential);
+   return await existingReceipt(existing,id,mime,size,digest,lease.check,cameraRecordingId,credential,lanRecordingId);
   } catch(error) {
    if(error instanceof Error&&['UPLOAD_TIMEOUT','UPLOAD_LEASE_LOST'].includes(error.message))return NextResponse.json({error:'Upload unterbrochen. Bitte erneut versuchen.'},{status:408});
    return NextResponse.json({error:'Die Aufnahme wurde nicht vollständig übertragen.'},{status:400});
@@ -195,7 +198,7 @@ export async function POST(req:Request,{params}:Context) {
   lease.check();
   const saved=db().prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').get(recordingId) as Recording|undefined;
   if(!saved)return NextResponse.json({error:'Aufnahme konnte nicht bestätigt werden.'},{status:500});
-  const response=await existingReceipt(saved,id,mime,length,expectedHash ?? incomingReceipt.sha256,lease.check,cameraRecordingId,credential);
+  const response=await existingReceipt(saved,id,mime,length,expectedHash ?? incomingReceipt.sha256,lease.check,cameraRecordingId,credential,lanRecordingId);
   lease.check();
   if(response.status!==200)return response;
   const receipt=await response.json();

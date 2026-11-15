@@ -53,8 +53,18 @@ test('isolated live and legacy full upload fencing keeps originals and legacy co
  assert.equal(legacyProjectResult.status,201);const legacyProject=legacyProjectResult.value.projectId,legacyUploadId=cameraUploadIdFor(legacyTake,legacyProject);
  const legacyUrl=`/api/projects/${legacyProject}/recordings`,legacyHeaders={'Content-Type':'video/mp4','X-Recording-Id':legacyUploadId,'X-Content-SHA256':sha};
  assert.equal((await request(legacyUrl,'POST',bytes,legacyHeaders)).status,201);
+ const failedBytes=Buffer.from(bytes);failedBytes[failedBytes.length-1]^=1;
+ assert.equal((await request(legacyUrl,'POST',failedBytes,{...legacyHeaders,'X-Lan-Recording-Id':legacyTake})).status,422);
+ const probeTake=randomUUID(),probeProject=await request('/api/projects/lan-captures','POST',JSON.stringify({recordingId:probeTake}),{'Content-Type':'application/json'});
+ const probeId=cameraUploadIdFor(probeTake,probeProject.value.projectId);
+ const probeUrl=`/api/projects/${probeProject.value.projectId}/live-recordings/${probeId}`;
+ const probeHeaders={'X-Recording-Id':probeTake,'X-Live-Origin':'lan'};
+ const unknown=await request(probeUrl,'POST',undefined,{...probeHeaders,'X-Live-Operation':'begin'});
+ assert.equal(unknown.status,409,JSON.stringify(unknown.value));assert.equal(unknown.value.code,'LEGACY_HISTORY_UNVERIFIED');
  const upgraded=await request(legacyUrl,'POST',bytes,{...legacyHeaders,'X-Lan-Recording-Id':legacyTake});
  assert.equal(upgraded.status,200,JSON.stringify(upgraded.value));assert.equal(upgraded.value.sha256,sha);
+ assert.equal((await request(probeUrl,'POST',undefined,{...probeHeaders,'X-Live-Operation':'begin'})).status,200);
+ assert.equal((await request(probeUrl,'POST',undefined,{...probeHeaders,'X-Live-Operation':'cancel'})).status,200);
  const changed=Buffer.from(bytes);changed[changed.length-1]^=1;const changedSha=createHash('sha256').update(changed).digest('hex');
  assert.equal((await request(legacyUrl,'POST',changed,{...legacyHeaders,'X-Content-SHA256':changedSha,'X-Lan-Recording-Id':legacyTake})).status,409);
  const serverFile=join(root,'recordings',`${legacyUploadId}.mp4`);assert.deepEqual(readFileSync(serverFile),bytes);

@@ -117,13 +117,13 @@ test('Webclaim und abweichende LAN-Projektbindung sperren den Liveupload ohne Da
 test('veröffentlichte Datei behält ihre Bytes und Abschluss ist nach Prozessabbruch wiederholbar',()=>{
  const f=fixture(),[id,project,recording]=f.ids;
  try{
-  f.db.exec('CREATE TABLE project_recordings(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL)');
+  f.db.exec('CREATE TABLE project_recordings(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,created_at TEXT NOT NULL)');
   f.store.begin(id,project,recording);const data=Buffer.from('final recording bytes');f.store.put(id,project,recording,0,0,data,sum(data));
   f.store.seal(id,project,recording,data.length,sum(data));
   const source=f.store.sealedPath(id,project,recording).path,dir=join(f.directory,'recordings');mkdirSync(dir,{mode:0o700});
   const final=join(dir,`${id}.mp4`);linkSync(source,final);
   assert.throws(()=>f.store.cancel(id,project,recording),/PUBLISH_UNCERTAIN/);
-  f.db.prepare('INSERT INTO project_recordings VALUES(?,?,?,?)').run(id,project,'video/mp4',data.length);
+  f.db.prepare('INSERT INTO project_recordings VALUES(?,?,?,?,?)').run(id,project,'video/mp4',data.length,'synthetic');
   assert.equal(f.store.markPublished(id,project,recording),true);assert.equal(f.store.markPublished(id,project,recording),true);
   assert.deepEqual(readFileSync(final),data);assert.equal(f.store.status(id,project,recording).state,'published');
   assert.throws(()=>f.store.cancel(id,project,recording),/PUBLISHED/);

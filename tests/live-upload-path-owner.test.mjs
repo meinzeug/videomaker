@@ -7,7 +7,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import {CAMERA_PROJECT_CLAIMS_SCHEMA,cameraUploadIdFor,claimCameraProject} from '../lib/camera-project-claims.ts';
-import {claimUploadPath,initializeUploadPathOwners} from '../lib/live-upload-path-owner.ts';
+import {claimUploadPath,initializeUploadPathOwners,recordVerifiedFullUpload} from '../lib/live-upload-path-owner.ts';
 import {ensureLanCaptureProject} from '../lib/lan-capture-project.ts';
 
 function fixture(){
@@ -76,11 +76,34 @@ test('full retry may reserve matching existing metadata but does not change or c
 test('unidentifizierbares historisches Video sperrt neuen Livepfad, ohne Bestand zu ändern',()=>{
  const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p),old=randomUUID();
  try{
-  f.db.exec('CREATE TABLE project_recordings(id TEXT PRIMARY KEY,project_id TEXT,size INTEGER)');
-  f.db.prepare('INSERT INTO project_recordings VALUES(?,?,?)').run(old,randomUUID(),123);
+  f.db.exec('CREATE TABLE project_recordings(id TEXT PRIMARY KEY,project_id TEXT,size INTEGER,created_at TEXT,mime TEXT)');
+  f.db.prepare('INSERT INTO project_recordings VALUES(?,?,?,?,?)').run(old,randomUUID(),123,'synthetic','video/mp4');
   assert.throws(()=>tx(f.db,r,p,u,'live'),/LEGACY_HISTORY_UNVERIFIED/);
   assert.equal(f.db.prepare('SELECT size FROM project_recordings WHERE id=?').get(old).size,123);
   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_owners').get().n,0);
+ }finally{f.close();}
+});
+
+test('fehlgeschlagene Legacy-Reservierung bleibt unbekannt bis zum gebundenen verifizierten Beleg',()=>{
+ const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p),other=randomUUID(),q=randomUUID(),v=cameraUploadIdFor(other,q),sha='a'.repeat(64);
+ try{
+  f.db.exec('CREATE TABLE project_recordings(id TEXT PRIMARY KEY,project_id TEXT,size INTEGER,created_at TEXT,mime TEXT)');
+  f.db.prepare('INSERT INTO project_recordings VALUES(?,?,?,?,?)').run(u,p,123,'synthetic','video/mp4');
+  f.db.transaction(()=>claimUploadPath(f.db,r,p,u,'full',{allowExistingFullRetry:true,size:123,sha256:sha})).immediate();
+  assert.throws(()=>tx(f.db,other,q,v,'live'),/LEGACY_HISTORY_UNVERIFIED/);
+  assert.throws(()=>f.db.transaction(()=>recordVerifiedFullUpload(f.db,r,p,u,123,'b'.repeat(64),'synthetic','video/mp4')).immediate(),/BINDING_MISMATCH/);
+  f.db.transaction(()=>recordVerifiedFullUpload(f.db,r,p,u,123,sha,'synthetic','video/mp4')).immediate();
+  assert.deepEqual(tx(f.db,other,q,v,'live'),{created:true});
+ }finally{f.close();}
+});
+
+test('historische Webreservierung allein belegt keine Herkunft',()=>{
+ const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p),old=randomUUID();
+ try{
+  f.db.exec('CREATE TABLE project_recordings(id TEXT PRIMARY KEY,project_id TEXT,size INTEGER,created_at TEXT,mime TEXT); CREATE TABLE camera_project_upload_ids(upload_id TEXT PRIMARY KEY,recording_id TEXT,project_id TEXT)');
+  f.db.prepare('INSERT INTO project_recordings VALUES(?,?,?,?,?)').run(old,p,123,'synthetic','video/mp4');
+  f.db.prepare('INSERT INTO camera_project_upload_ids VALUES(?,?,?)').run(old,randomUUID(),p);
+  assert.throws(()=>tx(f.db,r,p,u,'live'),/LEGACY_HISTORY_UNVERIFIED/);
  }finally{f.close();}
 });
 
