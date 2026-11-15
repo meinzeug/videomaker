@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import {randomUUID} from 'node:crypto';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {cameraStopIntentId} from '../lib/camera-stop-intent.ts';
 import {ensureCameraRemoteSchema,parseCameraHeartbeat,parseCameraRequest,queueCameraRequest,receiveCameraHeartbeat,listCameraDevices} from '../lib/camera-remote-store.ts';
 const runtime=randomUUID(),device=randomUUID(),project=randomUUID(),recording=randomUUID(),owner='a'.repeat(64);
@@ -256,4 +259,47 @@ test('internal queue also rejects a forged STOP-shaped non-stop ID',()=>{
   const fake={id:cameraStopIntentId(device,randomUUID()),type:'record_pause',recordingId:recording,projectId:null,cameraFrom:null};
   assert.throws(()=>queueCameraRequest(db,device,fake,clock(1040)),/Befehls-ID.*reserviert/);
  }finally{db.close();}
+});
+
+test('v4 uncertain receipt freezes new actions, resists late ACK and still delivers STOP',()=>{
+ const db=fixture();try{
+  const v4=(phase,paused,ack=[])=>parseCameraHeartbeat({...beat(phase,paused),capability:'remote-record-v4',ack});
+  const pause=cmd('record_pause');queueCameraRequest(db,device,pause,clock(1040));
+  assert.equal(receiveCameraHeartbeat(db,v4('recording',false),clock(1050),owner,undefined,true)[0].id,pause.id);
+  assert.deepEqual(receiveCameraHeartbeat(db,v4('recording',false,[{id:pause.id,result:'uncertain'}]),clock(1060),owner,undefined,true),[]);
+  assert.equal(listCameraDevices(db,clock(1061)).devices[0].uncertain,true);
+  assert.throws(()=>queueCameraRequest(db,device,cmd('record_pause'),clock(1062)),/ungeklärt/);
+  assert.deepEqual(receiveCameraHeartbeat(db,v4('recording',false,[{id:pause.id,result:'accepted'}]),clock(1070),owner,undefined,true),[]);
+  assert.equal(db.prepare('SELECT result FROM camera_remote_controls WHERE id=?').get(pause.id).result,'queued');
+  queueCameraRequest(db,device,cmd('record_stop'),clock(1080));
+  assert.equal(receiveCameraHeartbeat(db,v4('recording',false),clock(1090),owner,undefined,true)[0].type,'record_stop');
+ }finally{db.close();}
+});
+
+test('uncertain requires v4 and cannot be forged for an undelivered command',()=>{
+ const db=fixture();try{
+  const pause=cmd('record_pause');queueCameraRequest(db,device,pause,clock(1040));
+  assert.throws(()=>parseCameraHeartbeat({...beat('recording',false),ack:[{id:pause.id,result:'uncertain'}]}),/Ungültig/);
+  const v4=parseCameraHeartbeat({...beat('recording',false),capability:'remote-record-v4',ack:[{id:pause.id,result:'uncertain'}]});
+  assert.equal(receiveCameraHeartbeat(db,v4,clock(1050),owner,undefined,true)[0].id,pause.id);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM camera_remote_uncertain').get().n,0);
+ }finally{db.close();}
+});
+
+test('v4 uncertain decisions survive process restart and cannot be replaced or erased',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'camera-v4-'));let db=fixture();
+ try {
+  const v4=(ack=[])=>parseCameraHeartbeat({...beat('recording',false),capability:'remote-record-v4',ack});
+  const pause=cmd('record_pause');queueCameraRequest(db,device,pause,clock(1040));
+  receiveCameraHeartbeat(db,v4(),clock(1050),owner,undefined,true);
+  receiveCameraHeartbeat(db,v4([{id:pause.id,result:'uncertain'}]),clock(1060),owner,undefined,true);
+  await db.backup(join(dir,'snapshot.db'));db.close();db=new Database(join(dir,'snapshot.db'));ensureCameraRemoteSchema(db);
+  assert.equal(listCameraDevices(db,clock(1061)).devices[0].uncertain,true);
+  assert.throws(()=>db.prepare('DELETE FROM camera_remote_uncertain').run(),/retained/);
+  assert.throws(()=>db.prepare('INSERT OR REPLACE INTO camera_remote_uncertain VALUES(?,?,?)').run(pause.id,device,1100),/exists/);
+  assert.deepEqual(receiveCameraHeartbeat(db,v4([{id:pause.id,result:'uncertain'}]),clock(1070),owner,undefined,true),[]);
+  assert.throws(()=>queueCameraRequest(db,device,cmd('record_pause'),clock(1080)),/ungeklärt/);
+  queueCameraRequest(db,device,cmd('record_stop'),clock(1090));
+  assert.equal(receiveCameraHeartbeat(db,v4(),clock(1100),owner,undefined,true)[0].type,'record_stop');
+ }finally{db.close();rmSync(dir,{recursive:true,force:true});}
 });

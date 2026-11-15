@@ -96,3 +96,32 @@ Originale und Testverzeichnis zur manuellen Prüfung erhalten. SIGKILL,
 Systemabsturz oder Stromausfall können Cleanup verhindern: In diesem Fall
 Prozess und Marker prüfen und nur die eigene Fixture bereinigen. Keine
 Produktionsdaten oder fremde laufende Prozesse verwenden.
+
+## Unklare Geräteentscheidung (v4, nicht freigegeben)
+
+Der Android-WIP schreibt bei Start, Pause, Fortsetzen und Kamerawechsel vor
+Aufruf der LiveSession einen nicht quittierbaren Zustand `admitting`. Erst nach
+einer positiven Rückgabe wird `accepted` gespeichert; eine negative Rückgabe,
+Ausnahme oder ein Neustart vor dem zweiten Speicherschritt wird `uncertain`.
+Ein solches Kommando wird nicht erneut ausgeführt. `accepted` bedeutet hier nur
+die erfolgreiche Zulassung bzw. Rückgabe des Geräts, weder eine fertige Datei
+noch einen erfolgreichen Cloud-Upload. STOP bleibt ein eigener, wiederholbarer,
+aufnahmegebundener Notpfad. Ein Fehler des Journals selbst bleibt ein gesonderter
+Sicherheitsfall und wird nicht als harmlose Netzwerkstörung abgefangen.
+
+Nur ein authentifizierter v4-Heartbeat darf `uncertain` für ein zuvor an genau
+dieses Gerät geliefertes Kommando melden. Der WIP-Server hält den Zustand in
+einer unveränderlichen Zusatztabelle fest, liefert keine anderen Aktionen mehr
+und zeigt ihn im Dashboard an; STOP bleibt vor dieser Sperre. Späte positive
+Quittungen lösen diese Sperre nicht auf. Ein geprüfter, dauerhafter manueller
+Auflösungsweg fehlt: Der Zustand bleibt deshalb gesperrt. Auch nach Rückkehr zu
+einem älteren Server bzw. Android besteht keine Zusicherung, dass dessen
+Verhalten dieselbe Sicherheit bietet; Freischaltung und Rollback bleiben bis
+zur vollständigen Prüfung gesperrt.
+
+Die SQLite- und Kotlin-Modelltests sind synthetisch. AtomicFile-Ausfall zwischen
+Geräteaktion und Journalabschluss, Prozessabsturz, tatsächliche LiveSession,
+HTTP-Mischversionen, Android-Komplettbuild und Aufnahme auf Geräten sind damit
+nicht nachgewiesen. Bei unerkannter Transport-/Authentifizierungsantwort hält
+der Android-WIP die Websteuerung an, ohne den Recorder-Owner zu schließen;
+bekannte Kompatibilitäts- und IO-Fehler werden weiterhin im Loop behandelt.
