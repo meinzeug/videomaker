@@ -44,7 +44,7 @@ def install(serial,apk,package):
  cmd=['adb','-s',serial,'install']+(['-t'] if package==TEST else [])+[str(apk)]
  p=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
  try:
-  if serial=='HEHU4TQSINOJEQG6':
+  if serial in ('HEHU4TQSINOJEQG6','192.168.178.29:5555'):
    deadline=time.monotonic()+55
    while p.poll() is None and time.monotonic()<deadline:
     raw=subprocess.run(['adb','-s',serial,'exec-out','uiautomator','dump','/dev/tty'],text=True,capture_output=True,timeout=12).stdout
@@ -66,7 +66,9 @@ def main():
  global NEXT_PORT, PROXY_PORT
  if ROOT!=WORK or len(sys.argv)!=4:raise RuntimeError('Only dedicated fixture worktree, serial and two APKs are allowed')
  serial,app_arg,test_arg=sys.argv[1:];app=Path(app_arg).resolve();test=Path(test_arg).resolve()
- if serial not in ('HEHU4TQSINOJEQG6','R5CR60Q07YN'):raise RuntimeError('Unexpected device')
+ if serial not in ('HEHU4TQSINOJEQG6','192.168.178.29:5555','R5CR60Q07YN'):raise RuntimeError('Unexpected device')
+ expected_serial = 'R5CR60Q07YN' if serial == 'R5CR60Q07YN' else 'HEHU4TQSINOJEQG6'
+ if run('adb','-s',serial,'shell','getprop','ro.serialno').strip()!=expected_serial:raise RuntimeError('ADB target identity mismatch')
  if shutil.disk_usage(FIXTURE_HOME).free < 512*1024*1024 or shutil.disk_usage('/tmp').free < 256*1024*1024:raise RuntimeError('Insufficient disk reserve')
  for path,key in ((app,'CAMERA_FIXTURE_APP_SHA256'),(test,'CAMERA_FIXTURE_TEST_SHA256')):
   if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=os.environ.get(key):raise RuntimeError('APK digest mismatch')
@@ -83,7 +85,8 @@ def main():
  if any(('tcp:'+str(DEVICE_PORT)) in line.split() for line in before):raise RuntimeError('ADB reverse port already used')
  packages=run('adb','-s',serial,'shell','pm','list','packages').splitlines()
  if 'package:'+APP in packages or 'package:'+TEST in packages:raise RuntimeError('Fixture packages already exist')
- camera=run('adb','-s','HEHU4TQSINOJEQG6','exec-out','uiautomator','dump','/dev/tty')
+ camera_serial = serial if expected_serial=='HEHU4TQSINOJEQG6' else 'HEHU4TQSINOJEQG6'
+ camera=run('adb','-s',camera_serial,'exec-out','uiautomator','dump','/dev/tty')
  if 'Aufnahme starten' not in camera or 'Aufnahme stoppen' in camera:raise RuntimeError('Recording status not safely visible')
  run('openssl','verify','-CAfile',str(PKI/'ca.pem'),str(PKI/'server.pem'))
  expected_ca=Path('/home/dennis/.kontraprompter-camera-v4-device-current/app/src/debug/res/raw/fixture_ca.pem')
