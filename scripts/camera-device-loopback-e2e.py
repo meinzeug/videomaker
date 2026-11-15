@@ -4,7 +4,7 @@ import hashlib, os, re, select, shutil, signal, socket, socketserver, ssl, subpr
 from pathlib import Path
 
 HOME=Path('/home/dennis'); WORK=HOME/'.videomaker-camera-device-e2e'; ROOT=Path(__file__).resolve().parents[1]
-PKI=Path('/tmp/camera-loopback-pki-zxeuu3l9'); NEXT_PORT=3397; PROXY_PORT=3398; DEVICE_PORT=3395
+PKI=Path('/tmp/camera-loopback-pki-zxeuu3l9'); NEXT_PORT=0; PROXY_PORT=0; DEVICE_PORT=3395
 APP='de.kontrakurs.kontraprompter.journalfixture'; TEST=APP+'.test'
 NEEDLE=b"const config: NextConfig = { serverExternalPackages: ['better-sqlite3'], poweredByHeader: false };"
 REPLACE=b"const config: NextConfig = { serverExternalPackages: ['better-sqlite3'], poweredByHeader: false, turbopack: { root: '/home/dennis' } };"
@@ -63,6 +63,7 @@ def install(serial,apk,package):
   if p.poll() is None:p.terminate();p.wait(timeout=5)
 
 def main():
+ global NEXT_PORT, PROXY_PORT
  if ROOT!=WORK or len(sys.argv)!=4:raise RuntimeError('Only dedicated fixture worktree, serial and two APKs are allowed')
  serial,app_arg,test_arg=sys.argv[1:];app=Path(app_arg).resolve();test=Path(test_arg).resolve()
  if serial not in ('HEHU4TQSINOJEQG6','R5CR60Q07YN'):raise RuntimeError('Unexpected device')
@@ -75,7 +76,9 @@ def main():
   if not re.search(r"^package: name='"+re.escape(expected)+r"'",badging,re.M):raise RuntimeError('Unexpected APK package')
  manifest=run(aapt,'dump','xmltree',str(test),'AndroidManifest.xml')
  if ('android:targetPackage' not in manifest or f'\"{APP}\"' not in manifest or 'android.test.InstrumentationTestRunner' not in manifest):raise RuntimeError('Unexpected instrumentation target')
- for p in (NEXT_PORT,PROXY_PORT):ensure_free(p)
+ with socket.socket() as candidate:
+  candidate.bind(('127.0.0.1',0));NEXT_PORT=candidate.getsockname()[1]
+ ensure_free(NEXT_PORT)
  before=reverse_list(serial);print('ADB reverse before:',before,flush=True)
  if any(('tcp:'+str(DEVICE_PORT)) in line.split() for line in before):raise RuntimeError('ADB reverse port already used')
  packages=run('adb','-s',serial,'shell','pm','list','packages').splitlines()
@@ -110,7 +113,9 @@ def main():
      break
     except OSError:time.sleep(.2)
    else:raise TimeoutError('Next fixture did not start')
-   server=TLSserver(('127.0.0.1',PROXY_PORT),Tunnel);server.context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);server.context.load_cert_chain(PKI/'server.pem',PKI/'server.key')
+   server=TLSserver(('127.0.0.1',0),Tunnel);PROXY_PORT=server.server_address[1]
+   server.context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);server.context.load_cert_chain(PKI/'server.pem',PKI/'server.key')
+   print('Fixture ports:',NEXT_PORT,PROXY_PORT,flush=True)
    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
    # Recheck immediately before creating an ADB rule; never replace another rule.
    if reverse_list(serial)!=before:raise RuntimeError('ADB reverse rules changed during setup')

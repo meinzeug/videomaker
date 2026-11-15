@@ -9,8 +9,8 @@ nur auf HTTPS-Loopback; die produktive App und der produktive Server sind nicht
 Teil der Fixture. Die CA-Schlüssel liegen ausschließlich im temporären
 Testverzeichnis und dürfen nicht eingecheckt werden.
 
-Der Runner reserviert lokale Testports 3397/3398 sowie auf dem ausgewählten
-Gerät `tcp:3395` mit `adb reverse --no-rebind`. Er hält die ursprünglichen
+Der Runner wählt freie lokale Testports dynamisch und reserviert auf dem
+ausgewählten Gerät `tcp:3395` mit `adb reverse --no-rebind`. Er hält die ursprünglichen
 ADB-Reverse-Regeln fest und entfernt nur die unverändert passende eigene Regel.
 Bestehende gleichnamige Testpakete oder belegte Ports führen zum Abbruch.
 Das Xiaomi muss zuvor sichtbar `Aufnahme starten` anzeigen. Der Runner nutzt
