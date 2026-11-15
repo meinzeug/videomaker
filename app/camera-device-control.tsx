@@ -1,6 +1,7 @@
 'use client';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {cameraStartWasRefused} from '@/lib/camera-ui-state';
+import {beginCameraUiAttempt,cameraUiAttemptIsCurrent,cameraUiMayStop,type CameraUiAttempt} from '@/lib/camera-ui-attempt';
 import CameraPreview from './camera-preview';
 import CameraRecovery from './camera-recovery';
 
@@ -15,7 +16,8 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
  const [preview,setPreview]=useState<{generation:string;creationToken:string;devices:{deviceId:string;available:boolean}[]}|null>(null);
  const [openClaims,setOpenClaims]=useState<{projectId:string;claims:OpenClaim[];hasMore:boolean}|null>(null),[claimsError,setClaimsError]=useState(false);
  const [recovering,setRecovering]=useState<string|null>(null),recoveringRef=useRef<string|null>(null);
- const refreshSequence=useRef(0);
+ const refreshSequence=useRef(0),commandAttempt=useRef<CameraUiAttempt|null>(null),messageRevision=useRef(0);
+ const [inFlightCommand,setInFlightCommand]=useState<Command|null>(null);
  const refresh=useCallback(async()=>{const revision=++refreshSequence.current,controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),1800);try{
   const response=await fetch('/api/camera-devices',{cache:'no-store',signal:controller.signal});if(revision!==refreshSequence.current)return;if(response.status===404){setAvailable(false);setConnectionError(false);return;}if(!response.ok)throw Error();
   const data=await response.json();if(revision!==refreshSequence.current)return;setAvailable(true);setCameras(data.devices);setConnectionError(false);
@@ -46,19 +48,24 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
   void load();const timer=setInterval(()=>void load(),2000);return()=>{active=false;clearInterval(timer);};
  },[available,selected,!!camera]);
  async function send(command:Command){
-  setPending(command);setLoading(true);setMessage('Anfrage wird gesendet. Der Zustand der Kamera ist maßgeblich.');
+  // The take comes from the last observed camera, never from an unconfirmed start.
+  if(command.type==='record_stop'&&!cameraUiMayStop(camera,command))return;
+  const attempt=beginCameraUiAttempt(commandAttempt.current,command);if(!attempt)return;
+  commandAttempt.current=attempt;messageRevision.current++;setInFlightCommand(command);setPending(command);
+  setMessage('Anfrage wird gesendet. Der Zustand der Kamera ist maßgeblich.');
   try{
    const {deviceId,...body}=command;const response=await fetch(`/api/camera-devices/${encodeURIComponent(deviceId)}/commands`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();
-   if(!response.ok){setMessage(data.error||'Die Anfrage wurde nicht angenommen.');if(response.status>=400&&response.status<500)setPending(null);return;}
+   if(!cameraUiAttemptIsCurrent(commandAttempt.current,attempt))return;
+   if(!response.ok){setMessage(data.error||'Die Anfrage wurde nicht angenommen.');if(response.status>=400&&response.status<500)setPending(previous=>previous?.id===command.id?null:previous);return;}
    setMessage(command.type==='record_start'?'Start angefragt. Warte auf die Kamerabestätigung.':'Stopp angefragt. Warte auf die Kamerabestätigung.');
    await refresh();
-  }catch{setMessage('Keine Bestätigung erhalten. Bitte Kamera prüfen oder dieselbe Anfrage erneut senden.');}
-  finally{setLoading(false);}
+  }catch{if(cameraUiAttemptIsCurrent(commandAttempt.current,attempt))setMessage('Keine Bestätigung erhalten. Bitte Kamera prüfen oder dieselbe Anfrage erneut senden.');}
+  finally{if(cameraUiAttemptIsCurrent(commandAttempt.current,attempt)){commandAttempt.current=null;setInFlightCommand(null);}}
  }
  async function resolveFailure(){
   const claim=camera?.recoverableClaim;if(!camera||!claim||claim.projectId!==projectId)return;
   if(!window.confirm('Die Aufnahme ist fehlgeschlagen oder unvollständig. Bitte sichere eine eventuell vorhandene Datei zuerst am Smartphone. Die lokale Datei bleibt erhalten. Danach darf dieses Skript gelöscht werden. Möchtest du die Sperre auflösen?'))return;
-  setLoading(true);try{const response=await fetch(`/api/camera-devices/${encodeURIComponent(camera.id)}/resolve`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recordingId:claim.recordingId,projectId:claim.projectId,confirm:'retain-local-file'})});const data=await response.json();if(!response.ok)throw Error(data.error||'Die Sperre konnte nicht aufgelöst werden.');setMessage('Die Sperre wurde nach deiner Bestätigung aufgelöst. Die lokale Datei wurde nicht gelöscht.');await refresh();}catch(error){setMessage(error instanceof Error?error.message:'Die Sperre konnte nicht aufgelöst werden.');}finally{setLoading(false);}
+  const revision=++messageRevision.current;setLoading(true);try{const response=await fetch(`/api/camera-devices/${encodeURIComponent(camera.id)}/resolve`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recordingId:claim.recordingId,projectId:claim.projectId,confirm:'retain-local-file'})});const data=await response.json();if(!response.ok)throw Error(data.error||'Die Sperre konnte nicht aufgelöst werden.');if(revision===messageRevision.current)setMessage('Die Sperre wurde nach deiner Bestätigung aufgelöst. Die lokale Datei wurde nicht gelöscht.');await refresh();}catch(error){if(revision===messageRevision.current)setMessage(error instanceof Error?error.message:'Die Sperre konnte nicht aufgelöst werden.');}finally{setLoading(false);}
  }
  if(!available)return connectionError?<section className="panel device-control" aria-label="Smartphone-Kamera"><p role="alert">Die Kamerasteuerung ist nicht erreichbar. Den Aufnahmezustand bitte am Smartphone prüfen.</p></section>:null;
  return <section className="panel device-control" aria-label="Smartphone-Kamera">
@@ -72,10 +79,10 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
   {camera?.uncertain&&<p role="alert">Ein Kamerabefehl ist ungeklärt. Bitte den Zustand direkt am Smartphone prüfen; neue Befehle bleiben gesperrt. Stopp ist weiterhin möglich.</p>}
   {camera?.lastCommand&&cameraStartWasRefused(camera.lastCommand,camera.lastCommand.id)&&<p role="alert">Die letzte Startanfrage wurde nicht ausgeführt. Bitte den Kamerastatus prüfen.</p>}
   {camera?.recoverableClaim?.projectId===projectId&&<p>Für dieses Skript liegt eine fehlgeschlagene oder unvollständige Aufnahme vor. Eine lokale Datei kann am Smartphone gesichert werden.</p>}
-  <div className="device-actions"><button className="primary" disabled={!camera||camera.phase!=='idle'||camera.pendingStart||camera.uncertain||!!pending||loading||connectionError} onClick={()=>camera&&void send({id:crypto.randomUUID(),type:'record_start',recordingId:crypto.randomUUID(),projectId,deviceId:camera.id})}>Aufnahme starten</button>
-   <button className="secondary-action" disabled={!camera||!camera.recordingId||!['preparing','recording'].includes(camera.phase)||loading||connectionError} onClick={()=>camera?.recordingId&&void send({id:crypto.randomUUID(),type:'record_stop',recordingId:camera.recordingId,deviceId:camera.id})}>Aufnahme stoppen</button>
-   {pending&&<button className="secondary-action" disabled={loading||connectionError||(!!camera?.uncertain&&pending.type!=='record_stop')} onClick={()=>void send(pending)}>Anfrage erneut senden</button>}
-   {camera?.recoverableClaim?.projectId===projectId&&<button className="secondary-action" disabled={loading||connectionError||!!pending||!['idle','error','partial'].includes(camera.phase)} onClick={()=>void resolveFailure()}>Aufnahmesperre auflösen</button>}</div>
+  <div className="device-actions"><button className="primary" disabled={!camera||camera.phase!=='idle'||camera.pendingStart||camera.uncertain||!!pending||loading||!!inFlightCommand||connectionError} onClick={()=>camera&&void send({id:crypto.randomUUID(),type:'record_start',recordingId:crypto.randomUUID(),projectId,deviceId:camera.id})}>Aufnahme starten</button>
+   <button className="secondary-action" disabled={!camera||!camera.recordingId||!['preparing','recording'].includes(camera.phase)||inFlightCommand?.type==='record_stop'} onClick={()=>camera?.recordingId&&void send({id:crypto.randomUUID(),type:'record_stop',recordingId:camera.recordingId,deviceId:camera.id})}>Aufnahme stoppen</button>
+   {pending&&<button className="secondary-action" disabled={loading||!!inFlightCommand||connectionError||(!!camera?.uncertain&&pending.type!=='record_stop')} onClick={()=>void send(pending)}>Anfrage erneut senden</button>}
+   {camera?.recoverableClaim?.projectId===projectId&&<button className="secondary-action" disabled={loading||!!inFlightCommand||connectionError||!!pending||!['idle','error','partial'].includes(camera.phase)} onClick={()=>void resolveFailure()}>Aufnahmesperre auflösen</button>}</div>
   {camera&&preview&&<CameraPreview deviceId={camera.id} generation={preview.generation} creationToken={preview.creationToken} available={preview.devices.some(item=>item.deviceId===camera.id&&item.available)}/>}
   {message&&<p role="status">{message}</p>}
  </section>;

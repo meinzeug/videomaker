@@ -125,3 +125,11 @@ HTTP-Mischversionen, Android-Komplettbuild und Aufnahme auf Geräten sind damit
 nicht nachgewiesen. Bei unerkannter Transport-/Authentifizierungsantwort hält
 der Android-WIP die Websteuerung an, ohne den Recorder-Owner zu schließen;
 bekannte Kompatibilitäts- und IO-Fehler werden weiterhin im Loop behandelt.
+
+Das Dashboard lässt im WIP STOP auch während einer noch ausstehenden
+Start-HTTP-Anfrage zu, wenn es für dasselbe ausgewählte Gerät einen konkreten
+aktiven Take gemeldet bekommen hat. Ein älteres Startergebnis kann eine neuere
+STOP-Anzeige nicht überschreiben. Der Server prüft den Take zusätzlich. Bereits
+zugestellte Startbefehle lassen sich damit nicht zurückholen; deren Parallelität
+zu einem späteren Stopp ist weiterhin ein Freigabeblocker. Die UI-Tests bilden
+Promise-Reihenfolgen synthetisch ab und ersetzen keinen Browser-/Gerätetest.
