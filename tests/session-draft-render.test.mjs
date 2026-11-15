@@ -20,5 +20,5 @@ test('render retains all draft controls through session notice and uncertain gua
  const uncertain=renderToStaticMarkup(React.createElement(Dialog,{...props,generationUncertain:true}));
  assert.deepEqual(controls(expired),controls(before));assert.deepEqual(controls(uncertain),controls(before));
  assert.match(before,/<option value="channel-fixture" selected="">/);assert.match(before,/Dramaturgie Probe/);assert.match(before,/Hinweis Probe/);
- assert.match(expired,/Erneut anmelden/);assert.match(uncertain,/Status prüfen/);assert.match(uncertain,/disabled=""[^>]*>Skript erstellen/);
+ assert.match(expired,/Erneut anmelden/);assert.match(uncertain,/Status prüfen/);assert.match(uncertain,/Web-Recherche kann Kosten verursacht haben/);assert.match(uncertain,/disabled=""[^>]*>Skript erstellen/);
 });

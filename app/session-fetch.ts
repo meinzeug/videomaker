@@ -13,3 +13,17 @@ export async function sessionFetch(input:RequestInfo|URL,init?:RequestInit):Prom
  }
  return response;
 }
+
+export class ApiError extends Error {
+ constructor(public status:number,message:string,public retryAfter=0,public researchRetained=false){super(message);}
+}
+/** Classify failed HTTP status even if its body is empty, malformed, or interrupted. */
+export async function apiResponseJson(response:Response){
+ if(response.ok)return response.json();
+ const data=await response.json().catch(()=>null);
+ const message=isStaleSessionResponse(response)?'Die Anfrage gehörte zur früheren Anmeldung. Bitte prüfe den Status; es wird nichts automatisch wiederholt.':typeof data?.error==='string'?data.error:'Anfrage fehlgeschlagen.';
+ throw new ApiError(response.status,message,Number(response.headers.get('Retry-After')||0),data?.researchRetained===true);
+}
+
+/** A submitted web-research request can have reached a paid provider before auth was revoked. */
+export function researchMayHaveRun(status:number,scope:string){return status===401&&scope==='web';}
