@@ -12,6 +12,15 @@ export function beginCameraUiAttempt(current:CameraUiAttempt|null,command:Camera
  if(current && !(current.command.type!=='record_stop' && command.type==='record_stop'))return null;
  return {command};
 }
+/** Preserve the project observed by the operator for transactional server validation. */
+export function cameraWireBody(command:CameraUiCommand) {
+ const {deviceId: _deviceId,expectedProjectId,...wire}=command;
+ if(command.type==='record_pause'||command.type==='record_resume') {
+  if(!expectedProjectId)throw new Error('Kamerabefehl ohne beobachtetes Projekt.');
+  return {...wire,projectId:expectedProjectId};
+ }
+ return wire;
+}
 export function cameraHttpOutcome(ok:boolean):'queued'|'uncertain' {return ok?'queued':'uncertain';}
 export function cameraUiAttemptIsCurrent(current:CameraUiAttempt|null,attempt:CameraUiAttempt):boolean {return current===attempt;}
 export function cameraUiMayStop(camera:CameraControlState|undefined,command:CameraUiCommand):boolean {

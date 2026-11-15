@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {cameraControlAvailability as availability,cameraControlCompletion as completion,beginCameraUiAttempt,cameraUiAttemptIsCurrent,cameraUiMayStop,cameraHttpOutcome} from '../app/camera-panel-policy.ts';
+import {cameraControlAvailability as availability,cameraControlCompletion as completion,beginCameraUiAttempt,cameraUiAttemptIsCurrent,cameraUiMayStop,cameraHttpOutcome,cameraWireBody} from '../app/camera-panel-policy.ts';
 const recording={id:'camera',phase:'recording',recordingId:'take',projectId:'project',pendingStart:false,uncertain:false,lastControl:null,capability:'remote-record-v4',paused:false,cameraFront:false,cameraCanSwitch:true};
 const pause={id:'pause',type:'record_pause',recordingId:'take',expectedProjectId:'project',deviceId:'camera'};
 test('v4 controls are available only for matching known states',()=>{
@@ -58,4 +58,10 @@ test('reload blocks new controls for a queued or ambiguous earlier command, but 
 test('HTTP errors including proxy 408 and 429 never prove non-delivery',()=>{
  for(const status of [400,401,403,404,408,409,429,500,503])assert.equal(cameraHttpOutcome(status>=200&&status<300),'uncertain');
  assert.equal(cameraHttpOutcome(true),'queued');
+});
+
+test('pause and resume include the operator-observed project in the server request',()=>{
+ assert.deepEqual(cameraWireBody(pause),{id:'pause',type:'record_pause',recordingId:'take',projectId:'project'});
+ assert.throws(()=>cameraWireBody({...pause,expectedProjectId:undefined}));
+ assert.deepEqual(cameraWireBody({...pause,type:'record_stop',expectedProjectId:undefined}),{id:'pause',type:'record_stop',recordingId:'take'});
 });

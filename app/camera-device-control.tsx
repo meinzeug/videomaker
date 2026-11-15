@@ -1,7 +1,7 @@
 'use client';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {cameraStartWasRefused} from '@/lib/camera-ui-state';
-import {beginCameraUiAttempt,cameraUiAttemptIsCurrent,cameraHttpOutcome,cameraUiMayStop,cameraControlAvailability,cameraControlCompletion,cameraControlUnsettled,type CameraUiAttempt,type CameraUiCommand} from './camera-panel-policy';
+import {beginCameraUiAttempt,cameraUiAttemptIsCurrent,cameraHttpOutcome,cameraWireBody,cameraUiMayStop,cameraControlAvailability,cameraControlCompletion,cameraControlUnsettled,type CameraUiAttempt,type CameraUiCommand} from './camera-panel-policy';
 import CameraPreview from './camera-preview';
 import CameraPanelControls from './camera-panel-controls';
 import CameraRecovery from './camera-recovery';
@@ -61,7 +61,7 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
   commandAttempt.current=attempt;messageRevision.current++;setInFlightCommand(command);setPending(command);
   setMessage('Anfrage wird gesendet. Der Zustand der Kamera ist maßgeblich.');
   try{
-   const {deviceId,expectedProjectId: _expectedProjectId,...body}=command;const response=await fetch(`/api/camera-devices/${encodeURIComponent(deviceId)}/commands`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();
+   const body=cameraWireBody(command);const response=await fetch(`/api/camera-devices/${encodeURIComponent(command.deviceId)}/commands`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();
    if(!cameraUiAttemptIsCurrent(commandAttempt.current,attempt))return;
    if(cameraHttpOutcome(response.ok)==='uncertain'){setMessage('Keine verlässliche Bestätigung. Bitte den Zustand am Smartphone prüfen.');return;}
    const label={record_start:'Start',record_stop:'Stopp',record_pause:'Pause',record_resume:'Fortsetzen',camera_switch:'Kamerawechsel'}[command.type];
