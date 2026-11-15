@@ -6,7 +6,7 @@ import {cameraStopIntentId} from '../lib/camera-stop-intent.ts';
 import {ensureCameraRemoteSchema,parseCameraHeartbeat,parseCameraRequest,queueCameraRequest,receiveCameraHeartbeat,listCameraDevices} from '../lib/camera-remote-store.ts';
 const runtime=randomUUID(),device=randomUUID(),project=randomUUID(),recording=randomUUID(),owner='a'.repeat(64);
 let seq=0;const clock=t=>({runtimeId:runtime,wall:t,tick:t});
-const beat=(phase='idle',paused=null,ack=[])=>parseCameraHeartbeat({id:device,sequence:++seq,name:'Testkamera',capability:'remote-record-v2',phase,paused,cameraFront:false,cameraCanSwitch:phase==='idle',recordingId:phase==='idle'?null:recording,projectId:phase==='idle'?null:project,ack});
+const beat=(phase='idle',paused=null,ack=[])=>parseCameraHeartbeat({id:device,sequence:++seq,name:'Testkamera',capability:'remote-record-v3',phase,paused,cameraFront:false,cameraCanSwitch:phase==='idle',recordingId:phase==='idle'?null:recording,projectId:phase==='idle'?null:project,ack});
 const cmd=(type,patch={})=>parseCameraRequest({id:randomUUID(),type,recordingId:recording,projectId:type==='record_start'?project:null,...patch});
 function fixture(){
  const db=new Database(':memory:');db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY)');ensureCameraRemoteSchema(db);db.prepare('INSERT INTO projects VALUES(?)').run(project);
@@ -14,7 +14,7 @@ function fixture(){
  const start=cmd('record_start');queueCameraRequest(db,device,start,clock(1010));receiveCameraHeartbeat(db,beat(),clock(1020),owner,undefined,true);
  receiveCameraHeartbeat(db,beat('recording',false,[{id:start.id,result:'accepted'}]),clock(1030),owner,undefined,true);return db;
 }
-test('v2 telemetry requires an authenticated device and a real paused state',()=>{
+test('v3 telemetry requires an authenticated device and a real paused state',()=>{
  const db=new Database(':memory:');db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY)');ensureCameraRemoteSchema(db);
  assert.throws(()=>receiveCameraHeartbeat(db,beat(),clock(100),owner),/Gerätenachweis/);
  assert.throws(()=>beat('recording',null));assert.throws(()=>beat('idle',true));
@@ -149,8 +149,8 @@ test('late delivered ACK cannot be overwritten by duplicates or unrelated ACKs',
 
 test('shared heartbeat and delivery examples match versioned request rules',async()=>{
  const {readFile}=await import('node:fs/promises');
- const fixture=JSON.parse(await readFile(new URL('./fixtures/camera-v1-v2-contract.json',import.meta.url),'utf8'));
- assert.deepEqual(fixture.heartbeats.map(value=>parseCameraHeartbeat(value).capability),['remote-record-v1','remote-record-v2']);
+ const fixture=JSON.parse(await readFile(new URL('./fixtures/camera-v1-v3-contract.json',import.meta.url),'utf8'));
+ assert.deepEqual(fixture.heartbeats.map(value=>parseCameraHeartbeat(value).capability),['remote-record-v1','remote-record-v2','remote-record-v3']);
  assert.deepEqual(fixture.commands.map(value=>parseCameraRequest(['record_pause','record_resume'].includes(value.type)?{...value,projectId:null}:value).type),['record_start','record_pause','record_resume','record_stop','camera_switch']);
  assert.ok(fixture.commands.filter(value=>['record_pause','record_resume'].includes(value.type)).every(value=>typeof value.projectId==='string'));
 });
@@ -158,6 +158,7 @@ test('shared heartbeat and delivery examples match versioned request rules',asyn
 test('version and action fields are literal strings, not string-coercible arrays',()=>{
  const normal=beat();
  assert.throws(()=>parseCameraHeartbeat({...normal,capability:['remote-record-v2']}),/Ungültige/);
+ assert.throws(()=>parseCameraHeartbeat({...normal,capability:['remote-record-v3']}),/Ungültige/);
  assert.throws(()=>parseCameraHeartbeat({...normal,capability:['remote-record-v1']}),/Ungültige/);
  assert.throws(()=>parseCameraRequest({id:randomUUID(),type:['record_pause'],recordingId:recording,projectId:null}),/Ungültiger/);
 });
@@ -211,5 +212,48 @@ test('legacy queued v2 control without a project proof is never delivered or sil
   assert.throws(()=>queueCameraRequest(db,device,old,clock(1041)),/ohne gesicherte Projektbindung/);
   assert.deepEqual(receiveCameraHeartbeat(db,beat('recording',false),clock(1050),owner,undefined,true),[]);
   assert.equal(db.prepare('SELECT result FROM camera_remote_controls WHERE id=?').get(old.id).result,'rejected');
+ }finally{db.close();}
+});
+
+test('non-stop command IDs cannot occupy the global STOP UUIDv8 namespace',()=>{
+ const stopShaped=cameraStopIntentId(device,randomUUID());
+ for(const type of ['record_start','record_pause','record_resume','camera_switch']){
+  assert.throws(()=>parseCameraRequest({id:stopShaped,type,recordingId:type==='camera_switch'?stopShaped:recording,projectId:type==='record_start'?project:null,...(type==='camera_switch'?{cameraFrom:false}:{})}),/Befehls-ID.*reserviert/);
+ }
+});
+
+test('historical switch or pause ID before start cannot collide with the later stable STOP',()=>{
+ for(const oldType of ['camera_switch','record_pause']){
+  const db=new Database(':memory:');db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY)');ensureCameraRemoteSchema(db);db.prepare('INSERT INTO projects VALUES(?)').run(project);
+  try{
+   receiveCameraHeartbeat(db,beat(),clock(900),owner,undefined,true);
+   const old=cameraStopIntentId(device,recording);
+   db.prepare("INSERT INTO camera_remote_controls(id,device_id,recording_id,type,created_at,expires_at,runtime_id,created_tick,expires_tick,result) VALUES(?,?,?,?,?,?,?,?,?,'accepted')").run(old,device,old,oldType,910,10900,runtime,910,10900);
+   const start=cmd('record_start');queueCameraRequest(db,device,start,clock(920));
+   assert.equal(receiveCameraHeartbeat(db,beat(),clock(930),owner,undefined,true)[0].id,start.id);
+   receiveCameraHeartbeat(db,beat('recording',false,[{id:start.id,result:'accepted'}]),clock(940),owner,undefined,true);
+   const request=cmd('record_stop');const first=queueCameraRequest(db,device,request,clock(950));assert.notEqual(first.id,old);
+   const retry=queueCameraRequest(db,device,request,clock(951));assert.equal(retry.id,first.id);assert.equal(retry.created,false);
+   const delivered=receiveCameraHeartbeat(db,beat('recording',false),clock(960),owner,undefined,true);
+   assert.equal(delivered[0].type,'record_stop');assert.equal(delivered[0].id,first.id);assert.equal(delivered[0].recordingId,recording);
+  }finally{db.close();}
+ }
+});
+
+test('mixed v2 and v3 devices never receive project-bound controls as v2',()=>{
+ const db=fixture();try{
+  const pause=cmd('record_pause');queueCameraRequest(db,device,pause,clock(1040));
+  const oldApp={...beat('recording',false),capability:'remote-record-v2'};
+  assert.deepEqual(receiveCameraHeartbeat(db,oldApp,clock(1050),owner,undefined,true),[]);
+  assert.throws(()=>queueCameraRequest(db,device,cmd('record_resume'),clock(1051)),/Kameraprotokoll v3/);
+  const nowNew=beat('recording',false),delivery=receiveCameraHeartbeat(db,nowNew,clock(1060),owner,undefined,true);
+  assert.equal(delivery[0].id,pause.id);assert.equal(delivery[0].projectId,project);
+ }finally{db.close();}
+});
+
+test('internal queue also rejects a forged STOP-shaped non-stop ID',()=>{
+ const db=fixture();try{
+  const fake={id:cameraStopIntentId(device,randomUUID()),type:'record_pause',recordingId:recording,projectId:null,cameraFrom:null};
+  assert.throws(()=>queueCameraRequest(db,device,fake,clock(1040)),/Befehls-ID.*reserviert/);
  }finally{db.close();}
 });

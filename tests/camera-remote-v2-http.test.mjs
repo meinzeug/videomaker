@@ -19,10 +19,10 @@ test('isolated paired camera v2 HTTP controls and telemetry',{skip:!enabled,time
   r=await post('/api/camera-devices/pairing/complete',phone,{deviceId:id,action,challengeId:c.challengeId,payload:payload.toString('base64url'),signature:sign('sha256',Buffer.from(message),keys.privateKey).toString('base64url')});assert.equal(r.status,200);return r.json();
  }
  await pair('register');const {ticket}=await pair('session');let sequence=0;
- const poll=(phase,recordingId=null,projectId=null,paused=null,front=false,canSwitch=false,ack=[])=>post('/api/camera-devices/poll',phone,{id,sequence:++sequence,name:'Fixture camera',capability:'remote-record-v2',phase,paused,cameraFront:front,cameraCanSwitch:canSwitch,recordingId,projectId,sizeBytes:null,sha256:null,ack},{'x-camera-device-ticket':ticket});
+ const poll=(phase,recordingId=null,projectId=null,paused=null,front=false,canSwitch=false,ack=[])=>post('/api/camera-devices/poll',phone,{id,sequence:++sequence,name:'Fixture camera',capability:'remote-record-v3',phase,paused,cameraFront:front,cameraCanSwitch:canSwitch,recordingId,projectId,sizeBytes:null,sha256:null,ack},{'x-camera-device-ticket':ticket});
  const path=`/api/camera-devices/${id}/commands`;
  assert.equal((await poll('idle',null,null,null,false,true)).status,200);
- const unauthorized=await post('/api/camera-devices/poll',phone,{id,sequence:++sequence,name:'Fake',capability:'remote-record-v2',phase:'idle',paused:null,cameraFront:false,cameraCanSwitch:true,recordingId:null,projectId:null,ack:[]});assert.equal(unauthorized.status,403);
+ const unauthorized=await post('/api/camera-devices/poll',phone,{id,sequence:++sequence,name:'Fake',capability:'remote-record-v3',phase:'idle',paused:null,cameraFront:false,cameraCanSwitch:true,recordingId:null,projectId:null,ack:[]});assert.equal(unauthorized.status,403);
  const switchId=randomUUID(),switchCommand={id:switchId,type:'camera_switch',recordingId:switchId,projectId:null,cameraFrom:false};
  assert.equal((await post(path,browser,switchCommand,{origin:'https://wrong.invalid'})).status,403);
  assert.equal((await post(path,browser,switchCommand)).status,201);

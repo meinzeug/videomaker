@@ -28,8 +28,11 @@ export function reserveCameraStopSlot(db: Database.Database, deviceId: string) {
 
 // A recording-specific, stable ID means retries and process restarts cannot
 // turn one stop intent into many commands or target a different recording.
-export function cameraStopIntentId(deviceId: string, recordingId: string) {
- const bytes = createHash('sha256').update('videomaker-camera-stop/v2\0').update(deviceId).update('\0').update(recordingId).digest().subarray(0, 16);
+export function cameraStopIntentId(deviceId: string, recordingId: string, alternative=0) {
+ if(!Number.isInteger(alternative)||alternative<0||alternative>31)throw new CameraStopIntentError('conflict','Ungültige Stoppalternative.');
+ const hash=createHash('sha256').update('videomaker-camera-stop/v2\0').update(deviceId).update('\0').update(recordingId);
+ if(alternative)hash.update('\0fallback\0').update(String(alternative));
+ const bytes=hash.digest().subarray(0,16);
  bytes[6] = (bytes[6] & 15) | 0x80; // UUIDv8, application-defined
  bytes[8] = (bytes[8] & 63) | 0x80;
  const hex = bytes.toString('hex');
@@ -53,7 +56,17 @@ export function requestCameraStopIntent(db: Database.Database, deviceId:string, 
    throw new CameraStopIntentError('conflict', 'Die Kamera bestätigt diese Aufnahme nicht.');
   if (slot.recordingId !== null && slot.observedAt === null)
    throw new CameraStopIntentError('conflict', 'Ein früherer Stopp ist noch nicht bestätigt.');
-  const id = cameraStopIntentId(deviceId, recordingId);
+  // Pre-v3 data may already have used a STOP-shaped UUID for an unrelated
+  // command. Choose a deterministic unused alternative while holding the lock;
+  // the chosen slot then remains stable for retries. No old data is deleted.
+  const table=(name:string)=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+  const occupied=(id:string)=>
+   (table('camera_remote_commands')&&!!db.prepare('SELECT 1 FROM camera_remote_commands WHERE id=?').get(id))||
+   (table('camera_remote_controls')&&!!db.prepare('SELECT 1 FROM camera_remote_controls WHERE id=?').get(id))||
+   !!db.prepare('SELECT 1 FROM camera_stop_intents WHERE intent_id=?').get(id);
+  let id:string|null=null;
+  for(let index=0;index<=31;index++){const candidate=cameraStopIntentId(deviceId,recordingId,index);if(!occupied(candidate)){id=candidate;break;}}
+  if(!id)throw new CameraStopIntentError('conflict','Keine sichere Stopp-ID verfügbar. Bitte lokal stoppen.');
   db.prepare('UPDATE camera_stop_intents SET recording_id=?,intent_id=?,observed_at=NULL WHERE device_id=?').run(recordingId,id,deviceId);
   return {id, created:true, observed:false};
  }).immediate();
