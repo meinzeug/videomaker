@@ -6,8 +6,9 @@ import {mkdtempSync,unlinkSync,rmdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import {cameraUploadIdFor} from '../lib/camera-project-claims.ts';
+import {CAMERA_PROJECT_CLAIMS_SCHEMA,cameraUploadIdFor,claimCameraProject} from '../lib/camera-project-claims.ts';
 import {claimUploadPath,initializeUploadPathOwners} from '../lib/live-upload-path-owner.ts';
+import {ensureLanCaptureProject} from '../lib/lan-capture-project.ts';
 
 function fixture(){
  const directory=mkdtempSync(path.join(tmpdir(),'live-owner-test-'));
@@ -27,6 +28,7 @@ test('beide Reihenfolgen bleiben auf ursprünglichen Besitzer und Projekt gebund
    assert.throws(()=>tx(f.db,null,p,u,first),/IDENTITY_REQUIRED/);
    assert.throws(()=>claimUploadPath(f.db,r,p,u,first),/TRANSACTION_REQUIRED/);
    assert.throws(()=>f.db.prepare('DELETE FROM live_upload_path_owners').run(),/cannot be deleted/);
+   assert.throws(()=>f.db.prepare('INSERT OR REPLACE INTO live_upload_path_owners(recording_id,project_id,upload_id,path) VALUES(?,?,?,?)').run(r,p,u,other),/already exists/);
   }finally{f.close();}
  }
 });
@@ -40,6 +42,41 @@ test('bereits vorhandenes finales Video wird ohne Herkunftsnachweis nicht übern
   assert.throws(()=>tx(f.db,r,p,u,'full'),/FINAL_RECORDING_EXISTS/);
   assert.deepEqual(f.db.prepare('SELECT id,project_id,size FROM project_recordings').get(),{id:u,project_id:p,size:123});
   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_owners').get().n,0);
+ }finally{f.close();}
+});
+
+test('Kamera-Webclaim und abweichender LAN-Import sperren beide Pfade',()=>{
+ for(const mode of ['live','full']){
+  const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p);
+  try{
+   f.db.exec('CREATE TABLE camera_project_claims(recording_id TEXT PRIMARY KEY); CREATE TABLE lan_capture_projects(recording_id TEXT PRIMARY KEY,project_id TEXT)');
+   f.db.prepare('INSERT INTO camera_project_claims VALUES(?)').run(r);
+   assert.throws(()=>tx(f.db,r,p,u,mode),/WEB_CLAIM/);
+   f.db.prepare('DELETE FROM camera_project_claims').run();
+   f.db.prepare('INSERT INTO lan_capture_projects VALUES(?,?)').run(r,randomUUID());
+   assert.throws(()=>tx(f.db,r,p,u,mode),/BINDING_MISMATCH/);
+   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_owners').get().n,0);
+  }finally{f.close();}
+ }
+});
+
+test('neuer Webclaim kann vorhandene LAN-Besitzzuordnung nicht nachträglich übernehmen',()=>{
+ const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p);
+ try{
+  f.db.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);
+  tx(f.db,r,p,u,'full');
+  assert.throws(()=>f.db.transaction(()=>claimCameraProject(f.db,r,randomUUID(),p,Date.now())).immediate(),/LAN-Upload/);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM camera_project_claims').get().n,0);
+ }finally{f.close();}
+});
+
+test('späterer neutraler Projektimport darf vorhandene Zuordnung nicht ersetzen',()=>{
+ const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p);
+ try{
+  f.db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY,created_at TEXT,title TEXT,sources TEXT,content TEXT)');
+  tx(f.db,r,p,u,'full');
+  assert.throws(()=>ensureLanCaptureProject(f.db,r,()=>{}),/camera_claim_exists/);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM projects').get().n,0);
  }finally{f.close();}
 });
 

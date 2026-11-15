@@ -22,12 +22,17 @@ export function ensureLanCaptureProject(database:Database.Database,recordingId:s
   authorize();
   initializeLanCaptureProjects(database);
   const existing=database.prepare('SELECT project_id FROM lan_capture_projects WHERE workspace_id=? AND recording_id=?').get(SINGLE_WORKSPACE,recording) as {project_id:string}|undefined;
+  const owner=database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_upload_path_owners'").get()
+   ? database.prepare('SELECT project_id FROM live_upload_path_owners WHERE recording_id=? COLLATE NOCASE').get(recording) as {project_id:string}|undefined
+   : undefined;
   if(existing){
+   if(owner&&owner.project_id!==existing.project_id)throw new LanCaptureProjectError('camera_claim_exists');
    if(!database.prepare('SELECT 1 FROM projects WHERE id=?').get(existing.project_id))throw new LanCaptureProjectError('project_deleted');
    return {projectId:existing.project_id,recordingId:recording,created:false};
   }
   // Existing web-camera claims use a different, device-bound workflow.
   if(database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='camera_project_claims'").get()&&database.prepare('SELECT 1 FROM camera_project_claims WHERE recording_id=? COLLATE NOCASE').get(recording))throw new LanCaptureProjectError('camera_claim_exists');
+  if(owner)throw new LanCaptureProjectError('camera_claim_exists');
   const projectId=makeId();if(!isRecordingId(projectId))throw new LanCaptureProjectError('invalid_project_id');
   const createdAt=now().toISOString(),content={titles:[],thumbnail:'',broll:[],script:'',image_mode:'descriptions',capture_without_script:true};
   database.prepare('INSERT INTO projects(id,created_at,title,sources,content) VALUES(?,?,?,?,?)').run(projectId,createdAt,'Aufnahme ohne Skript','[]',JSON.stringify(content));

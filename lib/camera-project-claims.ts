@@ -105,6 +105,8 @@ export function claimCameraProject(db:Database.Database,recordingId:string,devic
   throw new CameraProjectClaimError('conflict','Aufnahme-ID ist bereits einer LAN-Aufnahme zugeordnet.');
  if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_recording_stages'").get()&&db.prepare('SELECT 1 FROM live_recording_stages WHERE recording_id=? COLLATE NOCASE').get(recordingId))
   throw new CameraProjectClaimError('conflict','Aufnahme-ID ist bereits einem LAN-Liveupload zugeordnet.');
+ if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_upload_path_owners'").get()&&db.prepare('SELECT 1 FROM live_upload_path_owners WHERE recording_id=? COLLATE NOCASE').get(recordingId))
+  throw new CameraProjectClaimError('conflict','Aufnahme-ID ist bereits einem LAN-Upload zugeordnet.');
  const prior=db.prepare('SELECT device_id AS deviceId,project_id AS projectId,closed_at AS closedAt FROM camera_project_claims WHERE recording_id=?').get(recordingId) as {deviceId:string;projectId:string;closedAt:number|null}|undefined;
  if(prior){
   if(prior.deviceId!==deviceId||prior.projectId!==projectId||prior.closedAt!==null)

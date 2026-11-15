@@ -15,7 +15,10 @@ export function initializeUploadPathOwners(db:Database.Database) {
  CREATE TRIGGER IF NOT EXISTS live_upload_path_owners_no_update BEFORE UPDATE ON live_upload_path_owners
  BEGIN SELECT RAISE(ABORT,'upload path ownership cannot change'); END;
  CREATE TRIGGER IF NOT EXISTS live_upload_path_owners_no_delete BEFORE DELETE ON live_upload_path_owners
- BEGIN SELECT RAISE(ABORT,'upload path ownership cannot be deleted'); END;`);
+ BEGIN SELECT RAISE(ABORT,'upload path ownership cannot be deleted'); END;
+ CREATE TRIGGER IF NOT EXISTS live_upload_path_owners_insert_guard BEFORE INSERT ON live_upload_path_owners
+ BEGIN SELECT CASE WHEN EXISTS(SELECT 1 FROM live_upload_path_owners o WHERE o.recording_id=NEW.recording_id OR o.upload_id=NEW.upload_id OR o.rowid=NEW.rowid)
+  THEN RAISE(ABORT,'upload path ownership already exists') END; END;`);
 }
 
 /** Stable retries only; never switch modes, projects or original while ownership is unresolved. */
@@ -24,6 +27,15 @@ export function claimUploadPath(db:Database.Database,recording:unknown,project:u
  if(!canonicalUuid(recording)||!canonicalUuid(project)||!canonicalUuid(upload)||(mode!=='live'&&mode!=='full'))throw new UploadPathOwnerError('IDENTITY_REQUIRED');
  if(cameraUploadIdFor(recording,project)!==upload)throw new UploadPathOwnerError('BINDING_MISMATCH');
  initializeUploadPathOwners(db);
+ // LAN path ownership must never weaken the existing separately authenticated
+ // web-camera claim or the neutral LAN-project import binding.
+ if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='camera_project_claims'").get() &&
+    db.prepare('SELECT 1 FROM camera_project_claims WHERE recording_id=? COLLATE NOCASE LIMIT 1').get(recording))
+  throw new UploadPathOwnerError('WEB_CLAIM');
+ if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lan_capture_projects'").get()) {
+  const lan=db.prepare('SELECT project_id AS project FROM lan_capture_projects WHERE recording_id=? COLLATE NOCASE').get(recording) as {project:string|null}|undefined;
+  if(lan && lan.project!==project)throw new UploadPathOwnerError('BINDING_MISMATCH');
+ }
  const prior=db.prepare('SELECT project_id,upload_id,path FROM live_upload_path_owners WHERE recording_id=?').get(recording) as {project_id:string;upload_id:string;path:string}|undefined;
  if(prior){
   if(prior.project_id!==project||prior.upload_id!==upload||prior.path!==mode)throw new UploadPathOwnerError('OWNER_CONFLICT');
