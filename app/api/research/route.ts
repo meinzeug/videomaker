@@ -10,7 +10,8 @@ import { NextResponse } from 'next/server';
 export const maxDuration=300;
 class SessionRevoked extends Error {}
 export async function POST(req:Request) {
- if(!await authorized() || !await sameOrigin(req))return NextResponse.json({error:'Nicht erlaubt'},{status:403});
+ if(!await authorized())return NextResponse.json({error:'Bitte erneut anmelden.'},{status:401,headers:{'Cache-Control':'private, no-store'}});
+ if(!await sameOrigin(req))return NextResponse.json({error:'Nicht erlaubt'},{status:403});
  try{
   const data=await req.json().catch(()=>({}));
   const credential=await sessionValue();
@@ -60,5 +61,5 @@ export async function POST(req:Request) {
   const id=randomUUID();const now=new Date().toISOString();
   database.transaction(()=>{if(!sessionAuthorized(database,credential))throw new SessionRevoked();database.prepare("DELETE FROM research_reports WHERE created_at < datetime('now','-1 day')").run();database.prepare('INSERT INTO research_reports(id,created_at,sources,report) VALUES(?,?,?,?)').run(id,now,JSON.stringify(sources),JSON.stringify(report));}).immediate();
   return NextResponse.json({id,report},{headers:{'Cache-Control':'no-store'}});
- }catch(e){if(e instanceof SessionRevoked)return NextResponse.json({error:'Nicht erlaubt.'},{status:403});if(e instanceof SourceFetchBusy)return NextResponse.json({error:e.message},{status:503,headers:{'Retry-After':'5'}});const message=e instanceof Error?e.message:'Vertiefte Recherche fehlgeschlagen.';console.error('Deep research failed:',message);const retryable=isTransientOpenRouterError(e);const retryAfter=retryAfterSeconds(e);return NextResponse.json({error:message},{status:retryable?503:500,headers:retryAfter?{'Retry-After':String(retryAfter)}:undefined});}
+ }catch(e){if(e instanceof SessionRevoked)return NextResponse.json({error:'Bitte erneut anmelden.'},{status:401,headers:{'Cache-Control':'private, no-store'}});if(e instanceof SourceFetchBusy)return NextResponse.json({error:e.message},{status:503,headers:{'Retry-After':'5'}});const message=e instanceof Error?e.message:'Vertiefte Recherche fehlgeschlagen.';console.error('Deep research failed:',message);const retryable=isTransientOpenRouterError(e);const retryAfter=retryAfterSeconds(e);return NextResponse.json({error:message},{status:retryable?503:500,headers:retryAfter?{'Retry-After':String(retryAfter)}:undefined});}
 }
