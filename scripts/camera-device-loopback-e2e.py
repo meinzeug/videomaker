@@ -3,9 +3,11 @@
 import hashlib, os, re, select, shutil, signal, socket, socketserver, ssl, subprocess, sys, tempfile, threading, time, xml.etree.ElementTree as ET
 from pathlib import Path
 
-FIXTURE_HOME=Path('/home/dennis'); WORK=FIXTURE_HOME/'.videomaker-camera-v4-loopback'; ROOT=Path(__file__).resolve().parents[1]
+FIXTURE_HOME=Path('/home/dennis'); WORK=FIXTURE_HOME/'.videomaker-camera-v4-real-runner'; ROOT=Path(__file__).resolve().parents[1]
 PKI=Path('/tmp/kp-camera-v4-current-pki'); NEXT_PORT=0; PROXY_PORT=0; DEVICE_PORT=3395
-APP='de.kontrakurs.kontraprompter.journalv4fixture'; TEST=APP+'.test'
+APP='de.kontrakurs.kontraprompter.journalv4real'; TEST=APP+'.test'
+# Explicitly disabled until the complete real-device safety plan is reviewed.
+REAL_DEVICE_FIXTURE_ENABLED=False
 NEEDLE=b"const config: NextConfig = { serverExternalPackages: ['better-sqlite3'], poweredByHeader: false };"
 REPLACE=b"const config: NextConfig = { serverExternalPackages: ['better-sqlite3'], poweredByHeader: false, turbopack: { root: '/home/dennis' } };"
 
@@ -64,6 +66,7 @@ def install(serial,apk,package):
 
 def main():
  global NEXT_PORT, PROXY_PORT
+ if not REAL_DEVICE_FIXTURE_ENABLED:raise RuntimeError('Real recorder fixture disabled pending independent review')
  if ROOT!=WORK or len(sys.argv)!=4:raise RuntimeError('Only dedicated fixture worktree, serial and two APKs are allowed')
  serial,app_arg,test_arg=sys.argv[1:];app=Path(app_arg).resolve();test=Path(test_arg).resolve()
  if serial not in ('HEHU4TQSINOJEQG6','192.168.178.29:5555','R5CR60Q07YN'):raise RuntimeError('Unexpected device')
@@ -87,9 +90,13 @@ def main():
  if 'package:'+APP in packages or 'package:'+TEST in packages:raise RuntimeError('Fixture packages already exist')
  camera_serial = serial if expected_serial=='HEHU4TQSINOJEQG6' else 'HEHU4TQSINOJEQG6'
  camera=run('adb','-s',camera_serial,'exec-out','uiautomator','dump','/dev/tty')
- if 'Aufnahme starten' not in camera or 'Aufnahme stoppen' in camera:raise RuntimeError('Recording status not safely visible')
+ if 'Aufnahme stoppen' in camera:raise RuntimeError('An existing recording may be active')
+ # Conservative preflight: even historical package mentions are treated as
+ # unresolved until the camera service output has been independently reviewed.
+ if 'de.kontrakurs.kontraprompter' in run('adb','-s',serial,'shell','dumpsys','media.camera'):
+  raise RuntimeError('Camera ownership is not demonstrably free; stop before installation')
  run('openssl','verify','-CAfile',str(PKI/'ca.pem'),str(PKI/'server.pem'))
- expected_ca=Path('/home/dennis/.kontraprompter-camera-v4-device-current/app/src/debug/res/raw/fixture_ca.pem')
+ expected_ca=Path('/home/dennis/.kontraprompter-camera-v4-real-fixture/app/src/debug/res/raw/fixture_ca.pem')
  if not expected_ca.is_file() or hashlib.sha256(expected_ca.read_bytes()).digest()!=hashlib.sha256((PKI/'ca.pem').read_bytes()).digest():raise RuntimeError('Fixture CA does not match the Android source')
  run('git','-C',str(WORK),'diff','--quiet','--','next.config.ts','next-env.d.ts')
  config=WORK/'next.config.ts';nextenv=WORK/'next-env.d.ts';original=config.read_bytes();original_env=nextenv.read_bytes()
@@ -128,19 +135,25 @@ def main():
    for apk,package in ((app,APP),(test,TEST)):
     installed.append(package) # preflight proved this exact test package absent
     install(serial,apk,package)
-   result=subprocess.run(['adb','-s',serial,'shell','am','instrument','-w','-r','-e','class','de.kontrakurs.kontraprompter.camera.CameraLocalE2eTest',TEST+'/android.test.InstrumentationTestRunner'],text=True,capture_output=True,timeout=120)
+   for permission in ('android.permission.CAMERA','android.permission.RECORD_AUDIO'):
+    run('adb','-s',serial,'shell','pm','grant',APP,permission)
+   run('adb','-s',serial,'shell','am','start','-n',APP+'/de.kontrakurs.kontraprompter.MainActivity')
+   result=subprocess.run(['adb','-s',serial,'shell','am','instrument','-w','-r','-e','class','de.kontrakurs.kontraprompter.camera.CameraRealE2eTest',TEST+'/android.test.InstrumentationTestRunner'],text=True,capture_output=True,timeout=240)
    print(result.stdout,flush=True)
-   if result.returncode or 'OK (1 test)' not in result.stdout or 'INSTRUMENTATION_CODE: -1' not in result.stdout:raise RuntimeError('Device fixture test failed')
+   if result.returncode or 'OK (1 test)' not in result.stdout or 'INSTRUMENTATION_CODE: -1' not in result.stdout:raise RuntimeError('Device fixture test failed; retain test packages and data')
+   import json
+   marker=json.loads(run('adb','-s',serial,'shell','run-as',APP,'cat','files/camera-real-released.json'))
+   if not isinstance(marker,dict) or set(marker)!={'released','testSucceeded'} or marker['released'] is not True or marker['testSucceeded'] is not True:
+    raise RuntimeError('Fixture release marker not confirmed')
+   # There is no verified OEM-independent active-media parser yet. Absence of
+   # a package string in dumpsys is not proof. Keep the package and its own
+   # recording for an independently checked, explicit cleanup step.
+   raise RuntimeError('Fixture reports release, but OS-level verification and explicit cleanup remain required')
  finally:
   monitor_stop.set();monitor.join(timeout=3)
   for sig,handler in old_handlers.items():signal.signal(sig,handler)
-  for package in reversed(installed):
-   try:
-    present=run('adb','-s',serial,'shell','pm','list','packages').splitlines()
-    if 'package:'+package in present:
-     result=run('adb','-s',serial,'uninstall',package)
-     if 'Success' not in result:raise RuntimeError(result.strip())
-   except Exception as error:print('Fixture package cleanup failed:',package,error,flush=True)
+  if installed:
+   print('Fixture retained: verify recorder and camera release before any uninstall or restoring a foreground app.',flush=True)
   if reverse:
    try:
     current=reverse_list(serial);own=[line for line in current if f'tcp:{DEVICE_PORT}' in line.split()]
