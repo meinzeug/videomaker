@@ -18,6 +18,24 @@ function answer(s=script){return JSON.stringify({titel:['Titel 1!','Titel 2!','T
 function response(text,more={}){return new Response(JSON.stringify({id:'gen-test',model:'x-ai/grok-4.3',usage:{prompt_tokens:12,completion_tokens:34,total_tokens:46,cost:0.001},choices:[{finish_reason:'stop',message:{content:text}}],...more}),{status:200});}
 function fixture(channel=null,options=null){const db=new Database(':memory:');db.exec(`CREATE TABLE research_reports(id TEXT PRIMARY KEY,created_at TEXT NOT NULL,sources TEXT NOT NULL,report TEXT NOT NULL); CREATE TABLE channels(id TEXT PRIMARY KEY,name TEXT,platform TEXT,handle TEXT);`);ensureGenerationClaimsSchema(db);ensureGrokStateSchema(db);db.prepare('INSERT INTO research_reports VALUES(?,?,?,?)').run(id,now,JSON.stringify(source),JSON.stringify(report));if(channel)db.prepare('INSERT INTO channels VALUES(?,?,?,?)').run(channel.id,channel.name,channel.platform,channel.handle);if(options)db.prepare('UPDATE research_reports SET report=? WHERE id=?').run(JSON.stringify({...report,generation_options:options}),id);const {claim}=db.transaction(()=>{const result=acquireGenerationClaim(db,id,'descriptions',channel?.id||null,now,options);startGrokRun(db,id,now,'x-ai/grok-4.3','x-ai/grok-4.20');return result;}).immediate();return {db,claim};}
 
+test('single-call writer receives explicit selected tone, mode and user instructions from bound claim',async()=>{
+ const selected={mode:'commentary',scope:'selected',tones:['frech','arrogant'],dramaturgy:'Mit einer Frage beginnen',instructions:'Direkte Anrede',allowIncompleteSources:false};
+ const {db,claim}=fixture(null,selected),oldKey=process.env.OPENROUTER_API_KEY,oldFetch=globalThis.fetch,calls=[];
+ process.env.OPENROUTER_API_KEY='fake-test-key';
+ globalThis.fetch=async(_url,init)=>{const request=JSON.parse(init.body);calls.push(request);return response(calls.length===1?JSON.stringify(rawFacts):answer('Eine belegte Aussage.'));};
+ try{
+  assert.equal((await runGrokFlow(db,claim,true,()=>{})).state,'received');
+  assert.equal(calls.length,2);
+  const prompt=calls[1].messages.find(message=>message.role==='user').content;
+  assert.match(prompt,/\["arrogant","frech"\]/);
+  assert.match(prompt,/eigene Einordnung und Einschätzung/);
+  assert.match(prompt,/Vorrang vor allgemeinen Kanal-Stilempfehlungen/);
+  assert.match(prompt,/"dramaturgy":"Mit einer Frage beginnen"/);
+  assert.match(prompt,/"instructions":"Direkte Anrede"/);
+  assert.match(prompt,/Länge und Aufbau selbst/);
+ }finally{globalThis.fetch=oldFetch;if(oldKey===undefined)delete process.env.OPENROUTER_API_KEY;else process.env.OPENROUTER_API_KEY=oldKey;db.close();}
+});
+
 test('autonomous and optional styles do not impose previous editorial limits',()=>{
  for(const prompt of [AUTONOMOUS_SCRIPT_SYSTEM,KONTRAKURS_SCRIPT_SYSTEM,SOURCE_ONLY_SCRIPT_SYSTEM]){
   assert.doesNotMatch(prompt,/900–1.400|Wenn ihr weiter Klartext|Ich bin gespannt, wie ihr das seht/);

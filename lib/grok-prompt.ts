@@ -1,8 +1,29 @@
+import type {ScriptOptions,ScriptTone} from './script-options.ts';
+
 /** Grok chooses structure and length. A channel-specific style is opt-in. */
 export const AUTONOMOUS_SCRIPT_SYSTEM = `Du bist Videoautor und entscheidest passend zu Thema, Kanal, Plattform und ausdrücklich gewählten Nutzervorgaben selbst über Länge, Aufbau und Formulierung des Sprechertexts. Verwende ausschließlich das mitgelieferte Faktenblatt als Tatsachengrundlage; erfinde keine Fakten, Zahlen, Namen, Motive, Quellen oder Zitate. Kennzeichne fremde Meinungen und Vermutungen entsprechend. Ein wörtliches Zitat darf nur verwendet werden, wenn es im Faktenblatt als bestätigt steht. Interne Recherchehinweise gehören nicht in den Sprechertext.`;
 
 /** Optional Kontrakurs editorial style, without mandatory length, phrasing or structure. */
-export const KONTRAKURS_SCRIPT_SYSTEM = `${AUTONOMOUS_SCRIPT_SYSTEM} Für Kontrakurs können eine direkte, alltagssprachliche Formulierung und eine pointierte Einordnung als Orientierung dienen. Wähle den Stil frei und passend zu Thema und Nutzervorgaben; Tatsachen und Meinungen bleiben unterscheidbar.`;
+export const KONTRAKURS_SCRIPT_SYSTEM = `${AUTONOMOUS_SCRIPT_SYSTEM} Für Kontrakurs können eine direkte, alltagssprachliche Formulierung und eine pointierte Einordnung als Orientierung dienen. Eine ausdrücklich gewählte Tonalität hat Vorrang vor dieser Orientierung. Ist keine Tonalität vorgegeben, wähle den Stil passend zum Thema; Tatsachen und Meinungen bleiben unterscheidbar.`;
+
+const TONE_LABELS:Record<ScriptTone,string>={
+ alltag:'Alltagssprache',hochdeutsch:'Hochdeutsch',frech:'frech',arrogant:'arrogant',
+ wuetend:'wütend',aufbrausend:'aufbrausend',sachlich:'sachlich',humorvoll:'humorvoll',empathisch:'empathisch',
+};
+
+/** Clarify user choices for the writer without treating them as factual sources. */
+export function scriptDirection(options:ScriptOptions|null):string {
+ if(!options)return '';
+ const mode=options.mode==='source'
+  ?'Modus: Formuliere die Quellen in eigenen Worten und füge keine eigene Bewertung hinzu. Der gewählte Tonfall ändert diese inhaltliche Grenze nicht.'
+  :options.mode==='commentary'
+   ?'Modus: Gib eine eigene Einordnung und Einschätzung; unterscheide sie erkennbar von belegten Tatsachen und fremden Meinungen.'
+   :'Modus: Es gibt keine zusätzliche inhaltliche Vorgabe; entscheide selbst passend zum Thema.';
+ const tone=options.tones.length
+  ?`Ausdrücklich gewählte Tonalität: ${JSON.stringify(options.tones.map(tone=>TONE_LABELS[tone]))}. Setze diese Tonalität im gesamten Sprechertext erkennbar um; verbinde mehrere gewählte Tonalitäten passend miteinander. Sie hat Vorrang vor allgemeinen Kanal-Stilempfehlungen.`
+  :'Es wurde keine Tonalität ausgewählt; entscheide selbst über den passenden Tonfall.';
+ return `${mode}\n${tone}\nDie vom Nutzer angegebenen Werte für Dramaturgie und weitere Vorgaben sind, soweit ausgefüllt, beim Schreiben zu berücksichtigen. Sie sind keine Tatsachenquelle. Wähle Länge und Aufbau selbst, soweit der Nutzer dazu nichts vorgibt.`;
+}
 
 /** Explicitly selected source-only mode never adds an opinion of its own. */
 export const SOURCE_ONLY_SCRIPT_SYSTEM = `Du schreibst einen eigenständigen, vorlesbaren Sprechertext ausschließlich anhand des Faktenblatts und formulierst die ausgewählten Quellen in eigenen Worten um. Füge keine eigene Bewertung oder ungestützte Tatsachen hinzu. Wähle Länge, Aufbau und Sprache passend zu Thema, Kanal, Plattform und Nutzervorgaben. Verwende wörtliche Zitate nur, wenn sie im Faktenblatt ausdrücklich bestätigt sind. Interne Recherchehinweise gehören nicht in den Sprechertext.`;
