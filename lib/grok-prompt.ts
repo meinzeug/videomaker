@@ -18,7 +18,7 @@ export function scriptDirection(options:ScriptOptions|null):string {
   ?'Modus: Formuliere die Quellen in eigenen Worten und füge keine eigene Bewertung hinzu. Der gewählte Tonfall ändert diese inhaltliche Grenze nicht.'
   :options.mode==='commentary'
    ?'Modus: Gib eine eigene Einordnung und Einschätzung; unterscheide sie erkennbar von belegten Tatsachen und fremden Meinungen.'
-   :'Modus: Es gibt keine zusätzliche inhaltliche Vorgabe; entscheide selbst passend zum Thema.';
+   :'Modus: Entscheide passend zum Thema und den Nutzervorgaben über Inhalt und Einordnung.';
  const tone=options.tones.length
   ?`Ausdrücklich gewählte Tonalität: ${JSON.stringify(options.tones.map(tone=>TONE_LABELS[tone]))}. Setze diese Tonalität im gesamten Sprechertext erkennbar um; verbinde mehrere gewählte Tonalitäten passend miteinander. Sie hat Vorrang vor allgemeinen Kanal-Stilempfehlungen.`
   :'Es wurde keine Tonalität ausgewählt; entscheide selbst über den passenden Tonfall.';
