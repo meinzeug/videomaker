@@ -40,6 +40,24 @@ test('late authorization rollback never delivers and deadline crossing expires',
 test('concurrent query is fenced per camera and other pair cannot inspect it',()=>{
  const f=fixture();try{const {id}=beginStatusProbe(f.db,f.identity,f.clock,f.auth);assert.throws(()=>beginStatusProbe(f.db,{...f.identity,pairEpoch:randomUUID()},f.clock,f.auth));
   assert.throws(()=>deliverStatusProbe(f.db,{...f.identity,cameraId:randomUUID()},id,f.clock,f.auth));
+  assert.throws(()=>beginStatusProbe(f.db,{...f.identity,cameraId:f.identity.prompterId},f.clock,f.auth));
+ }finally{f.db.close();}
+});
+test('reentrant callback cannot forge completion or stale browser result',()=>{
+ const f=fixture();try{const {id}=beginStatusProbe(f.db,f.identity,f.clock,f.auth);deliverStatusProbe(f.db,f.identity,id,f.clock,f.auth);
+  const tamper=()=>{f.db.prepare("UPDATE web_camera_status_probe_fixture SET state='expired' WHERE id=?").run(id);return true;};
+  assert.throws(()=>completeStatusProbe(f.db,f.identity,id,snap(),f.clock,f.auth,tamper));
+  assert.equal(readStatusProbe(f.db,f.identity,id,f.clock,f.auth).state,'delivered');
+  const value=snap();completeStatusProbe(f.db,f.identity,id,value,f.clock,f.auth,()=>true);
+  let calls=0;const auth=()=>{if(++calls===1)f.db.prepare("UPDATE web_camera_status_probe_fixture SET result='{}' WHERE id=?").run(id);return true;};
+  assert.throws(()=>readStatusProbe(f.db,f.identity,id,f.clock,auth));assert.deepEqual(readStatusProbe(f.db,f.identity,id,f.clock,f.auth).status,value);
+ }finally{f.db.close();}
+});
+test('reentrant creation or delivery changes cannot commit a forged transition',()=>{
+ const f=fixture();try{let calls=0;const tamperCreate=()=>{if(++calls===4)f.db.prepare("UPDATE web_camera_status_probe_fixture SET state='expired'").run();return true;};
+  assert.throws(()=>beginStatusProbe(f.db,f.identity,f.clock,tamperCreate));assert.equal(f.db.prepare('SELECT count(*) n FROM web_camera_status_probe_fixture').get().n,0);
+  const {id}=beginStatusProbe(f.db,f.identity,f.clock,f.auth);calls=0;const tamperDelivery=()=>{if(++calls===4)f.db.prepare("UPDATE web_camera_status_probe_fixture SET state='expired' WHERE id=?").run(id);return true;};
+  assert.throws(()=>deliverStatusProbe(f.db,f.identity,id,f.clock,tamperDelivery));assert.equal(readStatusProbe(f.db,f.identity,id,f.clock,f.auth).state,'queued');
  }finally{f.db.close();}
 });
 test('production cannot enable fixture',()=>{
