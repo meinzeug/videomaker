@@ -1,0 +1,34 @@
+name: Isolated camera v4 server CI
+on:
+  push:
+    branches: [wip/ci-camera-v4-web-20261115]
+permissions:
+  contents: read
+jobs:
+  test-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      NODE_OPTIONS: '--max-old-space-size=4096'
+      DATA_DIR: /tmp/camera-v4-ci-synthetic-data
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify application commit and CI-only diff
+        run: |
+          test "$(git rev-parse HEAD^)" = '5a90b16c825458c2e26244dd3dd77d59af3645f1'
+          test "$(git diff --name-only HEAD^ HEAD)" = '.github/workflows/camera-v4-ci.yml'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.2'
+          check-latest: false
+      - run: npm ci --no-audit --no-fund
+      - name: Complete test suite
+        run: npm test
+      - name: TypeScript
+        run: npx tsc --noEmit --incremental false --pretty false
+      - name: Production build with camera feature disabled
+        run: npm run build
