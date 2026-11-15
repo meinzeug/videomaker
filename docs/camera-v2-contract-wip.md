@@ -19,7 +19,7 @@ den Cloud-Upload.
 
 `tests/fixtures/camera-v1-v2-contract.json` ist bytegleich mit der Android-
 Testressource und hat SHA-256
-`a157d167b02f64b10dbc544f6c79d851e54a048588cb2e310f4282249daa6ba5`.
+`ebb2f0915ca91b88e3ffd17fa4824fc49de75ced3ccf055347f5a9768cde2fb0`.
 Die Tests verwenden echte Parser und synthetische SQLite-Daten; sie prüfen
 unter anderem v1-Rückfall nach v2, falsche Feldtypen, Zustandskonflikte,
 Stopppriorität, spätere und doppelte ACKs sowie ID-Konflikte.
@@ -31,3 +31,23 @@ Restoreverhalten, konkurrierender lokaler Bedienung oder reale E2E-Tests.
 Der Android-Client wirbt weiterhin nur v2 an; dieser WIP beweist keinen
 Client-Fallback auf v1. Ein etwaiges früheres HTTP- oder Gerätetestergebnis gilt
 nicht automatisch für diesen zusammengeführten Quellstand.
+
+## Projektbindung und verbleibende Aktionsgrenze
+
+Pause und Fortsetzen werden beim Anlegen an das zum Aufnahme-Claim gehörende
+Projekt gebunden. Vor jeder Auslieferung prüft der Server im selben
+SQLite-Schreiblock Aufnahme, Projekt und weiterhin offenen Claim; nie
+ausgelieferte ungebundene Altbefehle werden abgelehnt. Bereits ausgelieferte
+Aufträge werden bei einem späteren Zustandswechsel nicht fälschlich als
+abgelehnt bezeichnet. Android prüft dasselbe Projekt im Entscheidungsjournal
+und innerhalb des Recorder-Locks gegen das bei Aufnahmezulassung gespeicherte
+Projekt. Der separate Not-/Recovery-Stopp erhält keine neue Projektpflicht.
+
+Die Android-Journalentscheidung `accepted` wird weiterhin vor dem
+Recorderaufruf gespeichert. Verweigert der Recorder-Lock die Aktion wegen
+eines zwischenzeitlich veränderten Zustands, wird dessen `false` derzeit nicht
+crashsicher in diese Entscheidung zurückgeschrieben. Eine solche Quittung
+belegt deshalb keine tatsächlich zugelassene Aktion. Dieser Race und das
+Verhalten nach Prozessabbruch bleiben vor Aktivierung ein Freigabeblocker.
+Ältere Journalentscheidungen ohne Projekt bleiben lesbar, können aber keinen
+neuen Pause-/Fortsetzen-Auftrag ohne Projekt autorisieren.

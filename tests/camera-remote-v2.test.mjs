@@ -147,11 +147,12 @@ test('late delivered ACK cannot be overwritten by duplicates or unrelated ACKs',
  }finally{db.close();}
 });
 
-test('shared Android contract examples parse as v1/v2 heartbeats and control requests',async()=>{
+test('shared heartbeat and delivery examples match versioned request rules',async()=>{
  const {readFile}=await import('node:fs/promises');
  const fixture=JSON.parse(await readFile(new URL('./fixtures/camera-v1-v2-contract.json',import.meta.url),'utf8'));
  assert.deepEqual(fixture.heartbeats.map(value=>parseCameraHeartbeat(value).capability),['remote-record-v1','remote-record-v2']);
- assert.deepEqual(fixture.commands.map(value=>parseCameraRequest(value).type),['record_start','record_pause','record_resume','record_stop','camera_switch']);
+ assert.deepEqual(fixture.commands.map(value=>parseCameraRequest(['record_pause','record_resume'].includes(value.type)?{...value,projectId:null}:value).type),['record_start','record_pause','record_resume','record_stop','camera_switch']);
+ assert.ok(fixture.commands.filter(value=>['record_pause','record_resume'].includes(value.type)).every(value=>typeof value.projectId==='string'));
 });
 
 test('version and action fields are literal strings, not string-coercible arrays',()=>{
@@ -159,4 +160,56 @@ test('version and action fields are literal strings, not string-coercible arrays
  assert.throws(()=>parseCameraHeartbeat({...normal,capability:['remote-record-v2']}),/Ungültige/);
  assert.throws(()=>parseCameraHeartbeat({...normal,capability:['remote-record-v1']}),/Ungültige/);
  assert.throws(()=>parseCameraRequest({id:randomUUID(),type:['record_pause'],recordingId:recording,projectId:null}),/Ungültiger/);
+});
+
+test('v1 extra fields remain tolerated without acquiring v2 capability',()=>{
+ const db=new Database(':memory:');db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY)');ensureCameraRemoteSchema(db);
+ try{
+  const parsed=parseCameraHeartbeat({id:device,sequence:++seq,name:'Legacy',capability:'remote-record-v1',phase:'idle',recordingId:null,projectId:null,paused:false,cameraFront:true,cameraCanSwitch:true,ack:[]});
+  assert.equal(parsed.paused,null);assert.equal(parsed.cameraFront,null);assert.equal(parsed.cameraCanSwitch,false);
+  receiveCameraHeartbeat(db,parsed,clock(1000),owner,undefined,true);
+  const id=randomUUID();assert.throws(()=>queueCameraRequest(db,device,cmd('camera_switch',{id,recordingId:id,cameraFrom:true}),clock(1010)),/nicht erreichbar|nicht bereit/);
+ }finally{db.close();}
+});
+
+test('queued pause and resume are bound to the original live take and project at delivery',()=>{
+ for(const [action,initialPaused] of [['record_pause',false],['record_resume',true]]){
+  const db=fixture();try{
+   if(initialPaused)receiveCameraHeartbeat(db,beat('recording',true),clock(1035),owner,undefined,true);
+   const command=cmd(action);queueCameraRequest(db,device,command,clock(1040));
+   const otherProject=randomUUID();
+   assert.deepEqual(receiveCameraHeartbeat(db,{...beat('recording',initialPaused),projectId:otherProject},clock(1050),owner,undefined,true),[]);
+   assert.equal(db.prepare('SELECT result FROM camera_remote_controls WHERE id=?').get(command.id).result,'rejected');
+   assert.deepEqual(receiveCameraHeartbeat(db,beat('recording',initialPaused),clock(1060),owner,undefined,true),[]);
+  }finally{db.close();}
+ }
+});
+
+test('dequeued pause includes its immutable expected project and an open claim',()=>{
+ const db=fixture();try{
+  const pause=cmd('record_pause');queueCameraRequest(db,device,pause,clock(1040));
+  const delivered=receiveCameraHeartbeat(db,beat('recording',false),clock(1050),owner,undefined,true);
+  assert.equal(delivered[0].projectId,project);
+  assert.throws(()=>db.prepare('UPDATE camera_remote_control_projects SET project_id=? WHERE id=?').run(randomUUID(),pause.id),/cannot be changed/);
+ }finally{db.close();}
+});
+
+test('project change after delivery does not falsely claim the delivered command was rejected',()=>{
+ const db=fixture();try{
+  const pause=cmd('record_pause');queueCameraRequest(db,device,pause,clock(1040));
+  assert.equal(receiveCameraHeartbeat(db,beat('recording',false),clock(1050),owner,undefined,true)[0].id,pause.id);
+  const otherProject=randomUUID();assert.deepEqual(receiveCameraHeartbeat(db,{...beat('recording',false),projectId:otherProject},clock(1060),owner,undefined,true),[]);
+  const row=db.prepare('SELECT result,delivered_at FROM camera_remote_controls WHERE id=?').get(pause.id);
+  assert.equal(row.result,'queued');assert.equal(row.delivered_at,1050);
+ }finally{db.close();}
+});
+
+test('legacy queued v2 control without a project proof is never delivered or silently revived',()=>{
+ const db=fixture();try{
+  const old=cmd('record_pause');
+  db.prepare("INSERT INTO camera_remote_controls(id,device_id,recording_id,type,created_at,expires_at,runtime_id,created_tick,expires_tick) VALUES(?,?,?,'record_pause',?,?,?,?,?)").run(old.id,device,recording,1040,11030,runtime,1040,11030);
+  assert.throws(()=>queueCameraRequest(db,device,old,clock(1041)),/ohne gesicherte Projektbindung/);
+  assert.deepEqual(receiveCameraHeartbeat(db,beat('recording',false),clock(1050),owner,undefined,true),[]);
+  assert.equal(db.prepare('SELECT result FROM camera_remote_controls WHERE id=?').get(old.id).result,'rejected');
+ }finally{db.close();}
 });
