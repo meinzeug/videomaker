@@ -157,6 +157,18 @@ test('späterer neutraler Projektimport darf vorhandene Zuordnung nicht ersetzen
  }finally{f.close();}
 });
 
+test('Retry eines vorhandenen neutralen Projekts überlebt ein zuerst anderes manuelles Vollziel',()=>{
+ const f=fixture(),r=randomUUID(),neutral=randomUUID(),other=randomUUID(),u=cameraUploadIdFor(r,other);
+ try{
+  f.db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY,created_at TEXT,title TEXT,sources TEXT,content TEXT)');
+  const original=ensureLanCaptureProject(f.db,r,()=>{},()=>neutral);
+  assert.equal(original.projectId,neutral);
+  tx(f.db,r,other,u,'full');
+  assert.deepEqual(ensureLanCaptureProject(f.db,r,()=>{}),{projectId:neutral,recordingId:r,created:false});
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM projects').get().n,1);
+ }finally{f.close();}
+});
+
 function start(f,r,p,u,mode,point='normal'){
  const worker=fork(new URL('./fixtures/live-path-owner-worker.mjs',import.meta.url),[f.filename,r,p,u,mode,point],{stdio:['ignore','ignore','pipe','ipc'],execArgv:['--experimental-strip-types']});
  const ready=new Promise((resolve,reject)=>{worker.once('message',resolve);worker.once('error',reject);worker.once('exit',code=>reject(Error(`worker exited ${code}`)));});
