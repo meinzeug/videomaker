@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import {normalizeScriptOptions,InvalidScriptOptions,usesCustomScript} from '../lib/script-options.ts';
-import {KONTRAKURS_SCRIPT_SYSTEM,SOURCE_ONLY_SCRIPT_SYSTEM} from '../lib/grok-prompt.ts';
+import {KONTRAKURS_SCRIPT_SYSTEM,SOURCE_ONLY_SCRIPT_SYSTEM,scriptDirection} from '../lib/grok-prompt.ts';
 import {acquireGenerationClaim,ensureGenerationClaimsSchema,GenerationClaimConflict,claimSnapshot,saveGenerationResponse} from '../lib/generation-claims.ts';
 const options=(values={})=>({mode:'source',scope:'selected',tones:['frech','alltag'],dramaturgy:'Bogen',instructions:'Keine Begrüßung',allowIncompleteSources:false,...values});
 const now='2026-11-14T00:00:00.000Z',id='11111111-1111-4111-8111-111111111111';
@@ -25,6 +25,21 @@ test('default is autonomous and Kontrakurs commentary is optional',()=>{
  for(const scope of ['selected','web'])assert.equal(usesCustomScript(normalizeScriptOptions(options({mode:'standard',scope,tones:[],dramaturgy:'',instructions:''}))),false);
  assert.equal(usesCustomScript(normalizeScriptOptions(options({mode:'standard',tones:['frech'],dramaturgy:'',instructions:''}))),true);
  assert.match(KONTRAKURS_SCRIPT_SYSTEM,/Kontrakurs.*Orientierung/);assert.doesNotMatch(KONTRAKURS_SCRIPT_SYSTEM,/Du hast eine klare Meinung/);
+});
+
+test('explicit tone and content mode are distinct from factual source constraints',()=>{
+ const source=scriptDirection(normalizeScriptOptions(options({tones:['frech','arrogant','wuetend']})));
+ assert.match(source,/keine eigene Bewertung/);
+ assert.match(source,/\["arrogant","frech","wütend"\]/);
+ assert.match(source,/im gesamten Sprechertext erkennbar/);
+ assert.match(source,/Vorrang vor allgemeinen Kanal-Stilempfehlungen/);
+ const commentary=scriptDirection(normalizeScriptOptions(options({mode:'commentary',tones:['empathisch']})));
+ assert.match(commentary,/eigene Einordnung und Einschätzung/);
+ assert.match(commentary,/\["empathisch"\]/);
+ const autonomous=scriptDirection(normalizeScriptOptions(options({mode:'standard',tones:[],dramaturgy:'',instructions:''})));
+ assert.match(autonomous,/keine Tonalität ausgewählt/);
+ assert.match(autonomous,/Länge und Aufbau selbst/);
+ assert.equal(scriptDirection(null),'');
 });
 
 test('claims bind normalized options and recover the same snapshot after research deletion',()=>{

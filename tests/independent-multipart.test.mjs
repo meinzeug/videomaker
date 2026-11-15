@@ -73,11 +73,14 @@ test('an uncertain pending part never triggers an automatic paid retry',async()=
 });
 test('channel identity and source-only mode reach every script-part request',async()=>{
  const channel={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',name:'Eigenkanal',platform:'tiktok',handle:'@eigen'};
- await isolated(['Anfang','Ende'],channel,options('source'),async({db,claim,calls})=>{
+ const selected={...options('source'),tones:['frech','wuetend','arrogant']};
+ await isolated(['Anfang','Ende'],channel,selected,async({db,claim,calls})=>{
   const result=await runGrokFlow(db,claim,true,()=>{});assert.equal(result.state,'received');
   for(const body of calls.slice(1)){
    assert.equal(body.messages[0].content,prompts.CHANNEL_SOURCE_ONLY_SCRIPT_SYSTEM);
    const user=body.messages.find(m=>m.role==='user').content;assert.match(user,/Eigenkanal/);assert.match(user,/tiktok/);assert.match(user,/"mode":"source"/);
+   assert.match(user,/\["arrogant","frech","wütend"\]/);assert.match(user,/keine eigene Bewertung/);assert.match(user,/im gesamten Sprechertext erkennbar/);
+   assert.match(user,/"dramaturgy":"Spannung"/);assert.match(user,/"instructions":"Direkt zum Thema"/);
   }
  });
 });
