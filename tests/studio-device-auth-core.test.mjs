@@ -206,15 +206,23 @@ test('all public decisions fail before returning from an enclosing transaction',
  }finally{f.db.close();}
 });
 
-test('callback cannot start an outer transaction before a security transaction',()=>{
+test('authorization callback cannot open a transaction even when it returns false or throws',()=>{
  const f=fixture();try{
-  const bad=()=>{f.db.exec('BEGIN');return true;};
-  assert.throws(()=>f.api.beginEnrollment(f.device,f.publicKey,['projects:read'],owner,bad),/eigene Transaktion/);
-  assert.equal(f.db.inTransaction,true);f.db.exec('ROLLBACK');
+  const callbacks=[
+   ()=>{f.db.exec('BEGIN');return true;},
+   ()=>{f.db.exec('BEGIN');return false;},
+   ()=>{f.db.exec('BEGIN');throw new Error('synthetic adapter failure');},
+  ];
+  for(const bad of callbacks){
+   assert.throws(()=>f.api.beginEnrollment(f.device,f.publicKey,['projects:read'],owner,bad),/Transaktionsgrenze/);
+   assert.equal(f.db.inTransaction,true);f.db.exec('ROLLBACK');
+  }
   assert.equal(f.db.prepare('SELECT count(*) n FROM studio_auth_devices').get().n,0);
   f.enroll();
-  assert.throws(()=>f.api.revoke(f.device,bad),/eigene Transaktion/);
-  assert.equal(f.db.inTransaction,true);f.db.exec('ROLLBACK');
+  for(const bad of callbacks){
+   assert.throws(()=>f.api.revoke(f.device,bad),/Transaktionsgrenze/);
+   assert.equal(f.db.inTransaction,true);f.db.exec('ROLLBACK');
+  }
   assert.equal(f.db.prepare('SELECT revoked FROM studio_auth_devices WHERE device_id=?').get(f.device).revoked,0);
  }finally{if(f.db.inTransaction)f.db.exec('ROLLBACK');f.db.close();}
 });
@@ -239,4 +247,12 @@ test('a returned challenge can already be stale or revoked after snapshot commit
   const revoked=createStudioDeviceAuth(intercepted,()=>1_060_001,secret).beginLogin(f.device);
   assert.ok(revoked);assert.equal(forward.completeLogin(f.device,revoked.challengeToken,f.signature(revoked)),null);
  }finally{left?.close();right?.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('clock callback cannot end the security transaction',()=>{
+ const f=fixture();try{
+  f.enroll();const bad=createStudioDeviceAuth(f.db,()=>{f.db.exec('COMMIT');return f.get();},secret);
+  assert.throws(()=>bad.beginLogin(f.device));
+  assert.equal(f.db.inTransaction,false);
+ }finally{if(f.db.inTransaction)f.db.exec('ROLLBACK');f.db.close();}
 });
