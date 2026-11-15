@@ -33,12 +33,12 @@ test('isolated paired camera v3 HTTP controls and telemetry',{skip:!enabled,time
  assert.equal((await post(path,browser,{id:startId,type:'record_start',recordingId:recording,projectId:project})).status,201);
  r=await poll('idle',null,null,null,true,true);assert.equal((await r.json()).commands[0].id,startId);
  assert.equal((await poll('recording',recording,project,false,true,false,[{id:startId,result:'accepted'}])).status,200);
- const pause=randomUUID(),pauseBody={id:pause,type:'record_pause',recordingId:recording,projectId:null};
+ const pause=randomUUID(),pauseBody={id:pause,type:'record_pause',recordingId:recording,projectId:project};
  assert.equal((await post(path,browser,pauseBody)).status,201);assert.equal((await post(path,browser,pauseBody)).status,200);
  r=await poll('recording',recording,project,false,true,false);const pauseDelivery=(await r.json()).commands[0];assert.equal(pauseDelivery.id,pause);assert.equal(pauseDelivery.projectId,project);
  assert.equal((await poll('recording',recording,project,true,true,false,[{id:pause,result:'accepted'}])).status,200);
  r=await fetch(base+'/api/camera-devices',{headers:{cookie:browser}});assert.equal((await r.json()).devices[0].paused,true);
- const resume=randomUUID();assert.equal((await post(path,browser,{id:resume,type:'record_resume',recordingId:recording,projectId:null})).status,201);
+ const resume=randomUUID();assert.equal((await post(path,browser,{id:resume,type:'record_resume',recordingId:recording,projectId:project})).status,201);
  r=await poll('recording',recording,project,true,true,false);const resumeDelivery=(await r.json()).commands[0];assert.equal(resumeDelivery.id,resume);assert.equal(resumeDelivery.projectId,project);
  assert.equal((await poll('recording',recording,project,false,true,false,[{id:resume,result:'accepted'}])).status,200);
  const stop=randomUUID();assert.equal((await post(path,browser,{id:stop,type:'record_stop',recordingId:recording,projectId:null})).status,201);

@@ -37,21 +37,21 @@ test('isolated paired camera v4 uncertainty and STOP recovery',{skip:!enabled,ti
  capability='remote-record-v4';r=await poll('idle',null,null,null,true,true,[{id:startId,result:'enqueued'}]);assert.deepEqual((await r.json()).commands,[]);
  r=await fetch(base+'/api/camera-devices',{headers:{cookie:browser}});const queued=(await r.json()).devices[0];assert.equal(queued.capability,'remote-record-v4');assert.equal(queued.lastCommand.result,'enqueued');assert.equal(queued.phase,'idle');
  assert.equal((await poll('recording',recording,project,false,true,false)).status,200);
- const pause=randomUUID(),pauseBody={id:pause,type:'record_pause',recordingId:recording,projectId:null};
+ const pause=randomUUID(),pauseBody={id:pause,type:'record_pause',recordingId:recording,projectId:project};
  assert.equal((await post(path,browser,pauseBody)).status,201);assert.equal((await post(path,browser,pauseBody)).status,200);
  r=await poll('recording',recording,project,false,true,false);const pauseDelivery=(await r.json()).commands[0];assert.equal(pauseDelivery.id,pause);assert.equal(pauseDelivery.projectId,project);
  assert.equal((await poll('recording',recording,project,true,true,false,[{id:pause,result:'accepted'}])).status,200);
  r=await fetch(base+'/api/camera-devices',{headers:{cookie:browser}});assert.equal((await r.json()).devices[0].paused,true);
- const resume=randomUUID();assert.equal((await post(path,browser,{id:resume,type:'record_resume',recordingId:recording,projectId:null})).status,201);
+ const resume=randomUUID();assert.equal((await post(path,browser,{id:resume,type:'record_resume',recordingId:recording,projectId:project})).status,201);
  r=await poll('recording',recording,project,true,true,false);const resumeDelivery=(await r.json()).commands[0];assert.equal(resumeDelivery.id,resume);assert.equal(resumeDelivery.projectId,project);
  assert.equal((await poll('recording',recording,project,false,true,false,[{id:resume,result:'accepted'}])).status,200);
  // A delivered v4 action can recover as uncertain after a device crash.
- const unknownPause=randomUUID();assert.equal((await post(path,browser,{id:unknownPause,type:'record_pause',recordingId:recording,projectId:null})).status,201);
+ const unknownPause=randomUUID();assert.equal((await post(path,browser,{id:unknownPause,type:'record_pause',recordingId:recording,projectId:project})).status,201);
  capability='remote-record-v4';r=await poll('recording',recording,project,false,true,false);assert.equal((await r.json()).commands[0].id,unknownPause);
  capability='remote-record-v3';assert.equal((await poll('recording',recording,project,false,true,false,[{id:unknownPause,result:'uncertain'}])).status,400);
  capability='remote-record-v4';r=await poll('recording',recording,project,false,true,false,[{id:unknownPause,result:'uncertain'}]);assert.equal(r.status,200);assert.deepEqual((await r.json()).commands,[]);
  r=await fetch(base+'/api/camera-devices',{headers:{cookie:browser}});assert.equal((await r.json()).devices[0].uncertain,true);
- assert.equal((await post(path,browser,{id:randomUUID(),type:'record_pause',recordingId:recording,projectId:null})).status,409);
+ assert.equal((await post(path,browser,{id:randomUUID(),type:'record_pause',recordingId:recording,projectId:project})).status,409);
  r=await poll('recording',recording,project,false,true,false,[{id:unknownPause,result:'accepted'}]);assert.equal(r.status,200);assert.deepEqual((await r.json()).commands,[]);
  const stop=randomUUID();assert.equal((await post(path,browser,{id:stop,type:'record_stop',recordingId:recording,projectId:null})).status,201);
  r=await poll('recording',recording,project,false,true,false);assert.equal((await r.json()).commands[0].type,'record_stop');

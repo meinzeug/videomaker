@@ -38,3 +38,26 @@ Schlüsselverlust und Backup-Restore, Anti-Downgrade, Archivierung/Quoten und
 der getrennte Vorschauwiderruf sind offen. Keine laufende lokale Aufnahme darf
 wegen eines Netzabbruchs als beendet angenommen werden. Produktionsflags werden
 hier nicht freigeschaltet.
+
+## Nachträgliche Absicherung des Testvertrags
+
+Pause/Fortsetzen benötigen jetzt auch im HTTP-Auftrag die erwartete Projekt-ID.
+Sie wird unter dem Writerlock mit Aufnahme, aktuellem Gerätestatus und offenem
+Claim verglichen und bei idempotentem Retry erneut gegen die gespeicherte ID
+geprüft. Ältere Clients, die diese ID weglassen, werden bewusst abgewiesen.
+Das Browserpanel muss denselben Vertrag verwenden.
+
+Ein bereits zugestellter, serverseitig abgelaufener Control-Befehl sperrt neue
+Starts und Controls. Eine nachträglich angenommene Entscheidung löst die
+Sperre erst nach einem passenden Gerätezustand; diese Beobachtung wird dauerhaft
+gespeichert, damit spätere Zustandswechsel sie nicht rückwirkend ungültig machen.
+STOP für eine beobachtete Aufnahme bleibt verfügbar. Ein älterer angenommener
+Control ohne nachweisbare Zustandsbeobachtung kann deshalb ebenfalls gesperrt
+bleiben; ein sicherer Auflösungsweg ist noch nicht implementiert. Das Gerätelisten-
+`lastControl.cameraFrom` enthält bei einem Kamerawechsel die gebundene vorherige
+Kameraseite, sonst `null`.
+
+Ein vor STOP gestarteter, aber erst später am Server eintreffender START wird
+damit nicht widerrufen. Eine versions-/generationsgebundene Startberechtigung,
+die bei STOP atomar verfällt, ist ein gesonderter Freigabeblocker. Der bisherige
+Startpermit-Baustein ist nicht mit Routen oder dieser Grenze verbunden.
