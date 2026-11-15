@@ -15,7 +15,8 @@ export async function sessionFetch(input:RequestInfo|URL,init?:RequestInit):Prom
 }
 
 export class ApiError extends Error {
- constructor(public status:number,message:string,public retryAfter=0,public researchRetained=false){super(message);}
+ readonly status:number; readonly retryAfter:number; readonly researchRetained:boolean;
+ constructor(status:number,message:string,retryAfter=0,researchRetained=false){super(message);this.status=status;this.retryAfter=retryAfter;this.researchRetained=researchRetained;}
 }
 /** Classify failed HTTP status even if its body is empty, malformed, or interrupted. */
 export async function apiResponseJson(response:Response){
