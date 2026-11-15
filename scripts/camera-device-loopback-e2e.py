@@ -14,7 +14,8 @@ class Tunnel(socketserver.BaseRequestHandler):
   with socket.create_connection(('127.0.0.1',NEXT_PORT),timeout=10) as upstream:
    sockets=[self.request,upstream]
    while True:
-    readable,_,_=select.select(sockets,[],[],35)
+    buffered = [self.request] if isinstance(self.request, ssl.SSLSocket) and self.request.pending() else []
+    readable=buffered or select.select(sockets,[],[],35)[0]
     if not readable:return
     for source in readable:
      data=source.recv(32768)
@@ -24,7 +25,10 @@ class TLSserver(socketserver.ThreadingTCPServer):
  allow_reuse_address=False; daemon_threads=True
  def get_request(self):
   sock,addr=super().get_request()
-  try:return self.context.wrap_socket(sock,server_side=True),addr
+  try:
+   sock.settimeout(5)
+   secured=self.context.wrap_socket(sock,server_side=True);secured.settimeout(None)
+   return secured,addr
   except Exception:sock.close();raise
 
 def run(*args, **kwargs):return subprocess.run(args,check=True,text=True,capture_output=True,**kwargs).stdout
