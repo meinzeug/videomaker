@@ -19,3 +19,7 @@ Bei Änderungen an gemeinsamen Abläufen, Datenformaten, Anmeldung oder Schnitts
 Die vom Projekt vorgegebene Gestaltungsreferenz liegt unter `~/kontraprompter/SKILL.md`. Bei der Gestaltung der Oberflächen deren anwendbare Prinzipien beachten; Android- und Web-Oberflächen sollen zugänglich, gut bedienbar und in ihren gemeinsamen Abläufen konsistent sein. Nicht implementierte Funktionen und Grenzen müssen in Oberfläche und Dokumentation erkennbar bleiben.
 
 Produktivdaten, Serverkonfiguration und bestehende Aufnahmen schützen. Vor einer Serverübernahme Änderungen prüfen, Sicherung und Rückweg vorbereiten sowie anschließend die betroffenen Funktionen und den Dienstzustand kontrollieren. Projektanweisungen und Git-Status in beiden Repositories vor Änderungen beachten.
+
+## Arbeitsstand und Fortsetzung
+
+Vor der nächsten Arbeit zusätzlich [`docs/arbeitsstand-und-offene-aufgaben.md`](docs/arbeitsstand-und-offene-aufgaben.md) lesen, den dort datierten Stand gegen Git, CI, Geräte und Produktivserver verifizieren und nach wesentlichen Änderungen aktualisieren. Die Datei ist eine Übergabe, kein Ersatz für Tests oder die obigen Schutzregeln.
