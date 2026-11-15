@@ -101,6 +101,35 @@ test('initialization refuses partial schema and missing consumed history without
  }finally{db.close();}
 });
 
+test('orphaned or mismatched grants cannot authorize a later device enrollment',()=>{
+ const db=new Database(':memory:'),f=init(db);try{
+  const epoch=db.prepare('SELECT project_epoch FROM fixture_owned_auth_projects WHERE project_id=?').get(f.project).project_epoch;
+  const insert=db.prepare('INSERT INTO fixture_owned_auth_grants VALUES(?,?,?,?,?,0)');
+  assert.throws(()=>insert.run(f.device,f.project,a,b,epoch),/project binding exists or invalid/);
+  const challenge=f.auth.beginEnrollment(f.device,f.pub,['projects:read'],f.primary);assert.ok(challenge);
+  const sig=sign('sha256',challenge.message,f.keys.privateKey);
+  const trigger=db.prepare("SELECT sql FROM sqlite_master WHERE name='fixture_owned_grant_insert_guard'").get().sql;
+  db.exec('DROP TRIGGER fixture_owned_grant_insert_guard');
+  insert.run(f.device,f.project,a,b,epoch); // simulate inconsistent imported data
+  db.exec(trigger);
+  assert.throws(()=>initializeOwnedDeviceAuth(db),/PROJECT_EPOCH_HISTORY_REVIEW_REQUIRED/);
+  assert.throws(()=>db.prepare('INSERT INTO fixture_owned_auth_devices VALUES(?,?,?,?,?,0)').run(f.device,f.pub,'projects:read',a,b),/device binding exists/);
+  assert.equal(f.auth.beginEnrollment(f.device,f.pub,['projects:read'],f.primary),null);
+  assert.equal(f.auth.completeEnrollment(f.device,challenge.challengeId,sig,f.primary),null);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM fixture_owned_auth_devices WHERE device_id=?').get(f.device).n,0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM fixture_owned_auth_grants WHERE device_id=?').get(f.device).n,1);
+ }finally{db.close();}
+ const db2=new Database(':memory:'),f2=init(db2);try{
+  enroll(f2);const epoch=db2.prepare('SELECT project_epoch FROM fixture_owned_auth_projects WHERE project_id=?').get(f2.foreign).project_epoch;
+  assert.throws(()=>db2.prepare('INSERT INTO fixture_owned_auth_grants VALUES(?,?,?,?,?,0)').run(f2.device,f2.foreign,c,d,epoch),/project binding exists or invalid/);
+  const trigger=db2.prepare("SELECT sql FROM sqlite_master WHERE name='fixture_owned_grant_insert_guard'").get().sql;
+  db2.exec('DROP TRIGGER fixture_owned_grant_insert_guard');
+  db2.prepare('INSERT INTO fixture_owned_auth_grants VALUES(?,?,?,?,?,0)').run(f2.device,f2.foreign,c,d,epoch);
+  db2.exec(trigger);
+  assert.throws(()=>initializeOwnedDeviceAuth(db2),/PROJECT_EPOCH_HISTORY_REVIEW_REQUIRED/);
+ }finally{db2.close();}
+});
+
 test('initialization refuses modified or unexpected triggers',()=>{
  const db=new Database(':memory:');try{
   initializeOwnedDeviceAuth(db);

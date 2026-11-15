@@ -32,11 +32,11 @@ const OWNED_SCHEMA = `
  CREATE TRIGGER IF NOT EXISTS fixture_owned_session_insert_guard BEFORE INSERT ON fixture_owned_auth_sessions WHEN EXISTS(SELECT 1 FROM fixture_owned_auth_sessions s WHERE s.session_hash=NEW.session_hash OR s.rowid=NEW.rowid) BEGIN SELECT RAISE(ABORT,'session exists'); END;
  CREATE TRIGGER IF NOT EXISTS fixture_owned_device_no_delete BEFORE DELETE ON fixture_owned_auth_devices BEGIN SELECT RAISE(ABORT,'device binding retained'); END;
  CREATE TRIGGER IF NOT EXISTS fixture_owned_device_no_reactivate BEFORE UPDATE OF revoked ON fixture_owned_auth_devices WHEN OLD.revoked=1 AND NEW.revoked<>1 BEGIN SELECT RAISE(ABORT,'device revocation retained'); END;
- CREATE TRIGGER IF NOT EXISTS fixture_owned_device_insert_guard BEFORE INSERT ON fixture_owned_auth_devices WHEN EXISTS(SELECT 1 FROM fixture_owned_auth_devices d WHERE d.device_id=NEW.device_id OR d.public_key=NEW.public_key OR d.rowid=NEW.rowid) BEGIN SELECT RAISE(ABORT,'device binding exists'); END;
+ CREATE TRIGGER IF NOT EXISTS fixture_owned_device_insert_guard BEFORE INSERT ON fixture_owned_auth_devices WHEN EXISTS(SELECT 1 FROM fixture_owned_auth_devices d WHERE d.device_id=NEW.device_id OR d.public_key=NEW.public_key OR d.rowid=NEW.rowid) OR EXISTS(SELECT 1 FROM fixture_owned_auth_grants g WHERE g.device_id=NEW.device_id) BEGIN SELECT RAISE(ABORT,'device binding exists'); END;
  CREATE TRIGGER IF NOT EXISTS fixture_owned_grant_immutable BEFORE UPDATE OF device_id,project_id,owner_hash,workspace_hash,project_epoch ON fixture_owned_auth_grants BEGIN SELECT RAISE(ABORT,'project binding immutable'); END;
  CREATE TRIGGER IF NOT EXISTS fixture_owned_grant_no_delete BEFORE DELETE ON fixture_owned_auth_grants BEGIN SELECT RAISE(ABORT,'project binding retained'); END;
  CREATE TRIGGER IF NOT EXISTS fixture_owned_grant_no_reactivate BEFORE UPDATE OF revoked ON fixture_owned_auth_grants WHEN OLD.revoked=1 AND NEW.revoked<>1 BEGIN SELECT RAISE(ABORT,'project revocation retained'); END;
- CREATE TRIGGER IF NOT EXISTS fixture_owned_grant_insert_guard BEFORE INSERT ON fixture_owned_auth_grants WHEN EXISTS(SELECT 1 FROM fixture_owned_auth_grants g WHERE (g.device_id=NEW.device_id AND g.project_id=NEW.project_id) OR g.rowid=NEW.rowid) BEGIN SELECT RAISE(ABORT,'project binding exists'); END;
+ CREATE TRIGGER IF NOT EXISTS fixture_owned_grant_insert_guard BEFORE INSERT ON fixture_owned_auth_grants WHEN EXISTS(SELECT 1 FROM fixture_owned_auth_grants g WHERE (g.device_id=NEW.device_id AND g.project_id=NEW.project_id) OR g.rowid=NEW.rowid) OR NOT EXISTS(SELECT 1 FROM fixture_owned_auth_devices d WHERE d.device_id=NEW.device_id AND d.owner_hash=NEW.owner_hash AND d.workspace_hash=NEW.workspace_hash AND d.revoked=0) OR NOT EXISTS(SELECT 1 FROM fixture_owned_auth_projects p WHERE p.project_id=NEW.project_id AND p.project_epoch=NEW.project_epoch AND p.owner_hash=NEW.owner_hash AND p.workspace_hash=NEW.workspace_hash) BEGIN SELECT RAISE(ABORT,'project binding exists or invalid'); END;
  CREATE TRIGGER IF NOT EXISTS fixture_owned_epoch_no_delete BEFORE DELETE ON fixture_owned_auth_project_epochs BEGIN SELECT RAISE(ABORT,'project epoch retained'); END;
  CREATE TRIGGER IF NOT EXISTS fixture_owned_epoch_no_rebind BEFORE UPDATE OF project_epoch,project_id,owner_hash,workspace_hash ON fixture_owned_auth_project_epochs BEGIN SELECT RAISE(ABORT,'project epoch immutable'); END;
  CREATE TRIGGER IF NOT EXISTS fixture_owned_epoch_no_reuse BEFORE UPDATE OF used ON fixture_owned_auth_project_epochs WHEN OLD.used<>0 OR NEW.used<>1 BEGIN SELECT RAISE(ABORT,'project epoch consumed'); END;
@@ -66,6 +66,7 @@ function validateEpochHistory(db) {
  WHERE e.project_epoch IS NULL OR e.used IS NOT 1 OR e.project_id IS NOT p.project_id OR e.owner_hash IS NOT p.owner_hash OR e.workspace_hash IS NOT p.workspace_hash
  UNION ALL SELECT 1 FROM fixture_owned_auth_grants g LEFT JOIN fixture_owned_auth_project_epochs e ON e.project_epoch=g.project_epoch
  WHERE e.project_epoch IS NULL OR e.used IS NOT 1 OR e.project_id IS NOT g.project_id OR e.owner_hash IS NOT g.owner_hash OR e.workspace_hash IS NOT g.workspace_hash
+ UNION ALL SELECT 1 FROM fixture_owned_auth_grants g LEFT JOIN fixture_owned_auth_devices d ON d.device_id=g.device_id WHERE d.device_id IS NULL OR d.owner_hash IS NOT g.owner_hash OR d.workspace_hash IS NOT g.workspace_hash
  UNION ALL SELECT 1 FROM fixture_owned_auth_project_epochs e WHERE e.used IS NOT 1 LIMIT 1`).get();
  if(inconsistent)throw Error('PROJECT_EPOCH_HISTORY_REVIEW_REQUIRED');
 }
@@ -118,6 +119,7 @@ export function createOwnedDeviceAuth(db,clock=Date.now,challengeSecret){
   const row=db.prepare('SELECT session_hash,owner_hash,workspace_hash,expires_ms,revoked FROM fixture_owned_auth_sessions WHERE session_hash=?').get(hash);
   return row&&!row.revoked&&typeof row.owner_hash==='string'&&hex.test(row.owner_hash)&&typeof row.workspace_hash==='string'&&hex.test(row.workspace_hash)&&Number.isSafeInteger(row.expires_ms)&&now<row.expires_ms?row:null;
  };
+ const hasPriorGrant=deviceId=>!!db.prepare('SELECT 1 FROM fixture_owned_auth_grants WHERE device_id=? LIMIT 1').get(deviceId);
  const sameSession=(a,b)=>!!a&&!!b&&a.session_hash===b.session_hash&&a.owner_hash===b.owner_hash&&a.workspace_hash===b.workspace_hash&&a.expires_ms===b.expires_ms;
  const mac=(device,head)=>createHmac('sha256',secret).update('videomaker-studio-login-challenge/v2\0').update(device).update('\0').update(head).digest();
  const decode=(device,token)=>{
@@ -134,7 +136,7 @@ export function createOwnedDeviceAuth(db,clock=Date.now,challengeSecret){
   keyFrom(publicKey);capabilities=caps(capabilities);
   return immediate(()=>{
    const now=observe(db,checkedClock),principal=session(ownerSessionHash,now);if(!principal)return null;
-   if(db.prepare('SELECT 1 FROM fixture_owned_auth_devices WHERE device_id=? OR public_key=?').get(deviceId,publicKey)||db.prepare('SELECT count(*) n FROM fixture_owned_auth_devices').get().n>=MAX_DEVICES)return null;
+   if(hasPriorGrant(deviceId)||db.prepare('SELECT 1 FROM fixture_owned_auth_devices WHERE device_id=? OR public_key=?').get(deviceId,publicKey)||db.prepare('SELECT count(*) n FROM fixture_owned_auth_devices').get().n>=MAX_DEVICES)return null;
    db.prepare('DELETE FROM fixture_owned_auth_challenges WHERE created_ms<=?').run(now-CHALLENGE_MS);
    if(db.prepare('SELECT count(*) n FROM fixture_owned_auth_challenges').get().n>=MAX_ENROLLMENTS||db.prepare('SELECT 1 FROM fixture_owned_auth_challenges WHERE device_id=?').get(deviceId))return null;
    const last=observe(db,checkedClock);if(last===null||last-now>=CHALLENGE_MS||!sameSession(principal,session(ownerSessionHash,last))||db.prepare('SELECT 1 FROM fixture_owned_auth_devices WHERE device_id=? OR public_key=?').get(deviceId,publicKey))return null;
@@ -162,7 +164,7 @@ export function createOwnedDeviceAuth(db,clock=Date.now,challengeSecret){
    if(!verify('sha256',enrollmentMessage(row),{key:keyFrom(Buffer.from(row.public_key)),dsaEncoding:'der'},signature))return null;
    const now=observe(db,checkedClock);if(!sameSession(principal,session(ownerSessionHash,now)))return null;
    const current=db.prepare('SELECT * FROM fixture_owned_auth_challenges WHERE device_id=?').get(deviceId);
-   if(!rowSame(row,current)||!fresh(row.created_ms,now)||db.prepare('SELECT 1 FROM fixture_owned_auth_devices WHERE device_id=? OR public_key=?').get(deviceId,row.public_key)||db.prepare('SELECT count(*) n FROM fixture_owned_auth_devices').get().n>=MAX_DEVICES)return null;
+   if(!rowSame(row,current)||!fresh(row.created_ms,now)||hasPriorGrant(deviceId)||db.prepare('SELECT 1 FROM fixture_owned_auth_devices WHERE device_id=? OR public_key=?').get(deviceId,row.public_key)||db.prepare('SELECT count(*) n FROM fixture_owned_auth_devices').get().n>=MAX_DEVICES)return null;
    db.exec('SAVEPOINT fixture_enrollment_complete');
    if(db.prepare('DELETE FROM fixture_owned_auth_challenges WHERE device_id=? AND challenge_id=?').run(deviceId,challengeId).changes!==1)throw Error('challenge changed inside transaction');
    db.prepare('INSERT INTO fixture_owned_auth_devices VALUES (?,?,?,?,?,0)').run(deviceId,row.public_key,row.capabilities,row.owner_hash,row.workspace_hash);
