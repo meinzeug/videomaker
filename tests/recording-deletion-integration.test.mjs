@@ -13,6 +13,12 @@ test('single-recording deletion preserves file on DB failure and completes after
  try{
   let r=await req('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'deletion-fixture'})});assert.equal(r.status,200);cookie=r.headers.get('set-cookie').split(';')[0];
   r=await req('/api/projects',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({title:'Löschtest',script:'Test',sources:[],titles:[],thumbnail:'',broll:[]})});assert.equal(r.status,201);projectId=(await r.json()).id;
+  const statusPath=`/api/projects/${projectId}/recordings/upload-status?recordingId=${id}`;
+  r=await fetch(base+statusPath);assert.equal(r.status,401);assert.match(r.headers.get('cache-control'),/no-store/);
+  r=await req(statusPath);assert.equal(r.status,204);assert.match(r.headers.get('cache-control'),/no-store/);
+  r=await req(`/api/projects/${projectId}/recordings/upload-status?recordingId=not-a-uuid`);assert.equal(r.status,400);
+  r=await req(statusPath+`&recordingId=${id}`);assert.equal(r.status,400);
+  r=await req(`/api/projects/${randomUUID()}/recordings/upload-status?recordingId=${id}`);assert.equal(r.status,404);
   r=await req(`/api/projects/${projectId}/recordings`,{method:'POST',headers:{'content-type':'video/mp4','content-length':String(bytes.length),'x-recording-id':id,'x-content-sha256':createHash('sha256').update(bytes).digest('hex')},body:bytes});assert.equal(r.status,201);
   const filename=path.join(dir,'recordings',`${id}.mp4`);assert.ok(existsSync(filename));fixtureDb=new Database(path.join(dir,'videomaker.sqlite'));
   fixtureDb.exec("CREATE TRIGGER fixture_fail_recording_delete BEFORE DELETE ON project_recordings BEGIN SELECT RAISE(ABORT,'fixture failure'); END");
@@ -22,6 +28,8 @@ test('single-recording deletion preserves file on DB failure and completes after
   fixtureDb.exec('DROP TRIGGER fixture_fail_recording_delete');
   r=await req(`/api/projects/${projectId}/recordings/${id}`,{method:'DELETE'});assert.equal(r.status,200);assert.equal(existsSync(filename),false);
   assert.equal(fixtureDb.prepare('SELECT count(*) AS n FROM project_recording_deletions WHERE recording_id=?').get(id).n,0);
+  r=await req(statusPath);assert.equal(r.status,409);assert.equal((await r.json()).code,'recording_deleted');assert.match(r.headers.get('cache-control'),/no-store/);
+  r=await req(`/api/projects/${projectId}/recordings/upload-status?recordingId=${randomUUID()}`);assert.equal(r.status,204);
   r=await req(`/api/projects/${projectId}/recordings`,{method:'POST',headers:{'content-type':'video/mp4','content-length':String(bytes.length),'x-recording-id':id,'x-content-sha256':createHash('sha256').update(bytes).digest('hex')},body:bytes});
   assert.equal(r.status,409);assert.equal((await r.json()).code,'recording_deleted');assert.equal(existsSync(filename),false);
   const nextId=randomUUID();
