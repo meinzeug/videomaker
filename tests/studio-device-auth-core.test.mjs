@@ -143,3 +143,31 @@ test('random unknown ticket is rejected without acquiring a writer lock',()=>{
   assert.equal(f.api.permits('A'.repeat(43),'projects:read'),false);
  }finally{f.db.pragma('query_only = OFF');f.db.close();}
 });
+
+test('observed future in beginLogin must not allow a previous challenge after wall rollback',()=>{
+ const f=fixture();try{
+  f.enroll();const first=f.api.beginLogin(f.device),sig=f.signature(first);
+  f.set(f.get()+60_001);assert.ok(f.api.beginLogin(f.device));
+  f.set(f.get()-60_000);
+  assert.equal(f.api.completeLogin(f.device,first.challengeToken,sig),null);
+ }finally{f.db.close();}
+});
+
+test('observed future on one connection fences rollback on another and after reopen',async()=>{
+ const {mkdtempSync,rmSync}=await import('node:fs'),{tmpdir}=await import('node:os'),{join}=await import('node:path');
+ const dir=mkdtempSync(join(tmpdir(),'studio-auth-cross-clock-'));let left,right;
+ try{
+  const f=fixture();f.enroll();const c=f.api.beginLogin(f.device),signature=f.signature(c);
+  const file=join(dir,'fixture.sqlite');await f.db.backup(file);f.db.close();
+  left=new Database(file);right=new Database(file);
+  assert.ok(createStudioDeviceAuth(left,()=>1_060_001,secret).beginLogin(f.device));
+  assert.equal(createStudioDeviceAuth(right,()=>1_000_001,secret).completeLogin(f.device,c.challengeToken,signature),null);
+  left.close();left=null;right.close();right=null;
+  right=new Database(file);assert.equal(createStudioDeviceAuth(right,()=>1_000_001,secret).completeLogin(f.device,c.challengeToken,signature),null);
+ }finally{left?.close();right?.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('unknown device challenge is rejected without writer lock',()=>{
+ const f=fixture();try{f.db.pragma('query_only = ON');assert.equal(f.api.beginLogin(randomUUID()),null);}
+ finally{f.db.pragma('query_only = OFF');f.db.close();}
+});
