@@ -2,19 +2,19 @@
 import {useEffect,useRef,useState} from 'react';
 
 /** A separate dialog leaves the current editor, recording and script options mounted. */
-export default function SessionReauthentication({onCancel,onSuccess}:{onCancel:()=>void;onSuccess:()=>void}){
+export default function SessionReauthentication({begin,finish,onCancel,onSuccess}:{begin:()=>boolean;finish:()=>void;onCancel:()=>void;onSuccess:()=>void}){
  const dialog=useRef<HTMLDialogElement>(null);
  const [password,setPassword]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
  useEffect(()=>{const element=dialog.current;if(!element)return;element.showModal();return()=>{if(element.open)element.close();};},[]);
  async function submit(event:React.FormEvent){
-  event.preventDefault();if(busy)return;setBusy(true);setError('');
+  event.preventDefault();if(busy||!begin())return;setBusy(true);setError('');
   try{
    const response=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})});
    const data=await response.json();setPassword('');
-   if(!response.ok)throw new Error(typeof data.error==='string'?data.error:'Anmeldung fehlgeschlagen.');
+   if(!response.ok||data?.ok!==true)throw new Error(typeof data?.error==='string'?data.error:'Anmeldung konnte nicht bestätigt werden.');
    onSuccess();
   }catch(error){setPassword('');setError(error instanceof Error?error.message:'Anmeldung fehlgeschlagen.');}
-  finally{setBusy(false);}
+  finally{finish();setBusy(false);}
  }
  return <dialog ref={dialog} className="image-choice-dialog" aria-labelledby="session-reauth-title" onCancel={event=>{if(busy)event.preventDefault();else onCancel();}}>
   <h2 id="session-reauth-title">Erneut anmelden</h2>
