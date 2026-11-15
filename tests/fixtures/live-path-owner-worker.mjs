@@ -6,7 +6,7 @@ process.send('ready');
 process.once('message',()=>{
  try {
   const result=db.transaction(()=>{
-   const owner=claimUploadPath(db,recording,project,upload,mode);
+   const owner=claimUploadPath(db,recording,project,upload,mode,mode==='full'?{size:123,sha256:'a'.repeat(64)}:{});
    if(point==='before-commit')process.kill(process.pid,'SIGKILL');
    return owner;
   }).immediate();

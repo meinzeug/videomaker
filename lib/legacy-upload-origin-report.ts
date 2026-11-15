@@ -6,8 +6,9 @@ export function legacyUploadOriginReport(db:Database.Database) {
  return db.transaction(()=>{
  const has=(name:string)=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
  if(!has('project_recordings'))throw new Error('RECORDINGS_SCHEMA_MISSING');
- const owner=has('live_upload_path_owners')
-  ? 'EXISTS(SELECT 1 FROM live_upload_path_owners o WHERE o.upload_id=r.id COLLATE NOCASE)' : '0';
+ const owner=has('live_upload_path_targets')
+  ? 'EXISTS(SELECT 1 FROM live_upload_path_targets o WHERE o.upload_id=r.id COLLATE NOCASE)'
+  : has('live_upload_path_owners') ? 'EXISTS(SELECT 1 FROM live_upload_path_owners o WHERE o.upload_id=r.id COLLATE NOCASE)' : '0';
  const web=has('camera_project_upload_ids')
   ? 'EXISTS(SELECT 1 FROM camera_project_upload_ids w WHERE w.upload_id=r.id COLLATE NOCASE)' : '0';
  const count=(where:string)=>{

@@ -65,6 +65,13 @@ test('isolated live and legacy full upload fencing keeps originals and legacy co
  assert.equal((await request(legacyUrl,'POST',bytes,{...legacyHeaders,'X-Lan-Recording-Id':legacyTake})).status,200);
  assert.equal((await request(`/api/projects/${otherProject}/recordings`,'POST',bytes,{...legacyHeaders,'X-Lan-Recording-Id':legacyTake})).status,400);
  assert.deepEqual(readFileSync(serverFile),bytes);
+ const secondId=cameraUploadIdFor(legacyTake,otherProject),secondUrl=`/api/projects/${otherProject}/recordings`;
+ const secondHeaders={'Content-Type':'video/mp4','X-Recording-Id':secondId,'X-Lan-Recording-Id':legacyTake,'X-Content-SHA256':sha};
+ assert.equal((await request(secondUrl,'POST',changed,{...secondHeaders,'X-Content-SHA256':changedSha})).status,409);
+ const second=await request(secondUrl,'POST',bytes,secondHeaders);
+ assert.equal(second.status,201,JSON.stringify(second.value));assert.equal(second.value.sha256,sha);
+ assert.equal((await request(secondUrl,'POST',bytes,secondHeaders)).status,200);
+ assert.deepEqual(readFileSync(join(root,'recordings',`${secondId}.mp4`)),bytes);
  assert.equal((await request(legacyUrl)).value.recordings.length,1);
  const accepted=await request(full,'POST',bytes,fullHeaders);assert.equal(accepted.status,201,JSON.stringify(accepted.value));assert.equal(accepted.value.sha256,sha);
  assert.equal((await request(full,'POST',bytes,fullHeaders)).status,200);

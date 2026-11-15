@@ -16,7 +16,7 @@ function fixture(){
  db.pragma('synchronous=FULL');db.transaction(()=>initializeUploadPathOwners(db)).immediate();
  return {directory,filename,db,close(){db.close();unlinkSync(filename);rmdirSync(directory);}};
 }
-const tx=(db,r,p,u,mode)=>db.transaction(()=>claimUploadPath(db,r,p,u,mode)).immediate();
+const tx=(db,r,p,u,mode,size=123,sha256='a'.repeat(64))=>db.transaction(()=>claimUploadPath(db,r,p,u,mode,mode==='full'?{size,sha256}:{})).immediate();
 test('unsichere SQLite-Dauerhaftigkeit wird abgewiesen',()=>{
  const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p);
  try{
@@ -38,7 +38,8 @@ test('beide Reihenfolgen bleiben auf ursprünglichen Besitzer und Projekt gebund
   try{
    assert.deepEqual(tx(f.db,r,p,u,first),{created:true});assert.deepEqual(tx(f.db,r,p,u,first),{created:false});
    assert.throws(()=>tx(f.db,r,p,u,other),/OWNER_CONFLICT/);
-   const q=randomUUID();assert.throws(()=>tx(f.db,r,q,cameraUploadIdFor(r,q),first),/OWNER_CONFLICT/);
+   const q=randomUUID();if(first==='live')assert.throws(()=>tx(f.db,r,q,cameraUploadIdFor(r,q),first),/OWNER_CONFLICT/);
+   else assert.deepEqual(tx(f.db,r,q,cameraUploadIdFor(r,q),first),{created:true});
    assert.throws(()=>tx(f.db,r,p,randomUUID(),first),/BINDING_MISMATCH/);
    assert.throws(()=>tx(f.db,null,p,u,first),/IDENTITY_REQUIRED/);
    assert.throws(()=>claimUploadPath(f.db,r,p,u,first),/TRANSACTION_REQUIRED/);
@@ -65,7 +66,7 @@ test('full retry may reserve matching existing metadata but does not change or c
  try{
   f.db.exec('CREATE TABLE project_recordings(id TEXT PRIMARY KEY,project_id TEXT,size INTEGER)');
   f.db.prepare('INSERT INTO project_recordings VALUES(?,?,?)').run(u,p,123);
-  const reserve=()=>f.db.transaction(()=>claimUploadPath(f.db,r,p,u,'full',{allowExistingFullRetry:true})).immediate();
+  const reserve=()=>f.db.transaction(()=>claimUploadPath(f.db,r,p,u,'full',{allowExistingFullRetry:true,size:123,sha256:'a'.repeat(64)})).immediate();
   assert.deepEqual(reserve(),{created:true});assert.deepEqual(reserve(),{created:false});
   assert.deepEqual(f.db.prepare('SELECT id,project_id,size FROM project_recordings').get(),{id:u,project_id:p,size:123});
   assert.throws(()=>tx(f.db,r,p,u,'live'),/OWNER_CONFLICT/);
@@ -94,7 +95,7 @@ test('historischer deterministischer Vollupload in anderem Projekt wird erkannt'
  }finally{f.close();}
 });
 
-test('Kamera-Webclaim und abweichender LAN-Import sperren beide Pfade',()=>{
+test('Kamera-Webclaim sperrt beide Pfade; neutraler LAN-Import sperrt abweichendes Liveziel',()=>{
  for(const mode of ['live','full']){
   const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p);
   try{
@@ -103,8 +104,10 @@ test('Kamera-Webclaim und abweichender LAN-Import sperren beide Pfade',()=>{
    assert.throws(()=>tx(f.db,r,p,u,mode),/WEB_CLAIM/);
    f.db.prepare('DELETE FROM camera_project_claims').run();
    f.db.prepare('INSERT INTO lan_capture_projects VALUES(?,?)').run(r,randomUUID());
-   assert.throws(()=>tx(f.db,r,p,u,mode),/BINDING_MISMATCH/);
-   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_owners').get().n,0);
+   if(mode==='live'){
+    assert.throws(()=>tx(f.db,r,p,u,mode),/BINDING_MISMATCH/);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_owners').get().n,0);
+   }else assert.deepEqual(tx(f.db,r,p,u,mode),{created:true});
   }finally{f.close();}
  }
 });
@@ -170,6 +173,64 @@ test('zwei Prozesse können nicht beide Pfade für denselben Take belegen',async
   assert.equal(results.filter(x=>x.result?.created===true).length,1);assert.equal(results.filter(x=>x.error==='OWNER_CONFLICT').length,1);
   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_owners').get().n,1);
  }finally{for(const {worker} of workers)if(worker.connected)worker.disconnect();await Promise.all(exited);f.close();}
+});
+
+test('Volluploads zu mehreren Projekten teilen unveränderliches Inhaltsmanifest und sperren Live',()=>{
+ const f=fixture(),r=randomUUID(),p=randomUUID(),q=randomUUID(),u=cameraUploadIdFor(r,p),v=cameraUploadIdFor(r,q);
+ try{
+  assert.deepEqual(tx(f.db,r,p,u,'full'),{created:true});
+  assert.deepEqual(tx(f.db,r,q,v,'full'),{created:true});
+  assert.deepEqual(tx(f.db,r,q,v,'full'),{created:false});
+  assert.throws(()=>tx(f.db,r,q,v,'full',124),/MANIFEST_MISMATCH/);
+  assert.throws(()=>tx(f.db,r,q,v,'full',123,'b'.repeat(64)),/MANIFEST_MISMATCH/);
+  assert.throws(()=>tx(f.db,r,p,u,'live'),/OWNER_CONFLICT/);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_targets').get().n,2);
+  assert.throws(()=>f.db.prepare('INSERT OR REPLACE INTO live_upload_full_manifests VALUES(?,?,?)').run(r,124,'b'.repeat(64)),/already exists/);
+  assert.throws(()=>f.db.prepare('INSERT OR REPLACE INTO live_upload_path_targets VALUES(?,?,?)').run(r,p,u),/already exists/);
+ }finally{f.close();}
+});
+
+test('zwei Prozesse reservieren verschiedene Volluploadziele atomar für denselben Inhalt',async()=>{
+ const f=fixture(),r=randomUUID(),p=randomUUID(),q=randomUUID();
+ const workers=[p,q].map(project=>start(f,r,project,cameraUploadIdFor(r,project),'full'));
+ const exited=workers.map(({worker})=>new Promise(resolve=>worker.once('exit',resolve)));
+ try{
+  await Promise.all(workers.map(x=>x.ready));
+  const replies=workers.map(({worker})=>new Promise((resolve,reject)=>{worker.once('message',resolve);worker.once('error',reject);}));
+  for(const {worker} of workers)worker.send('go');
+  const results=await Promise.all(replies);
+  assert.ok(results.every(x=>x.result?.created===true),JSON.stringify(results));
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_owners').get().n,1);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_targets').get().n,2);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_full_manifests').get().n,1);
+ }finally{for(const {worker} of workers)if(worker.connected)worker.disconnect();await Promise.all(exited);f.close();}
+});
+
+test('unbekanntes älteres experimentelles Owner-Schema wird nicht migriert',()=>{
+ const directory=mkdtempSync(path.join(tmpdir(),'live-owner-old-schema-'));
+ const filename=path.join(directory,'synthetic.sqlite'),db=new Database(filename);
+ try{
+  db.pragma('synchronous=FULL');db.exec('CREATE TABLE live_upload_path_owners(recording_id TEXT PRIMARY KEY,project_id TEXT,upload_id TEXT,path TEXT)');
+  assert.throws(()=>db.transaction(()=>initializeUploadPathOwners(db)).immediate(),/OWNER_SCHEMA_REVIEW_REQUIRED/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='live_upload_path_targets'").get().n,0);
+ }finally{db.close();unlinkSync(filename);rmdirSync(directory);}
+});
+
+test('Prozessabbruch bei zweitem Vollziel hinterlässt erste Bindung und höchstens eine vollständige zweite',async()=>{
+ for(const point of ['before-commit','after-commit']){
+  const f=fixture(),r=randomUUID(),p=randomUUID(),q=randomUUID(),u=cameraUploadIdFor(r,p),v=cameraUploadIdFor(r,q);
+  tx(f.db,r,p,u,'full');
+  const {worker,ready}=start(f,r,q,v,'full',point);
+  try{
+   await ready;const exited=new Promise(resolve=>worker.once('exit',(code,signal)=>resolve({code,signal})));worker.send('go');
+   assert.equal((await exited).signal,'SIGKILL');
+   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_owners').get().n,1);
+   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_full_manifests').get().n,1);
+   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_targets').get().n,point==='before-commit'?1:2);
+   assert.deepEqual(tx(f.db,r,q,v,'full'),{created:point==='before-commit'});
+   assert.throws(()=>tx(f.db,r,p,u,'live'),/OWNER_CONFLICT/);
+  }finally{if(worker.connected)worker.disconnect();f.close();}
+ }
 });
 
 test('Prozessabbruch vor und nach Commit behält keine halbe bzw eine dauerhafte Zuordnung',async()=>{
