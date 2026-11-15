@@ -24,6 +24,12 @@ export const PROJECT_RECORDING_DELETION_SCHEMA=`
  CREATE TRIGGER IF NOT EXISTS recording_tombstone_no_replace BEFORE INSERT ON project_recording_tombstones
  WHEN EXISTS(SELECT 1 FROM project_recording_tombstones WHERE recording_id=NEW.recording_id COLLATE NOCASE)
  BEGIN SELECT RAISE(ABORT,'recording tombstone already exists'); END;
+ -- REPLACE can delete a different row through an explicit rowid even when
+ -- recursive_triggers is disabled. In a BEFORE trigger SQLite may report -1
+ -- for an unspecified rowid, so an existing -1 deliberately fails closed.
+ CREATE TRIGGER IF NOT EXISTS recording_tombstone_no_rowid_replace BEFORE INSERT ON project_recording_tombstones
+ WHEN EXISTS(SELECT 1 FROM project_recording_tombstones WHERE rowid=NEW.rowid)
+ BEGIN SELECT RAISE(ABORT,'recording tombstone rowid already exists'); END;
  CREATE TRIGGER IF NOT EXISTS recording_tombstone_no_reinsert BEFORE INSERT ON project_recordings
  WHEN EXISTS(SELECT 1 FROM project_recording_tombstones WHERE recording_id=NEW.id COLLATE NOCASE)
  BEGIN SELECT RAISE(ABORT,'recording was deleted'); END;

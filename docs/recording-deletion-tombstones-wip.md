@@ -4,11 +4,15 @@ Eine gezielte Einzel- oder Projektlöschung schreibt die Aufnahme-ID im selben S
 
 Die Sperre betrifft erst Löschungen nach Einführung dieses Schutzes. Für frühere Löschungen gibt es keine zuverlässig vollständige Historie; sie lassen sich daraus nicht nachträglich rekonstruieren. Wiederherstellung derselben ID ist nicht implementiert. Bei Datenbankwiederherstellung aus einer älteren Sicherung fehlen die seither angelegten Sperren; Sicherungs- und Wiederherstellungsverfahren müssen dies berücksichtigen. Künftige Live-/Mehrzielpfade müssen dieselbe Sperre vor Reservierung und Veröffentlichung prüfen. Tests beweisen kein Verhalten bei Stromausfall oder Manipulation der Datenbank durch Administratoren.
 
+Auch `INSERT OR REPLACE` mit einer bereits vergebenen SQLite-Rowid darf keine fremde Sperrmarke entfernen. Alle drei Rowid-Aliase werden blockiert. Bei einer ungewöhnlichen, ausdrücklich angelegten Rowid `-1` verweigert der Schutz weitere automatische Einfügungen, da SQLite vor deren Zuteilung denselben Wert meldet; das ist ein bewusst sicherer Fehlerfall.
+
+Unabhängig vom Löschschutz besteht bereits zuvor in beiden Löschrouten ein Authentifizierungsfenster: Die Sitzung wird vor der Datenbank-Schreibtransaktion geprüft, jedoch darin nicht erneut. Ein parallel abgeschlossener Logout kann einen schon begonnenen Löschvorgang daher nicht zuverlässig verhindern. Eine transaktionsgebundene Sessionprüfung samt gezieltem HTTP-Racetest ist separat zu ergänzen; dieser WIP behebt das nicht.
+
 Die aktuelle Android-App behandelt HTTP 409 bereits als dauerhaften Uploadkonflikt und hält das Original lokal. Ihre generische Meldung benennt die absichtliche Löschung noch nicht gesondert. Der Server liefert dafür `code: recording_deleted`; eine spätere App-Änderung kann den Hinweis präzisieren.
 
 ## Isolierter Test 2026-11-15
 
-* `node --experimental-strip-types --test tests/project-recording-deletions.test.mjs tests/recording-tombstone-process.test.mjs`: 9/9; darunter konkurrierende SQLite-Prozesse, Prozessabbruch vor Commit, Rollback, Neustart, Großschreibung und unveränderliche Sperren.
+* `node --experimental-strip-types --test tests/project-recording-deletions.test.mjs tests/recording-tombstone-process.test.mjs`: 10/10; darunter konkurrierende SQLite-Prozesse, Prozessabbruch vor Commit, Rollback, Neustart, Großschreibung und REPLACE-Versuche über alle Rowid-Aliase einschließlich 64-Bit-Randwerten.
 * `NODE_OPTIONS=--max-old-space-size=768 node node_modules/typescript/bin/tsc --noEmit --incremental false --pretty false`: erfolgreich.
 * `tests/recording-deletion-integration.test.mjs`: 3/3 echte HTTP-Fixtures gegen eine lokal begrenzte Next-Entwicklungsinstanz mit synthetischer Datenbank und Dateien auf `/dev/shm`. Einzel- und Projektlöschung, erzwungener DB-Fehler, Wiederholungsupload, neue ID und ein langsamer konkurrierender Upload wurden geprüft. Für die spezielle Reihenfolge wurde eine synthetische Aufnahmezeile direkt in die Test-DB eingefügt, da die vorhandene Anwendung zwei gleichzeitige Uploads derselben ID bereits sperrt.
 

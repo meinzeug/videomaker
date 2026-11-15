@@ -79,3 +79,23 @@ test('bulk project deletion retains tombstones for missing files and rolls all m
   assert.equal(isRecordingTombstoned(f.db,other),true);assert.equal(isRecordingTombstoned(f.db,f.id),true);
  }finally{f.db.close();rmSync(f.folder,{recursive:true,force:true});}
 });
+test('all SQLite rowid aliases reject replacement without deleting tombstones',()=>{
+ for(const rowid of ['-9223372036854775808','-1','0','1','2147483647','9223372036854775807']){
+  for(const alias of ['rowid','_rowid_','oid']){
+   const db=new Database(':memory:');try{
+    db.exec('CREATE TABLE project_recordings(id TEXT PRIMARY KEY,mime TEXT NOT NULL)');db.exec(PROJECT_RECORDING_DELETION_SCHEMA);
+    db.pragma('recursive_triggers = OFF');
+    const original=randomUUID(),other=randomUUID();
+    db.prepare('INSERT INTO project_recording_tombstones(rowid,recording_id,project_id,deleted_at) VALUES(CAST(? AS INTEGER),?,?,?)').run(rowid,original,'project-a','now');
+    assert.throws(()=>db.prepare(`INSERT OR REPLACE INTO project_recording_tombstones(${alias},recording_id,project_id,deleted_at) VALUES(CAST(? AS INTEGER),?,?,?)`).run(rowid,other,'project-b','later'),/rowid already exists/);
+    assert.throws(()=>db.prepare(`INSERT INTO project_recording_tombstones(${alias},recording_id,project_id,deleted_at) VALUES(CAST(? AS INTEGER),?,?,?) ON CONFLICT DO UPDATE SET recording_id=excluded.recording_id`).run(rowid,other,'project-b','later'),/rowid already exists|immutable/);
+    assert.deepEqual(db.prepare('SELECT recording_id,project_id,deleted_at FROM project_recording_tombstones').all(),[{recording_id:original,project_id:'project-a',deleted_at:'now'}]);
+    assert.throws(()=>db.prepare('INSERT INTO project_recordings VALUES(?,?)').run(original,'video/mp4'),/recording was deleted/);
+    // SQLite reports NEW.rowid = -1 for automatic allocation in BEFORE
+    // INSERT; the unusual pre-existing -1 must therefore fail closed.
+    if(rowid==='-1')assert.throws(()=>db.prepare('INSERT INTO project_recording_tombstones(recording_id,project_id,deleted_at) VALUES(?,?,?)').run(other,'project-b','later'),/rowid already exists/);
+    else{db.prepare('INSERT INTO project_recording_tombstones(recording_id,project_id,deleted_at) VALUES(?,?,?)').run(other,'project-b','later');assert.equal(isRecordingTombstoned(db,other),true);}
+   }finally{db.close();}
+  }
+ }
+});
