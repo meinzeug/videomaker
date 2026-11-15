@@ -13,3 +13,18 @@ Die Fixture simuliert Recorderereignisse und einen verlorenen ACK-Response;
 sie testet weder einen echten Recorder, Kamera, Ton, WLAN-Reconnect noch ein
 Rollback. Nach SIGKILL/Stromausfall können isolierte Testreste eine manuelle
 Prüfung erfordern. Kein Gerätetest ist auf dieser Version bisher behauptet.
+
+Am 15. November 2026 bestand die Fixture auf Samsung SM-A526B (13,561 s,
+Runner `7b73b26`) und Xiaomi 2409BRN2CY über WLAN-ADB (16,012 s, Runner
+`9d2700e`). Beide Test-APKs stammten aus Android-Fixture `563df32` und CI
+`43692046702`. Der Test verwendete eigene Geräteidentität, lokales HTTPS und
+synthetische Recorderereignisse. Er bestätigte einen nach Serverannahme
+verlorenen `enqueued`-ACK-Response sowie dessen Wiederholung aus dem Android-
+Journal. Das erste Xiaomi-Fixture-Installieren wurde durch MIUI abgewiesen;
+anschließend wurde nur der Dialog für das genau benannte Testpaket bestätigt.
+
+Die gesonderten Pakete und ADB-Reverse-Regeln wurden entfernt; die anfänglich
+und anschließend leeren Reverse-Listen stimmten überein. Der eigene Next-Dienst
+wurde beendet. Beide normalen Apps waren wieder im Vordergrund, Xiaomi meldete
+die Videoverbindung und Anmeldung, Samsung die Studioverbindung. Der Test
+belegt weiterhin keine echte Recorder-/Codecaufnahme und keine Freigabe.
