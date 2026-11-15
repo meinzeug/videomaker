@@ -1,0 +1,184 @@
+// Isolated v2 ownership experiment: separate tables, no routes, migration or production use.
+import {createHash,createHmac,createPublicKey,randomBytes,randomUUID,timingSafeEqual,verify} from 'node:crypto';
+
+export const DEVICE_CAPABILITIES=Object.freeze(['projects:read','recordings:upload']);
+const allowed=new Set(DEVICE_CAPABILITIES), uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, hex=/^[0-9a-f]{64}$/;
+const CHALLENGE_MS=60_000,TICKET_MS=300_000,MAX_DEVICES=100,MAX_ENROLLMENTS=200,MAX_TICKETS=8,MAX_CONSUMED=1000;
+const digest=value=>createHash('sha256').update(value).digest('hex');
+const fail=()=>{throw new Error('Ungültiger Gerätenachweis.');};
+const id=value=>typeof value==='string'&&uuid.test(value);
+const caps=value=>{if(!Array.isArray(value)||value.length<1||value.length>allowed.size||value.some(v=>typeof v!=='string'||!allowed.has(v))||new Set(value).size!==value.length)fail();return [...value].sort().join(',');};
+const keyFrom=bytes=>{try{if(!Buffer.isBuffer(bytes)||bytes.length>256)return fail();const key=createPublicKey({key:bytes,format:'der',type:'spki'});if(key.asymmetricKeyType!=='ec'||key.asymmetricKeyDetails?.namedCurve!=='prime256v1'||!Buffer.from(key.export({format:'der',type:'spki'})).equals(bytes))return fail();return key;}catch{return fail();}};
+const enrollmentMessage=row=>Buffer.from(`videomaker-studio-device-auth/enroll/v2\n${row.device_id}\n${row.challenge_id}\n${row.nonce}\n${digest(row.public_key)}\n${row.capabilities}\n${row.owner_hash}\n${row.workspace_hash}\n`,'utf8');
+const loginMessage=(deviceId,token,publicKey,capabilities,owner,workspace)=>Buffer.from(`videomaker-studio-device-auth/login/v2\n${deviceId}\n${token}\n${digest(publicKey)}\n${capabilities}\n${owner}\n${workspace}\n`,'utf8');
+
+/** Explicit initialization for isolated tests; never called by production. */
+export function initializeOwnedDeviceAuth(db){
+ if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fixture_owned_auth_devices'").get()){
+  const columns=new Set(db.prepare('PRAGMA table_info(fixture_owned_auth_devices)').all().map(column=>column.name));
+  if(!columns.has('owner_hash')||!columns.has('workspace_hash'))throw Error('UNOWNED_FIXTURE_SCHEMA_REVIEW_REQUIRED');
+ }
+ db.exec(`
+ CREATE TABLE IF NOT EXISTS fixture_owned_auth_clock(id INTEGER PRIMARY KEY CHECK(id=1), floor_ms INTEGER NOT NULL);
+ INSERT OR IGNORE INTO fixture_owned_auth_clock(id,floor_ms) VALUES(1,0);
+ CREATE TABLE IF NOT EXISTS fixture_owned_auth_devices(device_id TEXT PRIMARY KEY, public_key BLOB NOT NULL UNIQUE, capabilities TEXT NOT NULL, owner_hash TEXT NOT NULL, workspace_hash TEXT NOT NULL, revoked INTEGER NOT NULL CHECK(revoked IN(0,1)));
+ CREATE TABLE IF NOT EXISTS fixture_owned_auth_challenges(device_id TEXT PRIMARY KEY, challenge_id TEXT NOT NULL UNIQUE, nonce TEXT NOT NULL, public_key BLOB NOT NULL, capabilities TEXT NOT NULL, owner_hash TEXT NOT NULL, workspace_hash TEXT NOT NULL, created_ms INTEGER NOT NULL);
+ CREATE TABLE IF NOT EXISTS fixture_owned_auth_consumed(challenge_id TEXT PRIMARY KEY, expires_ms INTEGER NOT NULL);
+ CREATE TABLE IF NOT EXISTS fixture_owned_auth_tickets(ticket_hash TEXT PRIMARY KEY, device_id TEXT NOT NULL, expires_ms INTEGER NOT NULL, FOREIGN KEY(device_id) REFERENCES fixture_owned_auth_devices(device_id));
+ CREATE TABLE IF NOT EXISTS fixture_owned_auth_projects(project_id TEXT PRIMARY KEY,owner_hash TEXT NOT NULL,workspace_hash TEXT NOT NULL,project_epoch TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS fixture_owned_auth_grants(device_id TEXT NOT NULL,project_id TEXT NOT NULL,owner_hash TEXT NOT NULL,workspace_hash TEXT NOT NULL,project_epoch TEXT NOT NULL,revoked INTEGER NOT NULL CHECK(revoked IN(0,1)),PRIMARY KEY(device_id,project_id));
+ CREATE TRIGGER IF NOT EXISTS fixture_owned_device_immutable BEFORE UPDATE OF device_id,public_key,capabilities,owner_hash,workspace_hash ON fixture_owned_auth_devices BEGIN SELECT RAISE(ABORT,'device binding immutable'); END;
+ CREATE TRIGGER IF NOT EXISTS fixture_owned_device_no_delete BEFORE DELETE ON fixture_owned_auth_devices BEGIN SELECT RAISE(ABORT,'device binding retained'); END;
+ CREATE TRIGGER IF NOT EXISTS fixture_owned_device_no_reactivate BEFORE UPDATE OF revoked ON fixture_owned_auth_devices WHEN OLD.revoked=1 AND NEW.revoked<>1 BEGIN SELECT RAISE(ABORT,'device revocation retained'); END;
+ CREATE TRIGGER IF NOT EXISTS fixture_owned_device_insert_guard BEFORE INSERT ON fixture_owned_auth_devices WHEN EXISTS(SELECT 1 FROM fixture_owned_auth_devices d WHERE d.device_id=NEW.device_id OR d.public_key=NEW.public_key OR d.rowid=NEW.rowid) BEGIN SELECT RAISE(ABORT,'device binding exists'); END;
+ CREATE TRIGGER IF NOT EXISTS fixture_owned_grant_immutable BEFORE UPDATE OF device_id,project_id,owner_hash,workspace_hash,project_epoch ON fixture_owned_auth_grants BEGIN SELECT RAISE(ABORT,'project binding immutable'); END;
+ CREATE TRIGGER IF NOT EXISTS fixture_owned_grant_no_delete BEFORE DELETE ON fixture_owned_auth_grants BEGIN SELECT RAISE(ABORT,'project binding retained'); END;
+ CREATE TRIGGER IF NOT EXISTS fixture_owned_grant_no_reactivate BEFORE UPDATE OF revoked ON fixture_owned_auth_grants WHEN OLD.revoked=1 AND NEW.revoked<>1 BEGIN SELECT RAISE(ABORT,'project revocation retained'); END;
+ CREATE TRIGGER IF NOT EXISTS fixture_owned_grant_insert_guard BEFORE INSERT ON fixture_owned_auth_grants WHEN EXISTS(SELECT 1 FROM fixture_owned_auth_grants g WHERE (g.device_id=NEW.device_id AND g.project_id=NEW.project_id) OR g.rowid=NEW.rowid) BEGIN SELECT RAISE(ABORT,'project binding exists'); END;
+ `);}
+function readClock(db,clock){const now=clock();if(!Number.isSafeInteger(now)||now<0||now>Number.MAX_SAFE_INTEGER-TICKET_MS)return null;const {floor_ms:floor}=db.prepare('SELECT floor_ms FROM fixture_owned_auth_clock WHERE id=1').get();return now<floor?null:now;}
+function observe(db,clock){const now=readClock(db,clock);if(now===null)return null;db.prepare('UPDATE fixture_owned_auth_clock SET floor_ms=? WHERE id=1').run(now);return now;}
+const fresh=(created,now)=>now!==null&&now>=created&&now-created<CHALLENGE_MS;
+const rowSame=(a,b)=>a&&b&&a.challenge_id===b.challenge_id&&a.nonce===b.nonce&&a.owner_hash===b.owner_hash&&a.workspace_hash===b.workspace_hash&&a.capabilities===b.capabilities&&a.created_ms===b.created_ms&&Buffer.from(a.public_key).equals(Buffer.from(b.public_key));
+
+/** Secret and callbacks belong to a trusted server adapter, never to the client. */
+export function createOwnedDeviceAuth(db,clock=Date.now,challengeSecret){
+ if(!Buffer.isBuffer(challengeSecret)||challengeSecret.length<32)throw new Error('Challenge-Schlüssel fehlt.');
+ const secret=Buffer.from(challengeSecret);
+ // Returning an authorization result from a savepoint is unsafe: its effects
+ // can still be undone by an enclosing transaction after the result escapes.
+ const requireAutocommit=()=>{if(db.inTransaction)throw new Error('Geräteauthentifizierung benötigt eine eigene Transaktion.');};
+ // Trusted adapters must not alter transaction boundaries, even on false/throw.
+ // This detects a changed active-state, not a commit followed by a new BEGIN.
+ const stableCallback=fn=>{const active=db.inTransaction;try{return fn();}finally{if(db.inTransaction!==active)throw new Error('Adapter hat die Transaktionsgrenze verändert.');}};
+ const authorized=fn=>stableCallback(()=>{try{return typeof fn==='function'&&fn()===true;}catch{return false;}});
+ const checkedClock=()=>stableCallback(clock);
+ const standalone=fn=>(...args)=>{requireAutocommit();return fn(...args);};
+ // A trusted callback invoked before the transaction must not start one either.
+ const immediate=fn=>{requireAutocommit();return db.transaction(fn).immediate();};
+ const mac=(device,head)=>createHmac('sha256',secret).update('videomaker-studio-login-challenge/v2\0').update(device).update('\0').update(head).digest();
+ const decode=(device,token)=>{
+  if(typeof token!=='string'||token.length>200)return null;
+  const parts=token.split('.');if(parts.length!==4||!id(parts[0])||!/^(0|[1-9][0-9]{0,15})$/.test(parts[1])||!/^[A-Za-z0-9_-]{43}$/.test(parts[2])||!/^[A-Za-z0-9_-]{43}$/.test(parts[3]))return null;
+  const created=Number(parts[1]),nonce=Buffer.from(parts[2],'base64url'),signature=Buffer.from(parts[3],'base64url');
+  if(!Number.isSafeInteger(created)||nonce.length!==32||signature.length!==32||nonce.toString('base64url')!==parts[2]||signature.toString('base64url')!==parts[3])return null;
+  const expected=mac(device,parts.slice(0,3).join('.'));if(!timingSafeEqual(signature,expected))return null;
+  return {challengeId:parts[0],created};
+ };
+ function beginEnrollment(deviceId,publicKey,capabilities,ownerHash,workspaceHash,authorize){
+  if(!id(deviceId)||typeof ownerHash!=='string'||!hex.test(ownerHash)||typeof workspaceHash!=='string'||!hex.test(workspaceHash)||!authorized(authorize))return null;
+  keyFrom(publicKey);capabilities=caps(capabilities);
+  return immediate(()=>{
+   const now=observe(db,checkedClock);if(now===null||!authorized(authorize))return null;
+   if(db.prepare('SELECT 1 FROM fixture_owned_auth_devices WHERE device_id=? OR public_key=?').get(deviceId,publicKey)||db.prepare('SELECT count(*) n FROM fixture_owned_auth_devices').get().n>=MAX_DEVICES)return null;
+   db.prepare('DELETE FROM fixture_owned_auth_challenges WHERE created_ms<=?').run(now-CHALLENGE_MS);
+   if(db.prepare('SELECT count(*) n FROM fixture_owned_auth_challenges').get().n>=MAX_ENROLLMENTS||db.prepare('SELECT 1 FROM fixture_owned_auth_challenges WHERE device_id=?').get(deviceId))return null;
+   if(!authorized(authorize))return null;
+   const last=observe(db,checkedClock);if(last===null||last-now>=CHALLENGE_MS||!authorized(authorize)||db.prepare('SELECT 1 FROM fixture_owned_auth_devices WHERE device_id=? OR public_key=?').get(deviceId,publicKey))return null;
+   const row={device_id:deviceId,challenge_id:randomUUID(),nonce:randomBytes(32).toString('base64url'),public_key:publicKey,capabilities,owner_hash:ownerHash,workspace_hash:workspaceHash,created_ms:last};
+   db.prepare('INSERT INTO fixture_owned_auth_challenges VALUES (@device_id,@challenge_id,@nonce,@public_key,@capabilities,@owner_hash,@workspace_hash,@created_ms)').run(row);
+   return {challengeId:row.challenge_id,message:enrollmentMessage(row),expiresInMs:CHALLENGE_MS};
+  });
+ }
+ function completeEnrollment(deviceId,challengeId,signature,ownerHash,workspaceHash,authorize){
+  if(!id(deviceId)||!id(challengeId)||!Buffer.isBuffer(signature)||signature.length<1||signature.length>80||typeof ownerHash!=='string'||!hex.test(ownerHash)||typeof workspaceHash!=='string'||!hex.test(workspaceHash)||!authorized(authorize))return null;
+  return immediate(()=>{
+   const initial=observe(db,checkedClock);if(initial===null)return null;
+   const row=db.prepare('SELECT * FROM fixture_owned_auth_challenges WHERE device_id=? AND challenge_id=?').get(deviceId,challengeId);
+   if(!row||row.owner_hash!==ownerHash||row.workspace_hash!==workspaceHash||!fresh(row.created_ms,initial)||!authorized(authorize))return null;
+   if(!verify('sha256',enrollmentMessage(row),{key:keyFrom(Buffer.from(row.public_key)),dsaEncoding:'der'},signature)||!authorized(authorize))return null;
+   const now=observe(db,checkedClock);if(!authorized(authorize))return null;
+   const current=db.prepare('SELECT * FROM fixture_owned_auth_challenges WHERE device_id=?').get(deviceId);
+   if(!rowSame(row,current)||!fresh(row.created_ms,now)||db.prepare('SELECT 1 FROM fixture_owned_auth_devices WHERE device_id=? OR public_key=?').get(deviceId,row.public_key)||db.prepare('SELECT count(*) n FROM fixture_owned_auth_devices').get().n>=MAX_DEVICES)return null;
+   if(db.prepare('DELETE FROM fixture_owned_auth_challenges WHERE device_id=? AND challenge_id=?').run(deviceId,challengeId).changes!==1)return null;
+   db.prepare('INSERT INTO fixture_owned_auth_devices VALUES (?,?,?,?,?,0)').run(deviceId,row.public_key,row.capabilities,row.owner_hash,row.workspace_hash);return {enrolled:true};
+  });
+ }
+ function beginLogin(deviceId){
+  if(!id(deviceId))return null;
+  // Unknown devices do not acquire the writer lock. For a known device, the
+  // observed wall-time floor must be durable and shared before returning a
+  // challenge, or a forward observation followed by rollback can revive an old one.
+  const initial=db.prepare('SELECT revoked FROM fixture_owned_auth_devices WHERE device_id=?').get(deviceId);
+  if(!initial||initial.revoked)return null;
+  const snapshot=immediate(()=>{
+   const now=observe(db,checkedClock),device=db.prepare('SELECT * FROM fixture_owned_auth_devices WHERE device_id=?').get(deviceId);
+   if(now===null||!device||device.revoked)return null;
+   if(typeof device.owner_hash!=='string'||!hex.test(device.owner_hash)||typeof device.workspace_hash!=='string'||!hex.test(device.workspace_hash))return null;
+   return {now,publicKey:Buffer.from(device.public_key),capabilities:device.capabilities,owner:device.owner_hash,workspace:device.workspace_hash};
+  });
+  if(!snapshot)return null;
+  // No challenge slot is reserved. Random generation and MAC run after releasing
+  // the writer lock; a later revoke is rechecked before ticket issuance.
+  const challengeId=randomUUID(),head=`${challengeId}.${snapshot.now}.${randomBytes(32).toString('base64url')}`,token=`${head}.${mac(deviceId,head).toString('base64url')}`;
+  return {challengeId,challengeToken:token,message:loginMessage(deviceId,token,snapshot.publicKey,snapshot.capabilities,snapshot.owner,snapshot.workspace),expiresInMs:CHALLENGE_MS};
+ }
+ function completeLogin(deviceId,token,signature){
+  if(!id(deviceId)||!Buffer.isBuffer(signature)||signature.length<1||signature.length>80)return null;
+  const claim=decode(deviceId,token);if(!claim)return null;
+  const before=db.prepare('SELECT * FROM fixture_owned_auth_devices WHERE device_id=?').get(deviceId);
+  if(!before||before.revoked||typeof before.owner_hash!=='string'||!hex.test(before.owner_hash)||typeof before.workspace_hash!=='string'||!hex.test(before.workspace_hash)||!verify('sha256',loginMessage(deviceId,token,Buffer.from(before.public_key),before.capabilities,before.owner_hash,before.workspace_hash),{key:keyFrom(Buffer.from(before.public_key)),dsaEncoding:'der'},signature))return null;
+  return immediate(()=>{
+   const now=observe(db,checkedClock),current=db.prepare('SELECT * FROM fixture_owned_auth_devices WHERE device_id=?').get(deviceId);
+   if(!fresh(claim.created,now)||!current||current.revoked||current.capabilities!==before.capabilities||current.owner_hash!==before.owner_hash||current.workspace_hash!==before.workspace_hash||!Buffer.from(current.public_key).equals(Buffer.from(before.public_key)))return null;
+   db.prepare('DELETE FROM fixture_owned_auth_consumed WHERE expires_ms<=?').run(now);
+   db.prepare('DELETE FROM fixture_owned_auth_tickets WHERE expires_ms<=?').run(now);
+   if(db.prepare('SELECT 1 FROM fixture_owned_auth_consumed WHERE challenge_id=?').get(claim.challengeId)||db.prepare('SELECT count(*) n FROM fixture_owned_auth_consumed').get().n>=MAX_CONSUMED||db.prepare('SELECT count(*) n FROM fixture_owned_auth_tickets WHERE device_id=?').get(deviceId).n>=MAX_TICKETS)return null;
+   const last=observe(db,checkedClock),finalDevice=db.prepare('SELECT * FROM fixture_owned_auth_devices WHERE device_id=?').get(deviceId);
+   if(!fresh(claim.created,last)||!finalDevice||finalDevice.revoked||finalDevice.capabilities!==before.capabilities||finalDevice.owner_hash!==before.owner_hash||finalDevice.workspace_hash!==before.workspace_hash||!Buffer.from(finalDevice.public_key).equals(Buffer.from(before.public_key)))return null;
+   db.prepare('INSERT INTO fixture_owned_auth_consumed VALUES (?,?)').run(claim.challengeId,claim.created+CHALLENGE_MS);
+   const ticket=randomBytes(32).toString('base64url');db.prepare('INSERT INTO fixture_owned_auth_tickets VALUES (?,?,?)').run(digest(ticket),deviceId,last+TICKET_MS);
+   return {ticket,expiresInMs:TICKET_MS};
+  });
+ }
+ const validContext=(owner,workspace)=>typeof owner==='string'&&hex.test(owner)&&typeof workspace==='string'&&hex.test(workspace);
+ const projectEpoch=(device,project,owner,workspace)=>db.prepare(`SELECT p.project_epoch FROM fixture_owned_auth_devices d JOIN fixture_owned_auth_projects p
+  ON p.owner_hash=d.owner_hash AND p.workspace_hash=d.workspace_hash
+  WHERE d.device_id=? AND d.revoked=0 AND p.project_id=? AND d.owner_hash=? AND d.workspace_hash=?`).get(device,project,owner,workspace)?.project_epoch;
+ const deviceMatches=(device,owner,workspace)=>!!db.prepare('SELECT 1 FROM fixture_owned_auth_devices WHERE device_id=? AND owner_hash=? AND workspace_hash=? AND revoked=0').get(device,owner,workspace);
+ function grantProject(device,project,owner,workspace,authorize){
+  if(!id(device)||!id(project)||!validContext(owner,workspace)||!authorized(authorize))return false;
+  return immediate(()=>{
+   if(observe(db,checkedClock)===null||!authorized(authorize))return false;
+   const epoch=projectEpoch(device,project,owner,workspace);if(!id(epoch))return false;
+   if(db.prepare('SELECT 1 FROM fixture_owned_auth_grants WHERE device_id=? AND project_id=?').get(device,project))return false;
+   if(db.prepare('SELECT COUNT(*) n FROM fixture_owned_auth_grants').get().n>=1000)return false;
+   if(!authorized(authorize)||observe(db,checkedClock)===null||projectEpoch(device,project,owner,workspace)!==epoch)return false;
+   db.prepare('INSERT INTO fixture_owned_auth_grants VALUES(?,?,?,?,?,0)').run(device,project,owner,workspace,epoch);return true;
+  });
+ }
+ function revokeProject(device,project,owner,workspace,authorize){
+  if(!id(device)||!id(project)||!validContext(owner,workspace)||!authorized(authorize))return false;
+  return immediate(()=>{
+   if(observe(db,checkedClock)===null||!authorized(authorize)||!deviceMatches(device,owner,workspace))return false;
+   if(!authorized(authorize)||observe(db,checkedClock)===null||!deviceMatches(device,owner,workspace))return false;
+   return !!db.prepare('UPDATE fixture_owned_auth_grants SET revoked=1 WHERE device_id=? AND project_id=? AND owner_hash=? AND workspace_hash=? AND revoked=0').run(device,project,owner,workspace).changes;
+  });
+ }
+ return Object.freeze({beginEnrollment:standalone(beginEnrollment),completeEnrollment:standalone(completeEnrollment),beginLogin:standalone(beginLogin),completeLogin:standalone(completeLogin),grantProject:standalone(grantProject),revokeProject:standalone(revokeProject),
+  revoke:standalone((deviceId,owner,workspace,authorize)=>{
+   if(!id(deviceId)||!validContext(owner,workspace)||!authorized(authorize))return false;
+   return immediate(()=>{if(observe(db,checkedClock)===null||!authorized(authorize))return false;
+    if(!authorized(authorize)||observe(db,checkedClock)===null)return false;
+    const changed=db.prepare('UPDATE fixture_owned_auth_devices SET revoked=1 WHERE device_id=? AND owner_hash=? AND workspace_hash=? AND revoked=0').run(deviceId,owner,workspace).changes;
+    if(changed){db.prepare('DELETE FROM fixture_owned_auth_challenges WHERE device_id=?').run(deviceId);db.prepare('DELETE FROM fixture_owned_auth_tickets WHERE device_id=?').run(deviceId);}return !!changed;
+   });
+  }),
+  // A momentary project check is not permission to commit a file later.
+  permits:standalone((ticket,capability,project,owner,workspace)=>{
+   if(typeof ticket!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(ticket)||!allowed.has(capability)||!id(project)||!validContext(owner,workspace))return false;
+   const ticketHash=digest(ticket);
+   if(!db.prepare('SELECT 1 FROM fixture_owned_auth_tickets WHERE ticket_hash=?').get(ticketHash))return false;
+   const check=now=>{
+    if(now===null)return false;
+    const row=db.prepare(`SELECT d.capabilities,d.revoked,t.expires_ms,g.revoked AS grant_revoked
+     FROM fixture_owned_auth_tickets t JOIN fixture_owned_auth_devices d ON d.device_id=t.device_id
+     JOIN fixture_owned_auth_grants g ON g.device_id=d.device_id AND g.project_id=? AND g.owner_hash=d.owner_hash AND g.workspace_hash=d.workspace_hash
+     JOIN fixture_owned_auth_projects p ON p.project_id=g.project_id AND p.owner_hash=g.owner_hash AND p.workspace_hash=g.workspace_hash AND p.project_epoch=g.project_epoch
+     WHERE t.ticket_hash=? AND d.owner_hash=? AND d.workspace_hash=?`).get(project,ticketHash,owner,workspace);
+    return !!row&&!row.revoked&&!row.grant_revoked&&now<row.expires_ms&&row.capabilities.split(',').includes(capability);
+   };
+   return immediate(()=>{if(!check(observe(db,checkedClock)))return false;return check(observe(db,checkedClock));});
+  })
+ });
+}
