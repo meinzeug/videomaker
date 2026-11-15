@@ -171,3 +171,72 @@ test('unknown device challenge is rejected without writer lock',()=>{
  const f=fixture();try{f.db.pragma('query_only = ON');assert.equal(f.api.beginLogin(randomUUID()),null);}
  finally{f.db.pragma('query_only = OFF');f.db.close();}
 });
+
+test('all public decisions fail before returning from an enclosing transaction',()=>{
+ const f=fixture();try{
+  f.enroll();const login=f.api.beginLogin(f.device), sig=f.signature(login), ticket=f.login();
+  const anotherId=randomUUID(), enrollment=f.api.beginEnrollment(anotherId,f.publicKey,['projects:read'],owner,ok);
+  // Use a second key: an enrolled key cannot be registered again.
+  assert.equal(enrollment,null);
+  const other=generateKeyPairSync('ec',{namedCurve:'prime256v1'}), pub=other.publicKey.export({format:'der',type:'spki'});
+  const pending=f.api.beginEnrollment(anotherId,pub,['recordings:upload'],owner,ok);
+  assert.ok(pending);const enrollmentSig=sign('sha256',pending.message,other.privateKey);
+  const floor=f.db.prepare('SELECT floor_ms FROM studio_auth_clock').get().floor_ms;
+  f.set(f.get()+60_001);let leaked;
+  assert.throws(()=>f.db.transaction(()=>{
+   const calls=[
+    ()=>{leaked=f.api.beginLogin(f.device);},
+    ()=>f.api.completeLogin(f.device,login.challengeToken,sig),
+    ()=>f.api.beginEnrollment(randomUUID(),pub,['projects:read'],owner,ok),
+    ()=>f.api.completeEnrollment(anotherId,pending.challengeId,enrollmentSig,owner,ok),
+    ()=>f.api.revoke(f.device,ok),
+    ()=>f.api.permits(ticket,'projects:read'),
+    // Reject even the fast-fail cases rather than silently permitting nested use.
+    ()=>f.api.beginLogin('bad-id'),
+    ()=>f.api.permits('invalid','admin'),
+   ];
+   for(const invoke of calls) assert.throws(invoke,/eigene Transaktion/);
+   throw new Error('outer rollback');
+  }).immediate(),/outer rollback/);
+  assert.equal(leaked,undefined);
+  assert.equal(f.db.prepare('SELECT floor_ms FROM studio_auth_clock').get().floor_ms,floor);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM studio_auth_devices WHERE revoked=0').get().n,1);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM studio_auth_challenges WHERE device_id=?').get(anotherId).n,1);
+  f.set(1_000_001);assert.equal(f.api.permits(ticket,'projects:read'),true);
+ }finally{f.db.close();}
+});
+
+test('callback cannot start an outer transaction before a security transaction',()=>{
+ const f=fixture();try{
+  const bad=()=>{f.db.exec('BEGIN');return true;};
+  assert.throws(()=>f.api.beginEnrollment(f.device,f.publicKey,['projects:read'],owner,bad),/eigene Transaktion/);
+  assert.equal(f.db.inTransaction,true);f.db.exec('ROLLBACK');
+  assert.equal(f.db.prepare('SELECT count(*) n FROM studio_auth_devices').get().n,0);
+  f.enroll();
+  assert.throws(()=>f.api.revoke(f.device,bad),/eigene Transaktion/);
+  assert.equal(f.db.inTransaction,true);f.db.exec('ROLLBACK');
+  assert.equal(f.db.prepare('SELECT revoked FROM studio_auth_devices WHERE device_id=?').get(f.device).revoked,0);
+ }finally{if(f.db.inTransaction)f.db.exec('ROLLBACK');f.db.close();}
+});
+
+test('a returned challenge can already be stale or revoked after snapshot commit',async()=>{
+ const {mkdtempSync,rmSync}=await import('node:fs'),{tmpdir}=await import('node:os'),{join}=await import('node:path');
+ const dir=mkdtempSync(join(tmpdir(),'studio-auth-snapshot-'));let left,right;
+ try{
+  const f=fixture();f.enroll();const file=join(dir,'fixture.sqlite');await f.db.backup(file);f.db.close();
+  left=new Database(file);right=new Database(file);
+  let hook=()=>{};
+  const intercepted=new Proxy(left,{get(target,property){
+   if(property==='transaction')return fn=>{const tx=target.transaction(fn);return {immediate:(...args)=>{const result=tx.immediate(...args);hook();return result;}};};
+   const value=target[property];return typeof value==='function'?value.bind(target):value;
+  }});
+  const forward=createStudioDeviceAuth(right,()=>1_060_001,secret);
+  hook=()=>{hook=()=>{};assert.ok(forward.beginLogin(f.device));};
+  const stale=createStudioDeviceAuth(intercepted,()=>1_000_000,secret).beginLogin(f.device);
+  assert.ok(stale);assert.equal(stale.expiresInMs,60_000);
+  assert.equal(forward.completeLogin(f.device,stale.challengeToken,f.signature(stale)),null);
+  hook=()=>{hook=()=>{};assert.equal(forward.revoke(f.device,ok),true);};
+  const revoked=createStudioDeviceAuth(intercepted,()=>1_060_001,secret).beginLogin(f.device);
+  assert.ok(revoked);assert.equal(forward.completeLogin(f.device,revoked.challengeToken,f.signature(revoked)),null);
+ }finally{left?.close();right?.close();rmSync(dir,{recursive:true,force:true});}
+});
