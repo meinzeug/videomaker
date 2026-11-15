@@ -81,7 +81,8 @@ export async function GET(req:Request) {
 }
 
 export async function POST(req:Request) {
- if(!await authorized()||!await sameOrigin(req))return NextResponse.json({error:'Nicht erlaubt.'},{status:403,headers});
+ if(!await authorized())return NextResponse.json({error:'Bitte erneut anmelden.'},{status:401,headers});
+ if(!await sameOrigin(req))return NextResponse.json({error:'Nicht erlaubt.'},{status:403,headers});
  let researchId:string|null=null,claimAcquired=false;
  try{
   const data=await req.json().catch(()=>({}));
@@ -152,7 +153,7 @@ export async function POST(req:Request) {
   if(saved.created)try{startImages(saved.project.id,claim.imageMode);}catch{console.error('Image job could not start.');}
   return projectResponse(saved.project);
  }catch(error){
-  if(error instanceof SessionRevoked)return NextResponse.json({error:'Nicht erlaubt.'},{status:403,headers});
+  if(error instanceof SessionRevoked)return NextResponse.json({error:'Bitte erneut anmelden.'},{status:401,headers});
   if(error instanceof GrokPending)return NextResponse.json({code:'generation_pending',error:error.message},{status:409,headers});
   if(error instanceof GrokInvalid){if(researchId){const previous=readGenerationClaim(db(),researchId);if(previous?.state==='received')invalidateGenerationResponse(db(),researchId,new Date().toISOString());}return NextResponse.json({code:'generation_invalid',error:error.message},{status:409,headers});}
   if(error instanceof GrokProviderError)return NextResponse.json({code:'generation_status_required',error:error.message},{status:error.status===402?402:503,headers});

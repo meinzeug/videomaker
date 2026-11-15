@@ -8,7 +8,7 @@ import type {Source} from './studio-types';
 type ImageMode='render'|'descriptions';
 export type ScriptDialogDraft={options:ScriptOptions;selectedIndexes:number[];imageMode:ImageMode;channelId:string|null};
 const tones:ReadonlyArray<[ScriptTone,string]>=[['alltag','Alltagssprache'],['hochdeutsch','Hochdeutsch'],['frech','Frech'],['arrogant','Arrogant'],['wuetend','Wütend'],['aufbrausend','Aufbrausend'],['sachlich','Sachlich'],['humorvoll','Humorvoll'],['empathisch','Empathisch']];
-export default function ImageChoiceDialog({title,sources,channels,initial,error,onClose,onConfirm}:{title:string;sources:Source[];channels:Channel[];initial?:ScriptDialogDraft|null;error?:string;onClose:()=>void;onConfirm:(mode:ImageMode,channelId:string|null,options:ScriptOptions,selected:Source[],selectedIndexes:number[])=>void}) {
+export default function ImageChoiceDialog({title,sources,channels,initial,error,sessionExpired,onReauthenticate,onClose,onConfirm}:{title:string;sources:Source[];channels:Channel[];initial?:ScriptDialogDraft|null;error?:string;sessionExpired?:boolean;onReauthenticate?:()=>void;onClose:()=>void;onConfirm:(mode:ImageMode,channelId:string|null,options:ScriptOptions,selected:Source[],selectedIndexes:number[])=>void}) {
  const dialog=useRef<HTMLDialogElement>(null);
  const [mode,setMode]=useState<ImageMode|null>(initial?.imageMode??null),[channelId,setChannelId]=useState(initial?.channelId??'');
  const [selected,setSelected]=useState(()=>new Set(sources.flatMap((_,index)=>!initial||initial.selectedIndexes.includes(index)?[index]:[])));
@@ -19,6 +19,7 @@ export default function ImageChoiceDialog({title,sources,channels,initial,error,
  function toggleSource(index:number){setSelected(previous=>{const next=new Set(previous);if(next.has(index))next.delete(index);else next.add(index);return next;});}
  function toggleTone(tone:ScriptTone){setChosenTones(previous=>previous.includes(tone)?previous.filter(value=>value!==tone):[...previous,tone]);}
  return <dialog ref={dialog} className="image-choice-dialog" aria-labelledby="image-choice-title" aria-describedby="image-choice-description" onClose={onClose}>
+  {sessionExpired&&<div className="alert" role="status">Deine Anmeldung ist nicht mehr gültig. <button type="button" onClick={onReauthenticate}>Erneut anmelden</button></div>}
   <div className="image-choice-header"><div><p className="eyebrow">SKRIPT VORBEREITEN</p><h2 id="image-choice-title">Gestalte dein Skript.</h2></div><button type="button" className="icon image-choice-close" aria-label="Dialog schließen" onClick={()=>dialog.current?.close()}><X size={20}/></button></div>
   <p id="image-choice-description" className="image-choice-intro">Lege für „{title}“ Quellen, Ton und Bildoption fest. Alle weiteren Vorgaben sind optional.</p>
   {error&&<p className="alert" role="alert">{error}</p>}
