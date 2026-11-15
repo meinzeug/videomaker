@@ -17,6 +17,21 @@ function fixture(){
  return {directory,filename,db,close(){db.close();unlinkSync(filename);rmdirSync(directory);}};
 }
 const tx=(db,r,p,u,mode)=>db.transaction(()=>claimUploadPath(db,r,p,u,mode)).immediate();
+test('unsichere SQLite-Dauerhaftigkeit wird abgewiesen',()=>{
+ const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p);
+ try{
+  for(const sync of ['OFF','NORMAL']){
+   f.db.pragma(`synchronous=${sync}`);
+   assert.throws(()=>tx(f.db,r,p,u,'live'),/UNSAFE_SQLITE_DURABILITY/);
+  }
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_owners').get().n,0);
+  f.db.pragma('synchronous=FULL');
+  for(const mode of ['MEMORY','OFF']){
+   f.db.pragma(`journal_mode=${mode}`);
+   assert.throws(()=>tx(f.db,r,p,u,'full'),/UNSAFE_SQLITE_DURABILITY/);
+  }
+ }finally{f.close();}
+});
 test('beide Reihenfolgen bleiben auf ursprünglichen Besitzer und Projekt gebunden',()=>{
  for(const first of ['live','full']){
   const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p),other=first==='live'?'full':'live';
@@ -68,6 +83,19 @@ test('neuer Webclaim kann vorhandene LAN-Besitzzuordnung nicht nachträglich üb
   assert.throws(()=>f.db.transaction(()=>claimCameraProject(f.db,r,randomUUID(),p,Date.now())).immediate(),/LAN-Upload/);
   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM camera_project_claims').get().n,0);
  }finally{f.close();}
+});
+
+test('sämtliche Workspace-Bindungen werden auf widersprüchliche Projekte geprüft',()=>{
+ for(const reverse of [false,true]){
+  const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p),foreign=randomUUID();
+  try{
+   f.db.exec('CREATE TABLE lan_capture_projects(workspace_id TEXT,recording_id TEXT,project_id TEXT,PRIMARY KEY(workspace_id,recording_id))');
+   f.db.prepare('INSERT INTO lan_capture_projects VALUES(?,?,?)').run('first',r,reverse?foreign:p);
+   f.db.prepare('INSERT INTO lan_capture_projects VALUES(?,?,?)').run('second',r,reverse?p:foreign);
+   assert.throws(()=>tx(f.db,r,p,u,'live'),/BINDING_MISMATCH/);
+   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_owners').get().n,0);
+  }finally{f.close();}
+ }
 });
 
 test('späterer neutraler Projektimport darf vorhandene Zuordnung nicht ersetzen',()=>{

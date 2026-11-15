@@ -8,6 +8,10 @@ const canonicalUuid=(value:unknown):value is string =>
 
 export function initializeUploadPathOwners(db:Database.Database) {
  if(!db.inTransaction)throw new UploadPathOwnerError('TRANSACTION_REQUIRED');
+ const synchronous=db.pragma('synchronous',{simple:true});
+ const journal=db.pragma('journal_mode',{simple:true});
+ if(typeof synchronous!=='number'||synchronous<2||typeof journal!=='string'||!['delete','truncate','persist','wal'].includes(journal.toLowerCase()))
+  throw new UploadPathOwnerError('UNSAFE_SQLITE_DURABILITY');
  db.exec(`CREATE TABLE IF NOT EXISTS live_upload_path_owners (
   recording_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, upload_id TEXT NOT NULL UNIQUE,
   path TEXT NOT NULL CHECK(path IN ('live','full'))
@@ -33,8 +37,8 @@ export function claimUploadPath(db:Database.Database,recording:unknown,project:u
     db.prepare('SELECT 1 FROM camera_project_claims WHERE recording_id=? COLLATE NOCASE LIMIT 1').get(recording))
   throw new UploadPathOwnerError('WEB_CLAIM');
  if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lan_capture_projects'").get()) {
-  const lan=db.prepare('SELECT project_id AS project FROM lan_capture_projects WHERE recording_id=? COLLATE NOCASE').get(recording) as {project:string|null}|undefined;
-  if(lan && lan.project!==project)throw new UploadPathOwnerError('BINDING_MISMATCH');
+  const conflict=db.prepare('SELECT 1 FROM lan_capture_projects WHERE recording_id=? COLLATE NOCASE AND (project_id IS NULL OR project_id<>?) LIMIT 1').get(recording,project);
+  if(conflict)throw new UploadPathOwnerError('BINDING_MISMATCH');
  }
  const prior=db.prepare('SELECT project_id,upload_id,path FROM live_upload_path_owners WHERE recording_id=?').get(recording) as {project_id:string;upload_id:string;path:string}|undefined;
  if(prior){
