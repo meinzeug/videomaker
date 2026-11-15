@@ -209,9 +209,19 @@ export function createOwnedDeviceAuth(db,clock=Date.now,challengeSecret){
    if(db.prepare('SELECT 1 FROM fixture_owned_auth_consumed WHERE challenge_id=?').get(claim.challengeId)||db.prepare('SELECT count(*) n FROM fixture_owned_auth_consumed').get().n>=MAX_CONSUMED||db.prepare('SELECT count(*) n FROM fixture_owned_auth_tickets WHERE device_id=?').get(deviceId).n>=MAX_TICKETS)return null;
    const last=observe(db,checkedClock),finalDevice=db.prepare('SELECT * FROM fixture_owned_auth_devices WHERE device_id=?').get(deviceId);
    if(!fresh(claim.created,last)||!finalDevice||finalDevice.revoked||finalDevice.capabilities!==before.capabilities||finalDevice.owner_hash!==before.owner_hash||finalDevice.workspace_hash!==before.workspace_hash||!Buffer.from(finalDevice.public_key).equals(Buffer.from(before.public_key)))return null;
+   db.exec('SAVEPOINT fixture_login_complete');
    db.prepare('INSERT INTO fixture_owned_auth_consumed VALUES (?,?)').run(claim.challengeId,claim.created+CHALLENGE_MS);
    const ticket=randomBytes(32).toString('base64url');db.prepare('INSERT INTO fixture_owned_auth_tickets VALUES (?,?,?)').run(digest(ticket),deviceId,last+TICKET_MS);
-   return {ticket,expiresInMs:TICKET_MS};
+   // A slow write can cross the challenge deadline after the earlier check.
+   // Keep the durable clock floor even if the newly issued ticket rolls back.
+   const finalNow=observe(db,checkedClock),latest=db.prepare('SELECT * FROM fixture_owned_auth_devices WHERE device_id=?').get(deviceId);
+   if(!fresh(claim.created,finalNow)||!latest||latest.revoked||latest.capabilities!==before.capabilities||latest.owner_hash!==before.owner_hash||latest.workspace_hash!==before.workspace_hash||!Buffer.from(latest.public_key).equals(Buffer.from(before.public_key))){
+    db.exec('ROLLBACK TO fixture_login_complete; RELEASE fixture_login_complete');
+    if(finalNow!==null)db.prepare('UPDATE fixture_owned_auth_clock SET floor_ms=MAX(floor_ms,?) WHERE id=1').run(finalNow);
+    return null;
+   }
+   db.exec('RELEASE fixture_login_complete');
+   return {ticket,expiresInMs:last+TICKET_MS-finalNow};
   });
  }
  const projectEpoch=(device,project,owner,workspace)=>db.prepare(`SELECT p.project_epoch FROM fixture_owned_auth_devices d JOIN fixture_owned_auth_projects p

@@ -172,6 +172,38 @@ test('project owner and epoch cannot be altered after creation',()=>{
  }finally{db.close();}
 });
 
+test('login challenge expiry during ticket insertion leaves no ticket or replayable proof',()=>{
+ const db=new Database(':memory:');let now=1000;
+ try{
+  const f=init(db,randomBytes(32),()=>now,100_000);enroll(f);
+  const challenge=f.auth.beginLogin(f.device);assert.ok(challenge);
+  const signature=sign('sha256',challenge.message,f.keys.privateKey);
+  // Synthetic trigger only simulates time passing during a slow SQL write; it
+  // never mutates the auth DB or the injected clock callback.
+  db.function('simulate_ticket_delay',()=>{now=61_001;return 0;});
+  db.exec('CREATE TRIGGER fixture_test_login_delay AFTER INSERT ON fixture_owned_auth_tickets BEGIN SELECT simulate_ticket_delay(); END');
+  assert.equal(f.auth.completeLogin(f.device,challenge.challengeToken,signature),null);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM fixture_owned_auth_tickets').get().n,0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM fixture_owned_auth_consumed').get().n,0);
+  assert.equal(db.prepare('SELECT floor_ms FROM fixture_owned_auth_clock WHERE id=1').get().floor_ms,61_001);
+  now=1000;assert.equal(f.auth.completeLogin(f.device,challenge.challengeToken,signature),null);
+ }finally{db.close();}
+});
+
+test('login reports only remaining ticket lifetime after a delayed insertion',()=>{
+ const db=new Database(':memory:');let now=1000;
+ try{
+  const f=init(db,randomBytes(32),()=>now,100_000);enroll(f);
+  const challenge=f.auth.beginLogin(f.device);assert.ok(challenge);
+  db.function('simulate_ticket_delay',()=>{now=11_000;return 0;});
+  db.exec('CREATE TRIGGER fixture_test_login_delay AFTER INSERT ON fixture_owned_auth_tickets BEGIN SELECT simulate_ticket_delay(); END');
+  const result=f.auth.completeLogin(f.device,challenge.challengeToken,sign('sha256',challenge.message,f.keys.privateKey));
+  assert.ok(result);assert.equal(result.expiresInMs,290_000);
+  assert.equal(db.prepare('SELECT expires_ms FROM fixture_owned_auth_tickets').get().expires_ms,301_000);
+  assert.equal(db.prepare('SELECT floor_ms FROM fixture_owned_auth_clock').get().floor_ms,11_000);
+ }finally{db.close();}
+});
+
 test('enrollment expires during final work and cannot be revived by clock rollback',()=>{
  const db=new Database(':memory:');let now=1000,calls=0,advance=false;
  try{
