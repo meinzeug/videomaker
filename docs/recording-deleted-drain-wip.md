@@ -37,3 +37,23 @@ Startinstrumentierung erforderlich. Next-Konfiguration, Instrumentierung und
 `next-env.d.ts` sind danach wiederhergestellt. Der Node-Proxy ist nicht Caddy;
 dessen Pufferung und ein echter Android-Client sind hier nicht getestet. Keine
 Produktivdaten, Geräte oder Server wurden für diesen Test verwendet.
+
+## Produktivübernahme und echter Gerätetest am 15. November
+
+Der CI-gebaute Stand `4dca746` wurde nach separatem Test mit synthetischer
+Datenbank und Streamingproxy produktiv übernommen. Eine geprüfte Online- und
+eine zusätzliche SQLite-Sicherung nach Dienststopp wurden angelegt; der
+vorherige vollständige Stand blieb als Rückweg erhalten. Nach dem Start waren
+alle zuvor vorhandenen 21 Projekte und 34 Aufnahmen vorhanden. Health,
+Anmeldung, Projektzugriff und der vollständige APK-Download bestanden.
+
+Ein realer Wiederholungsversuch vom Xiaomi für eine eigene, zuvor auf dem
+Server gelöschte 4.821.928 Bytes große Testaufnahme zeigte nun die spezifische
+Löschmeldung statt „Connection reset“. Die lokale Exportdatei blieb mit der
+vor der Löschung bestätigten SHA-256
+`0ec9b39904ed8b55cd768f4010f9e7fa4fb3f66efe49a611de291e7b5789a2ba`
+erhalten; auf dem Server blieben Aufnahmezeile und Datei entfernt, die
+Löschsperre blieb bestehen. Anschließend wurde nach erneuter WLAN-Kopplung
+Start, Pause, Fortsetzen und Stopp einer weiteren Kameraaufnahme über das
+Samsung geprüft; diese wurde automatisch hochgeladen. Sehr große oder langsame
+Wiederholungen können wegen der dokumentierten Uploadfristen weiter abbrechen.
