@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import Database from 'better-sqlite3';
 import {ensureCameraRemoteSchema} from '../lib/camera-remote-store.ts';
-import {CAMERA_STOP_INTENT_SCHEMA,reserveCameraStopSlot,requestCameraStopIntent,deliverCameraStopIntent} from '../lib/camera-stop-intent.ts';
+import {CAMERA_STOP_INTENT_SCHEMA,cameraStopIntentId,reserveCameraStopSlot,requestCameraStopIntent,deliverCameraStopIntent} from '../lib/camera-stop-intent.ts';
 const clock={runtimeId:randomUUID(),wall:100000,tick:100000};
 const owner='a'.repeat(64);
 function fixture(){
@@ -68,4 +68,52 @@ test('pending intent survives a database reopen and the reserved slot cannot be 
   assert.equal(db.prepare('SELECT count(*) AS n FROM camera_stop_intents').get().n,1);
   db.close();
  }finally{rmSync(folder,{recursive:true,force:true});}
+});
+
+test('legacy contaminated STOP is repaired on delivery, then survives retries and preserves the take',()=>{
+ for (const type of ['camera_switch','record_pause']) {
+  const {db,id,take}=fixture();
+  try {
+   const old=cameraStopIntentId(id,take);
+   db.prepare("INSERT INTO camera_remote_controls(id,device_id,recording_id,type,created_at,expires_at,runtime_id,created_tick,expires_tick,result) VALUES(?,?,?,?,?,?,?,?,?,'accepted')").run(old,id,old,type,clock.wall,clock.wall+9990,clock.runtimeId,clock.tick,clock.tick+9990);
+   db.prepare('UPDATE camera_stop_intents SET recording_id=?,intent_id=? WHERE device_id=?').run(take,old,id);
+   const delivery=deliverCameraStopIntent(db,id,'recording',take,clock.wall);
+   assert.notEqual(delivery.id,old);assert.equal(delivery.recordingId,take);
+   assert.equal(requestCameraStopIntent(db,id,take,clock).id,delivery.id);
+   assert.equal(deliverCameraStopIntent(db,id,'recording',take,clock.wall+1).id,delivery.id);
+   assert.deepEqual(db.prepare('SELECT old_intent_id,new_intent_id FROM camera_stop_id_repairs').get(),{old_intent_id:old,new_intent_id:delivery.id});
+   assert.throws(()=>db.prepare('DELETE FROM camera_stop_id_repairs').run(),/retained/);
+  } finally {db.close();}
+ }
+});
+test('failed legacy STOP repair rolls back slot and audit rather than delivering the colliding command',()=>{
+ const {db,id,take}=fixture();
+ try {
+  const old=cameraStopIntentId(id,take);
+  db.prepare("INSERT INTO camera_remote_controls(id,device_id,recording_id,type,created_at,expires_at,runtime_id,created_tick,expires_tick,result) VALUES(?,?,?,'camera_switch',?,?,?,?,?,'accepted')").run(old,id,old,clock.wall,clock.wall+9990,clock.runtimeId,clock.tick,clock.tick+9990);
+  db.prepare('UPDATE camera_stop_intents SET recording_id=?,intent_id=? WHERE device_id=?').run(take,old,id);
+  db.exec("CREATE TRIGGER fail_stop_repair BEFORE UPDATE ON camera_stop_intents BEGIN SELECT RAISE(ABORT,'synthetic write failure'); END");
+  assert.throws(()=>deliverCameraStopIntent(db,id,'recording',take,clock.wall),/synthetic write failure/);
+  assert.equal(db.prepare('SELECT intent_id FROM camera_stop_intents').get().intent_id,old);
+  assert.equal(db.prepare('SELECT count(*) n FROM camera_stop_id_repairs').get().n,0);
+  db.exec('DROP TRIGGER fail_stop_repair');
+  assert.notEqual(deliverCameraStopIntent(db,id,'recording',take,clock.wall).id,old);
+ } finally {db.close();}
+});
+
+test('repaired legacy stop and audit survive reopening the database',()=>{
+ const folder=mkdtempSync(join(tmpdir(),'camera-stop-repair-'));let db;
+ try {
+  const path=join(folder,'fixture.db'),id=randomUUID(),take=randomUUID(),old=cameraStopIntentId(id,take);
+  db=new Database(path);ensureCameraRemoteSchema(db);db.exec(CAMERA_STOP_INTENT_SCHEMA);
+  db.prepare('INSERT INTO camera_remote_devices(id,owner_hash,sequence,name,phase,recording_id,project_id,updated_at,runtime_id,updated_tick) VALUES(?,?,1,?,?,?,?,?,?,?)').run(id,owner,'Kamera','recording',take,null,clock.wall,clock.runtimeId,clock.tick);
+  reserveCameraStopSlot(db,id);
+  db.prepare("INSERT INTO camera_remote_controls(id,device_id,recording_id,type,created_at,expires_at,runtime_id,created_tick,expires_tick,result) VALUES(?,?,?,'camera_switch',?,?,?,?,?,'accepted')").run(old,id,old,clock.wall,clock.wall+9990,clock.runtimeId,clock.tick,clock.tick+9990);
+  db.prepare('UPDATE camera_stop_intents SET recording_id=?,intent_id=? WHERE device_id=?').run(take,old,id);
+  const repaired=deliverCameraStopIntent(db,id,'recording',take,clock.wall);db.close();
+  db=new Database(path);
+  assert.equal(requestCameraStopIntent(db,id,take,clock).id,repaired.id);
+  assert.equal(deliverCameraStopIntent(db,id,'recording',take,clock.wall+1).id,repaired.id);
+  assert.equal(db.prepare('SELECT count(*) n FROM camera_stop_id_repairs').get().n,1);
+ } finally {db?.close();rmSync(folder,{recursive:true,force:true});}
 });
