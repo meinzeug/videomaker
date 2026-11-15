@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {registerHooks} from 'node:module';
 import Database from 'better-sqlite3';
+import {cameraUploadIdFor} from '../lib/camera-project-claims.ts';
 registerHooks({resolve(specifier,context,next){
  if(context.parentURL?.endsWith('/lib/recording-receipt.ts')&&specifier==='./recordings')return next('./recordings.ts',context);
  return next(specifier,context);
@@ -16,7 +17,7 @@ const hash=value=>createHash('sha256').update(value).digest('hex');
 function fixture(){
  const root=mkdtempSync(join(tmpdir(),'live-receipt-')),db=new Database(join(root,'db.sqlite'));
  db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY); CREATE TABLE project_recordings(id TEXT PRIMARY KEY,project_id TEXT,created_at TEXT,mime TEXT,size INTEGER)');initializeLiveStaging(db);
- const [id,project,recording]=[randomUUID(),randomUUID(),randomUUID()],data=Buffer.from('synthetic mp4 bytes'),sha=hash(data);
+ const project=randomUUID(),recording=randomUUID(),id=cameraUploadIdFor(recording,project),data=Buffer.from('synthetic mp4 bytes'),sha=hash(data);
  let allowed=true;const authorize=()=>{if(!allowed)throw new Error('UNAUTHORIZED');if(!db.prepare('SELECT 1 FROM projects WHERE id=?').get(project))throw new Error('PROJECT_MISSING');};
  db.prepare('INSERT INTO projects VALUES(?)').run(project);
  const store=createLiveStaging(db,root,()=>4n*1024n*1024n*1024n,authorize);store.begin(id,project,recording);store.put(id,project,recording,0,0,data,sha);store.seal(id,project,recording,data.length,sha);

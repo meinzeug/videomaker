@@ -4,6 +4,7 @@ import {existsSync} from 'node:fs';
 import path from 'node:path';
 import {recordingsDir} from './recordings.ts';
 import {recordingUploadOwnerDefinitelyStopped} from './recording-upload-guard.ts';
+import {claimUploadPath,UploadPathOwnerError} from './live-upload-path-owner.ts';
 
 // Claim and manifest changes belong to the caller's SQLite write transaction.
 export const CAMERA_PROJECT_CLAIMS_SCHEMA = `
@@ -142,9 +143,21 @@ export function assertCameraUploadConsistent(db:Database.Database,recordingId:st
 }
 
 /** Serialize upload-ID validation against a competing camera START. */
-export function lockAndValidateCameraUpload(db:Database.Database,token:string,uploadId:string,cameraRecordingId:string|null,projectId:string,size:number,sha256:string|null,check:()=>void){
+export function lockAndValidateCameraUpload(db:Database.Database,token:string,uploadId:string,cameraRecordingId:string|null,projectId:string,size:number,sha256:string|null,check:()=>void,pathOwner?:{mode:'live'|'full';recordingId:string;authorize:()=>void}){
  return db.transaction(()=>{
   check();
+  if(pathOwner){
+   if(cameraRecordingId)throw new CameraUploadGateError('camera_manifest_mismatch','LAN- und Webaufnahme dürfen nicht vermischt werden.');
+   pathOwner.authorize();
+   try{claimUploadPath(db,pathOwner.recordingId,projectId,uploadId,pathOwner.mode);}
+   catch(error){if(error instanceof UploadPathOwnerError)throw new CameraUploadGateError('camera_upload_busy','Die Upload-Herkunft ist belegt oder ungeklärt.');throw error;}
+   pathOwner.authorize();
+  }else if(!cameraRecordingId && db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_recording_stages'").get() &&
+    db.prepare("SELECT 1 FROM live_recording_stages WHERE state<>'published' LIMIT 1").get()){
+   // Legacy requests do not prove which recording they contain. Temporarily
+   // postpone even unrelated ones while any live take has an unresolved owner.
+   throw new CameraUploadGateError('camera_upload_busy','Liveaufnahme läuft. Bitte den Upload später erneut versuchen; das Original bleibt erhalten.');
+  }
   const old=db.prepare('SELECT token FROM camera_project_upload_locks WHERE upload_id=?').get(uploadId) as {token:string}|undefined;
   if(old){
    // A timed-out lease alone does not prove that asynchronous filesystem work

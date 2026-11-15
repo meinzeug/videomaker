@@ -5,6 +5,7 @@ import path from 'node:path';
 import {isRecordingId,MAX_RECORDING_SIZE} from './recordings.ts';
 import {RECORDING_DISK_RESERVE} from './recording-upload-guard.ts';
 import {syncDirectory} from './recording-upload-intent.ts';
+import {assertNoLegacyFullUpload,claimUploadPath} from './live-upload-path-owner.ts';
 
 /** Experimental staging only. No route publishes or deletes a finished recording here. */
 export const LIVE_CHUNK_BYTES=1024*1024;
@@ -104,9 +105,11 @@ export function createLiveStaging(db:Database.Database,root:string,freeBytes?:(d
    db.transaction(()=>{
     authorize();
     initializeLiveStaging(db);assertLanBinding(project,recording);
-    const old=row(id);if(old){if(old.project_id!==project||old.recording_id!==recording)fail('BINDING_CONFLICT');return;}
+    const old=row(id);if(old){if(old.project_id!==project||old.recording_id!==recording)fail('BINDING_CONFLICT');claimUploadPath(db,recording,project,id,'live');return;}
     if(db.prepare('SELECT 1 FROM live_recording_stages WHERE recording_id=?').get(recording))fail('BINDING_CONFLICT');
     if((db.prepare("SELECT COUNT(*) AS n FROM live_recording_stages WHERE state<>'published'").get() as {n:number}).n>=LIVE_MAX_SESSIONS)fail('CAPACITY');
+    assertNoLegacyFullUpload(db,recording,project);
+    claimUploadPath(db,recording,project,id,'live');
     reserve(0);db.prepare("INSERT INTO live_recording_stages(id,project_id,recording_id,state,file_key,created_at) VALUES(?,?,?,'opening',?,?)").run(id,project,recording,randomUUID(),createdAt);
    }).immediate();
    return resolveOpening(id);

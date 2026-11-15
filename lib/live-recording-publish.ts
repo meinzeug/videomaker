@@ -36,7 +36,7 @@ export async function publishLiveRecording(options:{database:Database.Database;s
   await mkdir(directory,{recursive:true,mode:0o700});syncDirectory(path.dirname(directory));
   database.transaction(()=>{
    authorize();lease.check();database.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);ensureCameraClaimUploadMappings(database);
-   lockAndValidateCameraUpload(database,lease.token,id,null,project,size,sha256,lease.check);
+   lockAndValidateCameraUpload(database,lease.token,id,null,project,size,sha256,lease.check,{mode:'live',recordingId:recording,authorize});
   }).immediate();
   const existing=database.prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').all(id) as Item[];
   if(existing.length>1)fail('BINDING_CONFLICT');

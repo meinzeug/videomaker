@@ -60,6 +60,28 @@ test('bereits vorhandenes finales Video wird ohne Herkunftsnachweis nicht übern
  }finally{f.close();}
 });
 
+test('unidentifizierbares historisches Video sperrt neuen Livepfad, ohne Bestand zu ändern',()=>{
+ const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p),old=randomUUID();
+ try{
+  f.db.exec('CREATE TABLE project_recordings(id TEXT PRIMARY KEY,project_id TEXT,size INTEGER)');
+  f.db.prepare('INSERT INTO project_recordings VALUES(?,?,?)').run(old,randomUUID(),123);
+  assert.throws(()=>tx(f.db,r,p,u,'live'),/LEGACY_HISTORY_UNVERIFIED/);
+  assert.equal(f.db.prepare('SELECT size FROM project_recordings WHERE id=?').get(old).size,123);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM live_upload_path_owners').get().n,0);
+ }finally{f.close();}
+});
+
+test('historischer deterministischer Vollupload in anderem Projekt wird erkannt',()=>{
+ const f=fixture(),r=randomUUID(),p=randomUUID(),other=randomUUID(),u=cameraUploadIdFor(r,p),old=cameraUploadIdFor(r,other);
+ try{
+  f.db.exec('CREATE TABLE projects(id TEXT PRIMARY KEY); CREATE TABLE project_recordings(id TEXT PRIMARY KEY,project_id TEXT,size INTEGER)');
+  f.db.prepare('INSERT INTO projects VALUES(?)').run(p);f.db.prepare('INSERT INTO projects VALUES(?)').run(other);
+  f.db.prepare('INSERT INTO project_recordings VALUES(?,?,?)').run(old,other,321);
+  assert.throws(()=>tx(f.db,r,p,u,'live'),/FINAL_RECORDING_EXISTS/);
+  assert.equal(f.db.prepare('SELECT size FROM project_recordings WHERE id=?').get(old).size,321);
+ }finally{f.close();}
+});
+
 test('Kamera-Webclaim und abweichender LAN-Import sperren beide Pfade',()=>{
  for(const mode of ['live','full']){
   const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p);

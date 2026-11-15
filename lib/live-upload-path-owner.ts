@@ -45,6 +45,7 @@ export function claimUploadPath(db:Database.Database,recording:unknown,project:u
   if(prior.project_id!==project||prior.upload_id!==upload||prior.path!==mode)throw new UploadPathOwnerError('OWNER_CONFLICT');
   return {created:false};
  }
+ if(mode==='live')assertNoLegacyFullUpload(db,recording,project);
  // Never silently adopt an existing final object when the origin of its
  // original recording is unknown. A separate verified recovery is needed.
  if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_recordings'").get() &&
@@ -53,4 +54,33 @@ export function claimUploadPath(db:Database.Database,recording:unknown,project:u
  try { db.prepare('INSERT INTO live_upload_path_owners(recording_id,project_id,upload_id,path) VALUES(?,?,?,?)').run(recording,project,upload,mode); }
  catch(error) { if((error as {code?:string}).code?.startsWith('SQLITE_CONSTRAINT'))throw new UploadPathOwnerError('OWNER_CONFLICT');throw error; }
  return {created:true};
+}
+
+/** Conservative legacy check: current app upload IDs encode both take and destination. */
+export function assertNoLegacyFullUpload(db:Database.Database,recording:string,project:string) {
+ const has=(name:string)=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+ // Existing clients can use arbitrary IDs. An already-running unidentified
+ // whole-file upload cannot be proven unrelated to a newly started live take.
+ if(has('camera_project_upload_locks')&&db.prepare('SELECT 1 FROM camera_project_upload_locks LIMIT 1').get())
+  throw new UploadPathOwnerError('FULL_UPLOAD_IN_PROGRESS');
+ const projects=new Set<string>([project]);
+ if(has('projects'))for(const row of db.prepare('SELECT id AS project FROM projects LIMIT 1001').all() as {project:string}[])projects.add(row.project);
+ if(has('project_recordings'))for(const row of db.prepare('SELECT DISTINCT project_id AS project FROM project_recordings LIMIT 1001').all() as {project:string}[])projects.add(row.project);
+ if(projects.size>1000)throw new UploadPathOwnerError('LEGACY_AUDIT_LIMIT');
+ for(const candidate of projects){
+  if(!canonicalUuid(candidate))throw new UploadPathOwnerError('LEGACY_AUDIT_REQUIRED');
+  const id=cameraUploadIdFor(recording,candidate);
+  if(has('camera_project_upload_locks')&&db.prepare('SELECT 1 FROM camera_project_upload_locks WHERE upload_id=? COLLATE NOCASE').get(id))throw new UploadPathOwnerError('FULL_UPLOAD_IN_PROGRESS');
+  if(has('project_recordings')&&db.prepare('SELECT 1 FROM project_recordings WHERE id=? COLLATE NOCASE').get(id))throw new UploadPathOwnerError('FINAL_RECORDING_EXISTS');
+ }
+ if(has('project_recordings')) {
+  // Legacy arbitrary upload IDs carry no recoverable source-take identity.
+  // Keep live creation closed until those historical objects are audited;
+  // do not guess that a random old ID is a different recording.
+  const ownerJoin=has('live_upload_path_owners')?'LEFT JOIN live_upload_path_owners o ON o.upload_id=r.id COLLATE NOCASE':'';
+  const webJoin=has('camera_project_upload_ids')?'LEFT JOIN camera_project_upload_ids w ON w.upload_id=r.id COLLATE NOCASE':'';
+  const conditions=[ownerJoin?'o.upload_id IS NULL':'1',webJoin?'w.upload_id IS NULL':'1'].join(' AND ');
+  if(db.prepare(`SELECT 1 FROM project_recordings r ${ownerJoin} ${webJoin} WHERE ${conditions} LIMIT 1`).get())
+   throw new UploadPathOwnerError('LEGACY_HISTORY_UNVERIFIED');
+ }
 }

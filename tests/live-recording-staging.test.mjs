@@ -7,14 +7,15 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import Database from 'better-sqlite3';
 import {createLiveStaging,initializeLiveStaging,LIVE_CHUNK_BYTES,LIVE_MAX_SESSIONS} from '../lib/live-recording-staging.ts';
-import {CAMERA_PROJECT_CLAIMS_SCHEMA} from '../lib/camera-project-claims.ts';
+import {CAMERA_PROJECT_CLAIMS_SCHEMA,cameraUploadIdFor} from '../lib/camera-project-claims.ts';
 
 const sum=bytes=>createHash('sha256').update(bytes).digest('hex');
 const huge=()=>4n*1024n*1024n*1024n;
+const validIds=()=>{const project=randomUUID(),recording=randomUUID();return [cameraUploadIdFor(recording,project),project,recording];};
 function fixture(){
  const directory=mkdtempSync(join(tmpdir(),'videomaker-live-stage-')),db=new Database(join(directory,'db.sqlite'));
  initializeLiveStaging(db);
- const store=createLiveStaging(db,directory,huge),ids=[randomUUID(),randomUUID(),randomUUID()];
+ const store=createLiveStaging(db,directory,huge),ids=validIds();
  return {directory,db,store,ids,close(){db.close();rmSync(directory,{recursive:true,force:true});}};
 }
 test('identische Wiederholung ist idempotent; revidierter MP4-Header und letzter Teil werden verlustfrei versiegelt',()=>{
@@ -72,10 +73,10 @@ test('Lücken, fremde Bindungen, Hashfehler, stale Revision und veränderte Date
 test('Platzreserve und Sitzungsobergrenze sperren, expliziter Abbruch macht nur eigenen Platz frei',()=>{
  const f=fixture();
  try{
-  const sessions=Array.from({length:LIVE_MAX_SESSIONS},()=>[randomUUID(),randomUUID(),randomUUID()]);
+  const sessions=Array.from({length:LIVE_MAX_SESSIONS},validIds);
   for(const args of sessions)f.store.begin(...args);
-  assert.throws(()=>f.store.begin(randomUUID(),randomUUID(),randomUUID()),/CAPACITY/);
-  assert.equal(f.store.cancel(...sessions[0]),true);f.store.begin(randomUUID(),randomUUID(),randomUUID());
+  assert.throws(()=>f.store.begin(...validIds()),/CAPACITY/);
+  assert.equal(f.store.cancel(...sessions[0]),true);f.store.begin(...validIds());
   const low=createLiveStaging(f.db,f.directory,()=>1n),bytes=Buffer.from('small');
   assert.throws(()=>low.put(...sessions[1],0,0,bytes,sum(bytes)),/NO_SPACE/);
  }finally{f.close();}

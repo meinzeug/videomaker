@@ -65,12 +65,16 @@ export async function POST(req:Request,{params}:Context) {
  const recordingId=(req.headers.get('x-recording-id') || '').toLowerCase();
  const rawCameraRecordingId=req.headers.get('x-camera-recording-id');
  const cameraRecordingId=rawCameraRecordingId===null?null:rawCameraRecordingId.toLowerCase();
+ const rawLanRecordingId=req.headers.get('x-lan-recording-id');
+ const lanRecordingId=rawLanRecordingId===null?null:rawLanRecordingId.toLowerCase();
  const mime=(req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
  const length=Number(req.headers.get('content-length') || 0);
  const rawHash=req.headers.get('x-content-sha256');
  const expectedHash=rawHash===null?null:rawHash.trim().toLowerCase();
  if(!isRecordingId(recordingId)||!['video/webm','video/mp4'].includes(mime)||!req.body||!Number.isSafeInteger(length)||length<0||
     (cameraRecordingId!==null&&(!isRecordingId(cameraRecordingId)||cameraUploadIdFor(cameraRecordingId,id)!==recordingId))||
+    (lanRecordingId!==null&&(!isRecordingId(lanRecordingId)||cameraRecordingId!==null||cameraUploadIdFor(lanRecordingId,id)!==recordingId))||
+    (lanRecordingId!==null&&(expectedHash===null||length<=0))||
     (cameraRecordingId!==null&&(expectedHash===null||length<=0))||
     (expectedHash!==null&&(!/^[0-9a-f]{64}$/.test(expectedHash)||length<=0)))
   return NextResponse.json({error:'Ungültige Aufnahme.'},{status:400});
@@ -83,7 +87,7 @@ export async function POST(req:Request,{params}:Context) {
  try {
  try{
   const database=db();database.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);ensureCameraClaimUploadMappings(database);lease.check();
-  lockAndValidateCameraUpload(database,lease.token,recordingId,cameraRecordingId,id,length,expectedHash,lease.check);
+  lockAndValidateCameraUpload(database,lease.token,recordingId,cameraRecordingId,id,length,expectedHash,lease.check,lanRecordingId?{mode:'full',recordingId:lanRecordingId,authorize:()=>{if(!sessionAuthorized(database,credential))throw new CameraUploadGateError('camera_upload_busy','Sitzung abgelaufen. Bitte erneut anmelden.');}}:undefined);
  }catch(error){if(error instanceof CameraUploadGateError)return NextResponse.json({code:error.gateCode,error:error.message},{status:409});console.error('Kamera-Aufnahmenachweis konnte nicht geprüft werden:',error);return NextResponse.json({error:'Aufnahmenachweis konnte nicht geprüft werden.'},{status:503});}
  const candidates=db().prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').all(recordingId) as Recording[];
  if(candidates.length>1)return NextResponse.json({error:'Mehrdeutige Aufnahme-ID.'},{status:409});
