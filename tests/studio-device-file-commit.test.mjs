@@ -44,6 +44,35 @@ test('expiry during linked-file commit removes only the own link and retains no 
 test('a tombstoned synthetic recording cannot be published',()=>{
  const f=setup();try{f.db.prepare('INSERT INTO fixture_file_tombstones VALUES(?)').run(f.recording);assert.equal(commitSyntheticFile(f.db,args(f)),'deleted');assert.equal(existsSync(join(f.root,`${f.recording}.fixture`)),false);}finally{f.close();}
 });
+test('reentrant tombstone after link survives and only this call\'s link/row are removed',()=>{
+ const f=setup(),unrelated=join(f.root,`${randomUUID()}.fixture`);let calls=0;
+ try{
+  writeFileSync(unrelated,'unrelated fixture bytes');
+  const clock=()=>{if(++calls===2)f.db.prepare('INSERT INTO fixture_file_tombstones VALUES(?)').run(f.recording);return Date.now();};
+  assert.equal(commitSyntheticFile(f.db,args(f,{clock})),'deleted');
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM fixture_file_tombstones').get().n,1);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM fixture_file_publications').get().n,0);
+  assert.equal(existsSync(join(f.root,`${f.recording}.fixture`)),false);assert.equal(readFileSync(unrelated,'utf8'),'unrelated fixture bytes');
+ }finally{f.close();}
+});
+test('reentrant tombstone during replay never reports success or deletes preexisting file',()=>{
+ const f=setup(),target=join(f.root,`${f.recording}.fixture`);let calls=0;
+ try{
+  assert.equal(commitSyntheticFile(f.db,args(f)),'created');
+  const clock=()=>{if(++calls===2)f.db.prepare('INSERT INTO fixture_file_tombstones VALUES(?)').run(f.recording);return Date.now();};
+  assert.equal(commitSyntheticFile(f.db,args(f,{clock})),'uncertain');assert.deepEqual(readFileSync(target),f.bytes);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM fixture_file_tombstones').get().n,1);
+ }finally{f.close();}
+});
+test('changed bytes after link remain untouched and do not become a publication',()=>{
+ const f=setup(),target=join(f.root,`${f.recording}.fixture`);let calls=0;
+ try{
+  const clock=()=>{if(++calls===2)writeFileSync(target,'different same file');return Date.now();};
+  assert.equal(commitSyntheticFile(f.db,args(f,{clock})),'uncertain');
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM fixture_file_publications').get().n,0);
+  assert.equal(readFileSync(target,'utf8'),'different same file');
+ }finally{f.close();}
+});
 function start(f,mode){
  const worker=fork(new URL('./fixtures/studio-device-file-race-worker.mjs',import.meta.url),[f.root,mode,f.ticket,f.project,f.recording,f.device,f.secret.toString('hex')],{stdio:['ignore','ignore','pipe','ipc']});
  const ready=new Promise((resolve,reject)=>{worker.once('message',resolve);worker.once('error',reject);});

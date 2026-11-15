@@ -41,7 +41,13 @@ export function commitSyntheticFile(db,{root,ticket,project,recording,bytes,cloc
    if(previous){
     if(previous.project_id!==project||previous.size!==bytes.length||previous.sha256!==hash)return 'conflict';
     if(!existsSync(target)||!lstatSync(target).isFile()||digest(readFileSync(target))!==hash)return 'uncertain';
-    return allowed(observe())?'replayed':'denied';
+    const finalNow=observe();
+    if(!allowed(finalNow))return 'denied';
+    const current=db.prepare('SELECT project_id,size,sha256 FROM fixture_file_publications WHERE recording_id=?').get(recording);
+    if(!db.prepare('SELECT 1 FROM fixture_projects WHERE id=?').get(project)||db.prepare('SELECT 1 FROM fixture_file_tombstones WHERE recording_id=?').get(recording)||
+       !current||current.project_id!==project||current.size!==bytes.length||current.sha256!==hash||
+       !existsSync(target)||!lstatSync(target).isFile()||digest(readFileSync(target))!==hash)return 'uncertain';
+    return 'replayed';
    }
    if(existsSync(target))return 'uncertain';
    const original=lstatSync(stage,{bigint:true});
@@ -51,14 +57,24 @@ export function commitSyntheticFile(db,{root,ticket,project,recording,bytes,cloc
    // Only the synthetic child test passes this flag, never production code.
    if(crashAfterLink)process.kill(process.pid,'SIGKILL');
    db.exec('SAVEPOINT fixture_file_mutation');
-   db.prepare('INSERT INTO fixture_file_publications(recording_id,project_id,size,sha256) VALUES(?,?,?,?)').run(recording,project,bytes.length,hash);
+   const inserted=db.prepare('INSERT INTO fixture_file_publications(recording_id,project_id,size,sha256) VALUES(?,?,?,?)').run(recording,project,bytes.length,hash);
    const finalNow=observe();
-   if(!allowed(finalNow)){
-    db.exec('ROLLBACK TO fixture_file_mutation; RELEASE fixture_file_mutation');
-    if(finalNow!==null)db.prepare('UPDATE studio_auth_clock SET floor_ms=MAX(floor_ms,?) WHERE id=1').run(finalNow);
-    const current=lstatSync(target,{bigint:true});
-    if(current.dev!==linked.dev||current.ino!==linked.ino)return 'uncertain';
-    unlinkSync(target);syncDir(root);return 'denied';
+   const current=db.prepare('SELECT rowid,project_id,size,sha256 FROM fixture_file_publications WHERE recording_id=?').get(recording);
+   const ourRow=!!current&&current.rowid===inserted.lastInsertRowid&&current.project_id===project&&current.size===bytes.length&&current.sha256===hash;
+   const projectPresent=!!db.prepare('SELECT 1 FROM fixture_projects WHERE id=?').get(project);
+   const deleted=!!db.prepare('SELECT 1 FROM fixture_file_tombstones WHERE recording_id=?').get(recording);
+   let ownLink=false;
+   try{const present=lstatSync(target,{bigint:true});ownLink=present.isFile()&&present.dev===linked.dev&&present.ino===linked.ino&&present.size===BigInt(bytes.length)&&digest(readFileSync(target))===hash;}catch(error){if(error?.code!=='ENOENT')throw error;}
+   if(!allowed(finalNow)||!ourRow||!projectPresent||deleted||!ownLink){
+    // Remove only the exact row and link this call created. Preserve a
+    // reentrant tombstone/project mutation and any unrecognised file/row.
+    if(ourRow){
+     db.prepare('DELETE FROM fixture_file_publications WHERE rowid=? AND recording_id=?').run(current.rowid,recording);
+     if(ownLink){unlinkSync(target);syncDir(root);}
+    }
+    db.exec('RELEASE fixture_file_mutation');
+    if(!ourRow||!ownLink)return 'uncertain';
+    return deleted?'deleted':!projectPresent?'missing':'denied';
    }
    db.exec('RELEASE fixture_file_mutation');return 'created';
   }).immediate();
