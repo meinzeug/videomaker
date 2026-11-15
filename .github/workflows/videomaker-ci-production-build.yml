@@ -1,0 +1,66 @@
+name: Isolated Videomaker production build
+on:
+  push:
+    branches: [wip/videomaker-prod-build-5104f23-20261115-v2]
+permissions:
+  contents: read
+jobs:
+  production-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      NODE_OPTIONS: '--max-old-space-size=4096'
+      DATA_DIR: /tmp/videomaker-build-synthetic-data
+    steps:
+      - name: Check out isolated CI commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify exact application source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = '5104f234e644e9829a909860bf9eef8c7af844bb'
+          test "$(git rev-parse HEAD^{tree})" != "$(git rev-parse HEAD^^{tree})"
+          test "$(git diff --name-only HEAD^ HEAD)" = '.github/workflows/videomaker-ci-production-build.yml'
+          test "$(git rev-parse HEAD^^{tree})" = 'f81bc3bba72e4561301756e9ef62c33041231dc0'
+      - name: Install exact Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.2'
+          check-latest: false
+      - name: Install dependencies from lockfile
+        run: npm ci --no-audit --no-fund
+      - name: Build exact application source
+        run: npm run build
+      - name: Package build and record runtime requirements
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = 'v22.23.2'
+          test -s .next/BUILD_ID
+          mkdir -p "$RUNNER_TEMP/videomaker-artifact"
+          find .next -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$RUNNER_TEMP/videomaker-artifact/next-files.sha256"
+          find node_modules -name '*.node' -type f -print | LC_ALL=C sort > "$RUNNER_TEMP/videomaker-artifact/native-modules.txt"
+          tar -C "$GITHUB_WORKSPACE" -czf "$RUNNER_TEMP/videomaker-artifact/videomaker-next-5104f23.tar.gz" .next
+          cd "$RUNNER_TEMP/videomaker-artifact"
+          sha256sum videomaker-next-5104f23.tar.gz next-files.sha256 native-modules.txt > SHA256SUMS
+          node - "$GITHUB_WORKSPACE" "$GITHUB_SHA" <<'NODE'
+          const fs=require('node:fs');const cp=require('node:child_process');const crypto=require('node:crypto');
+          const root=process.argv[2],ciCommit=process.argv[3];
+          const hash=path=>crypto.createHash('sha256').update(fs.readFileSync(path)).digest('hex');
+          const manifest={schema:1,applicationCommit:'5104f234e644e9829a909860bf9eef8c7af844bb',applicationTree:'f81bc3bba72e4561301756e9ef62c33041231dc0',ciCommit,buildCommand:'npm ci --no-audit --no-fund && npm run build',node:process.version,nodeModulesAbi:process.versions.modules,napi:process.versions.napi,platform:process.platform,arch:process.arch,glibc:cp.execFileSync('getconf',['GNU_LIBC_VERSION'],{encoding:'utf8'}).trim(),npm:cp.execFileSync('npm',['--version'],{encoding:'utf8'}).trim(),next:require(root+'/node_modules/next/package.json').version,lockfileSha256:hash(root+'/package-lock.json'),archiveSha256:hash('videomaker-next-5104f23.tar.gz'),nativeDependenciesIncluded:false,runtimeNote:'Archive contains .next only. Install matching lockfile dependencies and verify native modules/runtime before use; build is not deployed.'};
+          fs.writeFileSync('manifest.json',JSON.stringify(manifest,null,2)+'\n');
+          NODE
+          sha256sum manifest.json >> SHA256SUMS
+          cat manifest.json
+          cat SHA256SUMS
+      - name: Upload isolated build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: videomaker-next-5104f23-${{ github.sha }}
+          path: ${{ runner.temp }}/videomaker-artifact/
+          if-no-files-found: error
+          retention-days: 3
