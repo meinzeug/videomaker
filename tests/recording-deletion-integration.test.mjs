@@ -2,11 +2,35 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
+import {request as httpRequest} from 'node:http';
+import {once} from 'node:events';
 import {existsSync,realpathSync,readdirSync} from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 const base=process.env.DELETION_TEST_SERVER,dir=process.env.DELETION_TEST_DATA_DIR;
 const enabled=base==='http://127.0.0.1:3332'&&process.env.DELETION_TEST_ALLOW_WRITES==='1'&&typeof dir==='string'&&/^\/(?:tmp|dev\/shm)\/deletion-recovery-e2e-[A-Za-z0-9]+$/.test(dir)&&realpathSync(dir)===dir;
+
+test('deleted recording returns JSON after a streamed 4.8 MB retry',{skip:!enabled,timeout:60000},async()=>{
+ let cookie='',projectId='';const id=randomUUID(),bytes=Buffer.from('synthetic recording');
+ const req=(url,options={})=>fetch(base+url,{...options,headers:{origin:base,...(cookie?{cookie}:{}),...options.headers}});
+ try{
+  let r=await req('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'deletion-fixture'})});assert.equal(r.status,200);cookie=r.headers.get('set-cookie').split(';')[0];
+  r=await req('/api/projects',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({title:'Streaming-Fixture',script:'Test',sources:[],titles:[],thumbnail:'',broll:[]})});assert.equal(r.status,201);projectId=(await r.json()).id;
+  const target=`/api/projects/${projectId}/recordings`;
+  r=await req(target,{method:'POST',headers:{'content-type':'video/mp4','content-length':String(bytes.length),'x-recording-id':id},body:bytes});assert.equal(r.status,201);
+  r=await req(`${target}/${id}`,{method:'DELETE'});assert.equal(r.status,200);
+  const size=4_800_000,block=Buffer.alloc(16_000,0x35);
+  const response=await new Promise((resolve,reject)=>{
+   const send=httpRequest(base+target,{method:'POST',headers:{origin:base,cookie,'content-type':'video/mp4','content-length':size,'x-recording-id':id}},res=>{
+    let text='';res.on('data',part=>text+=part);res.on('end',()=>resolve({status:res.statusCode,body:JSON.parse(text)}));
+   });
+   send.on('error',reject);
+   (async()=>{try{for(let sent=0;sent<size;sent+=block.length){if(!send.write(block.subarray(0,Math.min(block.length,size-sent))))await once(send,'drain');await new Promise(resolve=>setImmediate(resolve));}send.end();}catch(error){reject(error);}})();
+  });
+  assert.equal(response.status,409);assert.equal(response.body.code,'recording_deleted');
+  assert.equal(existsSync(path.join(dir,'recordings',`${id}.mp4`)),false);
+ }finally{if(projectId)await req(`/api/projects/${projectId}`,{method:'DELETE'}).catch(()=>{});}
+});
 test('single-recording deletion preserves file on DB failure and completes after retry',{skip:!enabled,timeout:60000},async()=>{
  let cookie='',projectId='',fixtureDb;const id=randomUUID(),bytes=Buffer.from('synthetic local video bytes');
  const req=(url,options={})=>fetch(base+url,{...options,headers:{origin:base,...(cookie?{cookie}:{}),...options.headers}});

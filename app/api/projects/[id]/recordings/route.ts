@@ -1,10 +1,12 @@
-import { authorized, sameOrigin, sessionAuthorized, sessionValue } from '@/lib/auth';
+import { authorized, sameOrigin, sessionAuthorized, sessionSignatureValid, sessionValue } from '@/lib/auth';
+import {sessionRevokedReadOnly} from '@/lib/session-revocations';
 import db from '@/lib/db';
 import { isRecordingId, MAX_RECORDING_SIZE, recordingPath, recordingsDir, type Recording } from '@/lib/recordings';
 import { recordingFileReceipt } from '@/lib/recording-receipt';
 import {PROJECT_RECORDING_DELETION_SCHEMA,isRecordingTombstoned} from '@/lib/project-recording-deletions';
 import {prepareRecordingIntent,commitRecordingIntent,linkRecordingDurably,syncDirectory} from '@/lib/recording-upload-intent';
 import {acquireRecordingUpload,cleanupStaleRecordingUploads,readRecordingChunk,recordingFreeBytes,requireRecordingSpace} from '@/lib/recording-upload-guard';
+import {drainDeletedRecording} from '@/lib/recording-deleted-drain';
 import {CAMERA_PROJECT_CLAIMS_SCHEMA,CameraUploadGateError,assertCameraUploadConsistent,cameraUploadIdFor,ensureCameraClaimUploadMappings,lockAndValidateCameraUpload,releaseCameraUploadLock,recordCameraVerifiedUpload} from '@/lib/camera-project-claims';
 import { createHash } from 'node:crypto';
 import { mkdir, open, rm } from 'node:fs/promises';
@@ -78,13 +80,38 @@ export async function POST(req:Request,{params}:Context) {
   return NextResponse.json({error:'Ungültige Aufnahme.'},{status:400});
  if(length>MAX_RECORDING_SIZE)return NextResponse.json({error:'Die Aufnahme ist größer als 1 GB.'},{status:413});
  if(!db().prepare('SELECT 1 FROM projects WHERE id=?').get(id))return NextResponse.json({error:'Skript nicht gefunden'},{status:404});
- try{db().exec(PROJECT_RECORDING_DELETION_SCHEMA);if(isRecordingTombstoned(db(),recordingId))return deletedResponse();}
+ let deleted:boolean;
+ try{db().exec(PROJECT_RECORDING_DELETION_SCHEMA);deleted=isRecordingTombstoned(db(),recordingId);}
  catch{return NextResponse.json({error:'Aufnahmeschutz ist auf diesem Server nicht verfügbar.'},{status:503});}
  let lease;
  try {lease=acquireRecordingUpload(db());}
  catch {return NextResponse.json({error:'Upload-Schutz ist auf diesem Server nicht verfügbar.'},{status:503});}
  if(!lease)return NextResponse.json({error:'Zu viele Uploads laufen. Bitte später erneut versuchen.'},{status:429,headers:{'Retry-After':'10'}});
  try {
+ if(deleted){
+  // Android may still be writing the body when a premature response closes the
+  // connection. Discard without files, under the same bounded upload lease.
+  try{
+   // `authorized()` created the revocation table; never issue DDL per chunk.
+   const stillAuthorized=()=>{const secret=process.env.SESSION_SECRET;return !!secret&&sessionSignatureValid(credential)&&!sessionRevokedReadOnly(db(),secret,credential);};
+   const result=await drainDeletedRecording(req.body.getReader(),length,MAX_RECORDING_SIZE,lease.check,stillAuthorized);
+   if(result==='unauthorized')return NextResponse.json({error:'Sitzung abgelaufen.'},{status:403,headers:{'Cache-Control':'private, no-store'}});
+   if(result==='timeout')return NextResponse.json({error:'Upload unterbrochen. Bitte erneut versuchen.'},{status:408});
+   if(result==='too_large')return NextResponse.json({error:'Die Aufnahme ist größer als angekündigt oder als 1 GB.'},{status:413});
+   if(result==='incomplete')return NextResponse.json({error:'Die Aufnahme wurde nicht vollständig übertragen.'},{status:400});
+   const confirmed=db().transaction(()=>{
+    lease.check();
+    if(!sessionAuthorized(db(),credential))return 'unauthorized';
+    return isRecordingTombstoned(db(),recordingId)?'deleted':'changed';
+   }).immediate();
+   if(confirmed==='unauthorized')return NextResponse.json({error:'Sitzung abgelaufen.'},{status:403,headers:{'Cache-Control':'private, no-store'}});
+   if(confirmed!=='deleted')return NextResponse.json({error:'Aufnahmestatus konnte nicht bestätigt werden.'},{status:409});
+   return deletedResponse();
+  }catch(error){
+   if(error instanceof Error&&['UPLOAD_TIMEOUT','UPLOAD_LEASE_LOST'].includes(error.message))return NextResponse.json({error:'Upload unterbrochen. Bitte erneut versuchen.'},{status:408});
+   return NextResponse.json({error:'Die Aufnahme wurde nicht vollständig übertragen.'},{status:400});
+  }
+ }
  try{
   const database=db();database.exec(CAMERA_PROJECT_CLAIMS_SCHEMA);ensureCameraClaimUploadMappings(database);lease.check();
   lockAndValidateCameraUpload(database,lease.token,recordingId,cameraRecordingId,id,length,expectedHash,lease.check);
