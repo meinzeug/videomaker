@@ -12,23 +12,9 @@ const keyFrom=bytes=>{try{if(!Buffer.isBuffer(bytes)||bytes.length>256)return fa
 const enrollmentMessage=row=>Buffer.from(`videomaker-studio-device-auth/enroll/v2\n${row.device_id}\n${row.challenge_id}\n${row.nonce}\n${digest(row.public_key)}\n${row.capabilities}\n${row.owner_hash}\n${row.workspace_hash}\n${row.confirm_session_hash}\n`,'utf8');
 const loginMessage=(deviceId,token,publicKey,capabilities,owner,workspace)=>Buffer.from(`videomaker-studio-device-auth/login/v2\n${deviceId}\n${token}\n${digest(publicKey)}\n${capabilities}\n${owner}\n${workspace}\n`,'utf8');
 
-/** Explicit initialization for isolated tests; never called by production. */
-export function initializeOwnedDeviceAuth(db){
- if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fixture_owned_auth_devices'").get()){
-  const columns=new Set(db.prepare('PRAGMA table_info(fixture_owned_auth_devices)').all().map(column=>column.name));
-  if(!columns.has('owner_hash')||!columns.has('workspace_hash'))throw Error('UNOWNED_FIXTURE_SCHEMA_REVIEW_REQUIRED');
- }
- if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fixture_owned_auth_projects'").get()){
-  const columns=new Set(db.prepare('PRAGMA table_info(fixture_owned_auth_projects)').all().map(column=>column.name));
-  if(!columns.has('project_epoch')||!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fixture_owned_auth_project_epochs'").get())throw Error('PROJECT_EPOCH_SCHEMA_REVIEW_REQUIRED');
- }
- for(const [name,required] of [['fixture_owned_auth_challenges',['confirm_session_hash','owner_hash','workspace_hash']],['fixture_owned_auth_grants',['project_epoch','owner_hash','workspace_hash']],['fixture_owned_auth_project_epochs',['project_epoch','project_id','owner_hash','workspace_hash','used']]]){
-  if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)){
-   const columns=new Set(db.prepare(`PRAGMA table_info(${name})`).all().map(column=>column.name));
-   if(required.some(column=>!columns.has(column)))throw Error('OWNED_FIXTURE_SCHEMA_REVIEW_REQUIRED');
-  }
- }
- db.exec(`
+// Exact schema definitions are versioned with this isolated fixture. Existing
+// partial or altered schemas require explicit review, never implicit migration.
+const OWNED_SCHEMA = `
  CREATE TABLE IF NOT EXISTS fixture_owned_auth_clock(id INTEGER PRIMARY KEY CHECK(id=1), floor_ms INTEGER NOT NULL);
  INSERT OR IGNORE INTO fixture_owned_auth_clock(id,floor_ms) VALUES(1,0);
  CREATE TABLE IF NOT EXISTS fixture_owned_auth_devices(device_id TEXT PRIMARY KEY, public_key BLOB NOT NULL UNIQUE, capabilities TEXT NOT NULL, owner_hash TEXT NOT NULL, workspace_hash TEXT NOT NULL, revoked INTEGER NOT NULL CHECK(revoked IN(0,1)));
@@ -58,7 +44,43 @@ export function initializeOwnedDeviceAuth(db){
  CREATE TRIGGER IF NOT EXISTS fixture_owned_project_immutable BEFORE UPDATE OF project_id,owner_hash,workspace_hash,project_epoch ON fixture_owned_auth_projects BEGIN SELECT RAISE(ABORT,'project identity immutable'); END;
  CREATE TRIGGER IF NOT EXISTS fixture_owned_project_insert_guard BEFORE INSERT ON fixture_owned_auth_projects WHEN EXISTS(SELECT 1 FROM fixture_owned_auth_projects p WHERE p.project_id=NEW.project_id OR p.rowid=NEW.rowid) OR NOT EXISTS(SELECT 1 FROM fixture_owned_auth_project_epochs e WHERE e.project_epoch=NEW.project_epoch AND e.project_id=NEW.project_id AND e.owner_hash=NEW.owner_hash AND e.workspace_hash=NEW.workspace_hash AND e.used=0) BEGIN SELECT RAISE(ABORT,'project epoch invalid'); END;
  CREATE TRIGGER IF NOT EXISTS fixture_owned_project_consume_epoch AFTER INSERT ON fixture_owned_auth_projects BEGIN UPDATE fixture_owned_auth_project_epochs SET used=1 WHERE project_epoch=NEW.project_epoch; END;
- `);}
+ `;
+const schemaSql = sql => sql.trim().replace(/;$/, '').replace(/\bIF NOT EXISTS\s+/i, '').replace(/\s+/g, ' ');
+const expectedSchema = OWNED_SCHEMA.split('\n').map(line => line.trim()).filter(line => /^CREATE (?:TABLE|TRIGGER) /i.test(line)).map(line => {
+ const match = /^CREATE (TABLE|TRIGGER) IF NOT EXISTS (\w+)/i.exec(line);
+ if (!match) throw Error('INVALID_FIXTURE_SCHEMA');
+ return {type: match[1].toLowerCase(), name: match[2], sql: schemaSql(line)};
+});
+function validateExistingSchema(db) {
+ const rows=db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE (type='table' AND name LIKE 'fixture_owned_auth_%') OR (type='trigger' AND (name LIKE 'fixture_owned_%' OR tbl_name LIKE 'fixture_owned_auth_%'))").all();
+ if(rows.length===0)return false;
+ if(rows.length!==expectedSchema.length)throw Error('OWNED_FIXTURE_SCHEMA_REVIEW_REQUIRED');
+ for(const expected of expectedSchema){
+  const row=rows.find(value=>value.type===expected.type&&value.name===expected.name);
+  if(!row||!row.sql||schemaSql(row.sql)!==expected.sql)throw Error('OWNED_FIXTURE_SCHEMA_REVIEW_REQUIRED');
+ }
+ return true;
+}
+function validateEpochHistory(db) {
+ const inconsistent=db.prepare(`SELECT 1 FROM fixture_owned_auth_projects p LEFT JOIN fixture_owned_auth_project_epochs e ON e.project_epoch=p.project_epoch
+ WHERE e.project_epoch IS NULL OR e.used IS NOT 1 OR e.project_id IS NOT p.project_id OR e.owner_hash IS NOT p.owner_hash OR e.workspace_hash IS NOT p.workspace_hash
+ UNION ALL SELECT 1 FROM fixture_owned_auth_grants g LEFT JOIN fixture_owned_auth_project_epochs e ON e.project_epoch=g.project_epoch
+ WHERE e.project_epoch IS NULL OR e.used IS NOT 1 OR e.project_id IS NOT g.project_id OR e.owner_hash IS NOT g.owner_hash OR e.workspace_hash IS NOT g.workspace_hash
+ UNION ALL SELECT 1 FROM fixture_owned_auth_project_epochs e WHERE e.used IS NOT 1 LIMIT 1`).get();
+ if(inconsistent)throw Error('PROJECT_EPOCH_HISTORY_REVIEW_REQUIRED');
+}
+/** Explicit initialization for isolated tests; never called by production. */
+export function initializeOwnedDeviceAuth(db){
+ if(db.inTransaction)throw Error('outer transaction forbidden');
+ return db.transaction(()=>{
+  const existing=validateExistingSchema(db);
+  if(existing)validateEpochHistory(db);
+  else db.exec(OWNED_SCHEMA);
+  if(!existing&&!validateExistingSchema(db))throw Error('OWNED_FIXTURE_SCHEMA_REVIEW_REQUIRED');
+  validateEpochHistory(db);
+ }).immediate();
+}
+
 
 /** Test-only project creation. Production must use its own authenticated lifecycle. */
 export function createSyntheticOwnedProject(db,project,owner,workspace){

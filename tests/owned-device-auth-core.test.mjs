@@ -66,17 +66,52 @@ test('unbound old fixture identities are not imported or accepted',()=>{
  }finally{db.close();}
  const old=new Database(':memory:');try{
   old.exec('CREATE TABLE fixture_owned_auth_devices(device_id TEXT PRIMARY KEY,public_key BLOB,capabilities TEXT,revoked INTEGER)');
-  assert.throws(()=>initializeOwnedDeviceAuth(old),/UNOWNED_FIXTURE_SCHEMA_REVIEW_REQUIRED/);
+  assert.throws(()=>initializeOwnedDeviceAuth(old),/OWNED_FIXTURE_SCHEMA_REVIEW_REQUIRED/);
   assert.equal(old.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name='fixture_owned_auth_clock'").get().n,0);
  }finally{old.close();}
  const nullable=new Database(':memory:');try{
   nullable.exec('CREATE TABLE fixture_owned_auth_devices(device_id TEXT PRIMARY KEY,public_key BLOB UNIQUE,capabilities TEXT,owner_hash TEXT,workspace_hash TEXT,revoked INTEGER)');
   const device=randomUUID(),keys=generateKeyPairSync('ec',{namedCurve:'prime256v1'});
   nullable.prepare('INSERT INTO fixture_owned_auth_devices VALUES(?,?,?,NULL,NULL,0)').run(device,keys.publicKey.export({type:'spki',format:'der'}),'projects:read');
-  initializeOwnedDeviceAuth(nullable);const auth=createOwnedDeviceAuth(nullable,Date.now,randomBytes(32));
-  assert.equal(auth.beginLogin(device),null);assert.equal(auth.revoke(device,randomBytes(32).toString('base64url')),false);
+  assert.throws(()=>initializeOwnedDeviceAuth(nullable),/OWNED_FIXTURE_SCHEMA_REVIEW_REQUIRED/);
+  assert.equal(nullable.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name='fixture_owned_auth_clock'").get().n,0);
   assert.deepEqual(nullable.prepare('SELECT owner_hash,workspace_hash,revoked FROM fixture_owned_auth_devices WHERE device_id=?').get(device),{owner_hash:null,workspace_hash:null,revoked:0});
  }finally{nullable.close();}
+});
+
+test('initialization refuses partial schema and missing consumed history without migration',()=>{
+ const partial=new Database(':memory:');try{
+  partial.exec('CREATE TABLE fixture_owned_auth_projects(project_id TEXT PRIMARY KEY,owner_hash TEXT NOT NULL,workspace_hash TEXT NOT NULL,project_epoch TEXT NOT NULL); CREATE TABLE fixture_owned_auth_project_epochs(project_epoch TEXT PRIMARY KEY,project_id TEXT NOT NULL,owner_hash TEXT NOT NULL,workspace_hash TEXT NOT NULL,used INTEGER NOT NULL)');
+  const project=randomUUID(),epoch=randomUUID();partial.prepare('INSERT INTO fixture_owned_auth_projects VALUES(?,?,?,?)').run(project,a,b,epoch);
+  assert.throws(()=>initializeOwnedDeviceAuth(partial),/OWNED_FIXTURE_SCHEMA_REVIEW_REQUIRED/);
+  assert.equal(partial.prepare('SELECT COUNT(*) n FROM fixture_owned_auth_project_epochs').get().n,0);
+  assert.equal(partial.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name='fixture_owned_auth_clock'").get().n,0);
+ }finally{partial.close();}
+ const db=new Database(':memory:'),f=init(db);try{
+  enroll(f);assert.equal(f.auth.grantProject(f.device,f.project,f.primary),true);
+  initializeOwnedDeviceAuth(db); // An unchanged, complete schema may restart.
+  const sql=db.prepare("SELECT sql FROM sqlite_master WHERE name='fixture_owned_epoch_no_delete'").get().sql;
+  db.exec('DROP TRIGGER fixture_owned_epoch_no_delete');
+  db.prepare('DELETE FROM fixture_owned_auth_project_epochs WHERE project_id=?').run(f.project);
+  db.exec(sql);
+  assert.throws(()=>initializeOwnedDeviceAuth(db),/PROJECT_EPOCH_HISTORY_REVIEW_REQUIRED/);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM fixture_owned_auth_project_epochs WHERE project_id=?').get(f.project).n,0);
+  db.prepare('DELETE FROM fixture_owned_auth_projects WHERE project_id=?').run(f.project);
+  assert.throws(()=>initializeOwnedDeviceAuth(db),/PROJECT_EPOCH_HISTORY_REVIEW_REQUIRED/); // retained grant also needs history
+ }finally{db.close();}
+});
+
+test('initialization refuses modified or unexpected triggers',()=>{
+ const db=new Database(':memory:');try{
+  initializeOwnedDeviceAuth(db);
+  db.exec("DROP TRIGGER fixture_owned_epoch_no_delete; CREATE TRIGGER fixture_owned_epoch_no_delete BEFORE DELETE ON fixture_owned_auth_project_epochs BEGIN SELECT 1; END");
+  assert.throws(()=>initializeOwnedDeviceAuth(db),/OWNED_FIXTURE_SCHEMA_REVIEW_REQUIRED/);
+ }finally{db.close();}
+ const extra=new Database(':memory:');try{
+  initializeOwnedDeviceAuth(extra);
+  extra.exec('CREATE TRIGGER unexpected BEFORE DELETE ON fixture_owned_auth_project_epochs BEGIN SELECT 1; END');
+  assert.throws(()=>initializeOwnedDeviceAuth(extra),/OWNED_FIXTURE_SCHEMA_REVIEW_REQUIRED/);
+ }finally{extra.close();}
 });
 
 test('recreated project does not inherit old grant; revocation works even after project deletion',()=>{
