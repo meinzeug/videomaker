@@ -29,3 +29,19 @@ ab und startet die Bereinigung. SIGKILL, Systemabsturz oder unerwartete externe
 Änderungen können eine manuelle Nachprüfung erforderlich machen. Der Test
 beweist keine tatsächliche Kamera-/Codecaufnahme, keine Produktivfreigabe und
 keine Sicherheit beim Zurückrollen auf ältere App-/Serverstände.
+
+Am 15. November 2026 bestand die Fixture auf Samsung SM-A526B und Xiaomi
+2409BRN2CY. Android-Teststand `92fbe9f` wurde durch CI `43678913185` gebaut;
+der Server basierte auf `d981d8b`. Der Android-Test erzeugte Projekt und eigene
+Geräteidentität, trug eine synthetische START-Einreihung direkt ins Journal ein
+und meldete synthetische Recording-/Failed-Ereignisse über den echten
+Controller und StudioClient an die lokalen HTTPS-Routen. Der Server zeigte die
+passenden Aufnahme-/Projekt-IDs, `enqueued`, `recording` und anschließend
+`error`. Samsung lief mit Runner `a5750a0`, Xiaomi mit der dynamischen
+Portauswahl `924c202`.
+
+Die Testpakete und jeweils eigene ADB-Reverse-Regel wurden auf beiden Geräten
+entfernt; vorherige und anschließende Reverse-Listen waren leer. Beide regulären
+Apps blieben im Vordergrund. Xiaomi meldete anschließend die Verbindung zum
+Samsung und die Videomaker-Anmeldung. Es wurde weder eine Kameraaufnahme noch
+eine Videodatei, Direkt-WLAN oder ein Produktions-Rollback geprüft.
