@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {cameraControlAvailability as availability,cameraControlCompletion as completion,beginCameraUiAttempt,cameraUiAttemptIsCurrent,cameraUiMayStop} from '../app/camera-panel-policy.ts';
-const recording={id:'camera',phase:'recording',recordingId:'take',projectId:'project',pendingStart:false,uncertain:false,capability:'remote-record-v4',paused:false,cameraFront:false,cameraCanSwitch:true};
+import {cameraControlAvailability as availability,cameraControlCompletion as completion,beginCameraUiAttempt,cameraUiAttemptIsCurrent,cameraUiMayStop,cameraHttpOutcome} from '../app/camera-panel-policy.ts';
+const recording={id:'camera',phase:'recording',recordingId:'take',projectId:'project',pendingStart:false,uncertain:false,lastControl:null,capability:'remote-record-v4',paused:false,cameraFront:false,cameraCanSwitch:true};
 const pause={id:'pause',type:'record_pause',recordingId:'take',expectedProjectId:'project',deviceId:'camera'};
 test('v4 controls are available only for matching known states',()=>{
  assert.deepEqual(availability(recording,'project',false,false),{supported:true,pause:true,resume:false,switchCamera:false});
@@ -38,4 +38,24 @@ test('a stop for an observed take preempts a hanging request, but not another st
  assert.equal(cameraUiMayStop({...recording,recordingId:'other'},stop),false);
  assert.equal(cameraUiMayStop({...recording,phase:'idle'},stop),false);
  assert.ok(beginCameraUiAttempt(beginCameraUiAttempt(null,pause),stop));
+});
+test('reload blocks new controls for a queued or ambiguous earlier command, but stop remains possible',()=>{
+ const stop={id:'stop',type:'record_stop',recordingId:'take',deviceId:'camera'};
+ for(const result of ['queued','server_expired','unknown']) {
+  const camera={...recording,lastControl:{id:'previous',type:'record_pause',recordingId:'take',result}};
+  assert.equal(availability(camera,'project',false,false).pause,false);
+  assert.equal(cameraUiMayStop(camera,stop),true);
+ }
+ const staleAck={...recording,lastControl:{id:'previous',type:'record_pause',recordingId:'take',result:'accepted'}};
+ assert.equal(availability(staleAck,'project',false,false).pause,false);
+ assert.equal(availability({...staleAck,paused:true},'project',false,false).resume,true);
+ assert.equal(availability({...recording,lastControl:undefined},'project',false,false).pause,false);
+ const idle={...recording,phase:'idle',recordingId:null,projectId:null,lastControl:{id:'switch',type:'camera_switch',recordingId:'switch',result:'accepted'}};
+ assert.equal(availability(idle,'project',false,false).switchCamera,false);
+ assert.equal(availability({...idle,lastControl:{...idle.lastControl,cameraFrom:true}},'project',false,false).switchCamera,true);
+});
+
+test('HTTP errors including proxy 408 and 429 never prove non-delivery',()=>{
+ for(const status of [400,401,403,404,408,409,429,500,503])assert.equal(cameraHttpOutcome(status>=200&&status<300),'uncertain');
+ assert.equal(cameraHttpOutcome(true),'queued');
 });

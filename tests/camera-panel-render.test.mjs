@@ -13,7 +13,7 @@ const code=ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:
 const compiled=new Module(filename);compiled.filename=filename;compiled.paths=Module._nodeModulePaths(new URL('../app/',import.meta.url).pathname);
 const baseRequire=compiled.require.bind(compiled);compiled.require=(name)=>name==='./camera-panel-policy'?policy:baseRequire(name);compiled._compile(code,filename);
 const Controls=compiled.exports.default;
-const camera={id:'device',phase:'recording',recordingId:'take',projectId:'project',pendingStart:false,uncertain:false,capability:'remote-record-v4',paused:false,cameraFront:false,cameraCanSwitch:true};
+const camera={id:'device',phase:'recording',recordingId:'take',projectId:'project',pendingStart:false,uncertain:false,lastControl:null,capability:'remote-record-v4',paused:false,cameraFront:false,cameraCanSwitch:true};
 function rendered(camera,busy=false,offline=false){const html=renderToStaticMarkup(React.createElement(Controls,{camera,projectId:'project',busy,offline,onControl:()=>{}}));return Object.fromEntries([...html.matchAll(/<button([^>]*)>([^<]+)<\/button>/g)].map(([,attrs,label])=>[label,!attrs.includes('disabled=""')]));}
 test('rendered controls reflect actual device state and old device compatibility',()=>{
  assert.deepEqual(rendered(camera),{'Aufnahme pausieren':true,'Aufnahme fortsetzen':false,'Kamera wechseln':false});

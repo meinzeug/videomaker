@@ -1,12 +1,12 @@
 'use client';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {cameraStartWasRefused} from '@/lib/camera-ui-state';
-import {beginCameraUiAttempt,cameraUiAttemptIsCurrent,cameraUiMayStop,cameraControlAvailability,cameraControlCompletion,type CameraUiAttempt,type CameraUiCommand} from './camera-panel-policy';
+import {beginCameraUiAttempt,cameraUiAttemptIsCurrent,cameraHttpOutcome,cameraUiMayStop,cameraControlAvailability,cameraControlCompletion,cameraControlUnsettled,type CameraUiAttempt,type CameraUiCommand} from './camera-panel-policy';
 import CameraPreview from './camera-preview';
 import CameraPanelControls from './camera-panel-controls';
 import CameraRecovery from './camera-recovery';
 
-type Camera={id:string;name:string;phase:'idle'|'preparing'|'recording'|'finalizing'|'ready'|'partial'|'error';recordingId:string|null;projectId:string|null;pendingStart:boolean;uncertain:boolean;capability?:string|null;paused?:boolean|null;cameraFront?:boolean|null;cameraCanSwitch?:boolean;lastControl?:{id:string;type:string;recordingId:string;result:string}|null;lastCommand:{id:string;result:string;receiptCapability?:string|null;neverDelivered?:number|boolean}|null;recoverableClaim:{recordingId:string;projectId:string;phase:'partial'|'error'}|null;stopIntent:{id:string;recordingId:string;observed:boolean}|null};
+type Camera={id:string;name:string;phase:'idle'|'preparing'|'recording'|'finalizing'|'ready'|'partial'|'error';recordingId:string|null;projectId:string|null;pendingStart:boolean;uncertain:boolean;capability?:string|null;paused?:boolean|null;cameraFront?:boolean|null;cameraCanSwitch?:boolean;lastControl?:{id:string;type:string;recordingId:string;result:string;cameraFrom?:boolean|null}|null;lastCommand:{id:string;result:string;receiptCapability?:string|null;neverDelivered?:number|boolean}|null;recoverableClaim:{recordingId:string;projectId:string;phase:'partial'|'error'}|null;stopIntent:{id:string;recordingId:string;observed:boolean}|null};
 type Command=CameraUiCommand;
 type OpenClaim={recordingId:string;deviceId:string;deviceName:string|null;openedAt:number;lastConfirmedPhase:'ready'|'partial'|'error'|'unknown';recovery:{sizeBytes:number;sha256:string}|null};
 const labels:Record<Camera['phase'],string>={idle:'Aufnahmebereit',preparing:'Aufnahme wird vorbereitet',recording:'Aufnahme läuft',finalizing:'Aufnahme wird abgeschlossen',ready:'Lokal gespeichert',partial:'Lokal unvollständig gespeichert',error:'Kamera meldet einen Fehler'};
@@ -53,7 +53,7 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
  async function send(command:Command){
   // The take comes from the last observed camera, never from an unconfirmed start.
   if(command.type==='record_stop'&&!cameraUiMayStop(camera,command))return;
-  if(command.type==='record_start'&&(!camera||command.deviceId!==camera.id||command.projectId!==projectId||camera.capability!=='remote-record-v4'||camera.uncertain!==false||camera.phase!=='idle'||camera.pendingStart||connectionError)){setMessage('Kamera ist nicht sicher aufnahmebereit. Bitte den Zustand am Smartphone prüfen.');return;}
+  if(command.type==='record_start'&&(!camera||command.deviceId!==camera.id||command.projectId!==projectId||camera.capability!=='remote-record-v4'||camera.uncertain!==false||camera.phase!=='idle'||camera.pendingStart||cameraControlUnsettled(camera)||connectionError)){setMessage('Kamera ist nicht sicher aufnahmebereit. Bitte den Zustand am Smartphone prüfen.');return;}
   if(command.type==='record_pause'&&(command.expectedProjectId!==projectId||command.deviceId!==camera?.id||command.recordingId!==camera?.recordingId||!cameraControlAvailability(camera,projectId,false,connectionError).pause)){setMessage('Aufnahmezustand hat sich geändert. Bitte am Smartphone prüfen.');return;}
   if(command.type==='record_resume'&&(command.expectedProjectId!==projectId||command.deviceId!==camera?.id||command.recordingId!==camera?.recordingId||!cameraControlAvailability(camera,projectId,false,connectionError).resume)){setMessage('Aufnahmezustand hat sich geändert. Bitte am Smartphone prüfen.');return;}
   if(command.type==='camera_switch'&&(command.deviceId!==camera?.id||!cameraControlAvailability(camera,projectId,false,connectionError).switchCamera||camera?.cameraFront!==command.cameraFrom)){setMessage('Kamerazustand hat sich geändert. Bitte am Smartphone prüfen.');return;}
@@ -63,7 +63,7 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
   try{
    const {deviceId,expectedProjectId: _expectedProjectId,...body}=command;const response=await fetch(`/api/camera-devices/${encodeURIComponent(deviceId)}/commands`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();
    if(!cameraUiAttemptIsCurrent(commandAttempt.current,attempt))return;
-   if(!response.ok){setMessage(data.error||'Die Anfrage wurde nicht angenommen.');if(response.status>=400&&response.status<500)setPending(previous=>previous?.id===command.id?null:previous);return;}
+   if(cameraHttpOutcome(response.ok)==='uncertain'){setMessage('Keine verlässliche Bestätigung. Bitte den Zustand am Smartphone prüfen.');return;}
    const label={record_start:'Start',record_stop:'Stopp',record_pause:'Pause',record_resume:'Fortsetzen',camera_switch:'Kamerawechsel'}[command.type];
    setMessage(`${label} angefragt. Warte auf den bestätigten Kamerazustand.`);
    await refresh();
@@ -90,10 +90,10 @@ export default function CameraDeviceControl({projectId}:{projectId:string}){
   {camera?.lastControl?.result==='server_expired'&&<p role="alert">Die Serverwartezeit für den letzten Kamerabefehl ist abgelaufen. Das Ergebnis ist ungeklärt; bitte am Smartphone prüfen.</p>}
   {camera?.lastCommand?.result==='accepted'&&camera.lastCommand.receiptCapability!=='remote-record-v4'&&<p role="status">Die Rückmeldung stammt von einer älteren Kameraversion und bestätigt keine Recorder-Zulassung.</p>}
   {camera?.lastCommand?.result==='enqueued'&&<p role="status">Der Start wurde auf dem Smartphone vorgemerkt. Eine laufende Aufnahme ist damit noch nicht bestätigt.</p>}
-  {camera?.uncertain&&<p role="alert">Ein Kamerabefehl ist ungeklärt. Bitte den Zustand direkt am Smartphone prüfen; neue Befehle bleiben gesperrt. Stopp ist weiterhin möglich.</p>}
+  {camera&&(camera.uncertain||cameraControlUnsettled(camera))&&<p role="alert">Ein Kamerabefehl ist ausstehend oder ungeklärt. Bitte den Zustand direkt am Smartphone prüfen; neue Befehle bleiben gesperrt. Stopp ist weiterhin möglich.</p>}
   {camera?.lastCommand&&cameraStartWasRefused(camera.lastCommand,camera.lastCommand.id)&&<p role="alert">Die letzte Startanfrage wurde nicht ausgeführt. Bitte den Kamerastatus prüfen.</p>}
   {camera?.recoverableClaim?.projectId===projectId&&<p>Für dieses Skript liegt eine fehlgeschlagene oder unvollständige Aufnahme vor. Eine lokale Datei kann am Smartphone gesichert werden.</p>}
-  <div className="device-actions"><button className="primary" disabled={!camera||!controls.supported||camera.phase!=='idle'||camera.pendingStart||camera.uncertain!==false||!!pending||loading||!!inFlightCommand||connectionError} onClick={()=>camera&&void send({id:crypto.randomUUID(),type:'record_start',recordingId:crypto.randomUUID(),projectId,deviceId:camera.id})}>Aufnahme starten</button>
+  <div className="device-actions"><button className="primary" disabled={!camera||!controls.supported||camera.phase!=='idle'||camera.pendingStart||camera.uncertain!==false||cameraControlUnsettled(camera)||!!pending||loading||!!inFlightCommand||connectionError} onClick={()=>camera&&void send({id:crypto.randomUUID(),type:'record_start',recordingId:crypto.randomUUID(),projectId,deviceId:camera.id})}>Aufnahme starten</button>
    <button className="secondary-action" disabled={!camera||!camera.recordingId||!['preparing','recording'].includes(camera.phase)||inFlightCommand?.type==='record_stop'} onClick={()=>camera?.recordingId&&void send({id:crypto.randomUUID(),type:'record_stop',recordingId:camera.recordingId,deviceId:camera.id})}>Aufnahme stoppen</button>
    <CameraPanelControls camera={camera} projectId={projectId} busy={!!pending||loading||!!inFlightCommand} offline={connectionError} onControl={type=>{
     if(!camera)return;
