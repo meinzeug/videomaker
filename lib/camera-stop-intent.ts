@@ -28,7 +28,7 @@ export function reserveCameraStopSlot(db: Database.Database, deviceId: string) {
 
 // A recording-specific, stable ID means retries and process restarts cannot
 // turn one stop intent into many commands or target a different recording.
-function stopId(deviceId: string, recordingId: string) {
+export function cameraStopIntentId(deviceId: string, recordingId: string) {
  const bytes = createHash('sha256').update('videomaker-camera-stop/v2\0').update(deviceId).update('\0').update(recordingId).digest().subarray(0, 16);
  bytes[6] = (bytes[6] & 15) | 0x80; // UUIDv8, application-defined
  bytes[8] = (bytes[8] & 63) | 0x80;
@@ -53,7 +53,7 @@ export function requestCameraStopIntent(db: Database.Database, deviceId:string, 
    throw new CameraStopIntentError('conflict', 'Die Kamera bestätigt diese Aufnahme nicht.');
   if (slot.recordingId !== null && slot.observedAt === null)
    throw new CameraStopIntentError('conflict', 'Ein früherer Stopp ist noch nicht bestätigt.');
-  const id = stopId(deviceId, recordingId);
+  const id = cameraStopIntentId(deviceId, recordingId);
   db.prepare('UPDATE camera_stop_intents SET recording_id=?,intent_id=?,observed_at=NULL WHERE device_id=?').run(recordingId,id,deviceId);
   return {id, created:true, observed:false};
  }).immediate();

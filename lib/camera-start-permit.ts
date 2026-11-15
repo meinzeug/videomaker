@@ -83,7 +83,7 @@ export class CameraStartPermitIssuer {
    !Number.isSafeInteger(issuedWall)||!Number.isSafeInteger(issuedTick)||!Number.isSafeInteger(expiresWall)||!Number.isSafeInteger(expiresTick)||
    issuedWall<0||issuedTick<0||expiresWall!==issuedWall+PERMIT_TTL_MS||expiresTick!==issuedTick+PERMIT_TTL_MS||
    clock.wall<issuedWall||clock.tick<issuedTick||clock.wall>=expiresWall||clock.tick>=expiresTick)return invalid();
-  return {ownerHash:owner,deviceId,request:{id:commandId,type:'record_start',recordingId,projectId},
+  return {ownerHash:owner,deviceId,request:{id:commandId,type:'record_start',recordingId,projectId,cameraFrom:null},
    runtimeId,issuedWall,issuedTick,expiresWall,expiresTick};
  }
 }
