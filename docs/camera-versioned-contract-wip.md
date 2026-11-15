@@ -68,3 +68,31 @@ Ein v2-Gerät bekommt keinen v3-Pause-/Fortsetzen-Auftrag. Ältere Server könne
 die v3-Meldung ablehnen. Android behandelt HTTP 400 und unpassende Antworten
 in diesem WIP als Protokollproblem im Poll-Loop; ein echter Test bei laufender
 Aufnahme und die Behandlung aller weiteren Fehlersituationen stehen noch aus.
+
+## Wiederholbarer lokaler HTTP-Test
+
+Am 15. November 2026 bestand `python3 scripts/test-camera-versioned-http.py`
+auf dem Stand `cc75f8f` mit einem synthetischen P-256-Gerät und eigener
+SQLite-Datenbank. Der Test prüft Registrierung, Ticket, v3-Status, Start,
+Pause/Fortsetzen, Kamerawechsel, Stopp und Logout über den lokalen HTTP-Dienst;
+seine frühere Bezeichnung „v2“ wurde anschließend im Testtitel korrigiert.
+Er beweist keinen Android-Gerätetest, kein aktives Produktivflag und keine
+Freigabe der ungeklärten `accepted`-/Crash-Grenze.
+
+Das Skript ist absichtlich auf den separaten Worktree
+`/home/dennis/.videomaker-camera-contract-v2` und `127.0.0.1:3392` begrenzt.
+Es erwartet ein verfügbares lokales `node_modules`, unveränderte
+`next.config.ts`/`next-env.d.ts` und einen freien Port. Es erzeugt unter dem
+Home-Verzeichnis ein markiertes synthetisches Datenverzeichnis, setzt Test-Opt-in
+und künstliche Zugangsdaten nur für den Kindprozess und setzt einen temporären
+Turbopack-Root, damit das lokale Modulverzeichnis auflösbar bleibt. Der
+Next-Prozess ist auf 768 MiB Node-Heap und der Test auf 384 MiB begrenzt; nach
+30 Sekunden ohne erreichbaren eigenen Server bzw. nach 150 Sekunden Testzeit
+wird abgebrochen. Der Port-Inhaber muss zur gestarteten Prozessgruppe gehören.
+Bei normalem Ende, Fehler, SIGINT und SIGTERM stoppt das Skript seinen Dienst,
+stellt unveränderte Konfigurationen wieder her und entfernt nur sein markiertes
+Testverzeichnis. Bei unerwartet gleichzeitig geänderten Konfigurationen werden
+Originale und Testverzeichnis zur manuellen Prüfung erhalten. SIGKILL,
+Systemabsturz oder Stromausfall können Cleanup verhindern: In diesem Fall
+Prozess und Marker prüfen und nur die eigene Fixture bereinigen. Keine
+Produktionsdaten oder fremde laufende Prozesse verwenden.

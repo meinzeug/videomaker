@@ -9,7 +9,7 @@ const enabled=base==='http://127.0.0.1:3392'&&process.env.CAMERA_V2_HTTP_ALLOW_W
 const headers={origin:base,'content-type':'application/json'};
 const post=(path,cookie,body,extra={})=>fetch(base+path,{method:'POST',headers:{...headers,...(cookie?{cookie}:{}),...extra},body:JSON.stringify(body)});
 async function login(){const r=await post('/api/login','',{password:'camera-v2-local-test'});assert.equal(r.status,200);return r.headers.get('set-cookie').split(';')[0];}
-test('isolated paired camera v2 HTTP controls and telemetry',{skip:!enabled,timeout:120000},async()=>{
+test('isolated paired camera v3 HTTP controls and telemetry',{skip:!enabled,timeout:120000},async()=>{
  const root=realpathSync(process.env.CAMERA_V2_HTTP_FIXTURE||'');assert.equal(dirname(root),realpathSync(homedir()));assert.match(basename(root),/^\.videomaker-camera-v2-http\.[a-zA-Z0-9]+$/);assert.equal(readFileSync(join(root,'.fixture'),'utf8'),'isolated-camera-v2-http\n');
  const browser=await login(),phone=await login(),id=randomUUID(),keys=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),spki=keys.publicKey.export({format:'der',type:'spki'});
  async function pair(action){
