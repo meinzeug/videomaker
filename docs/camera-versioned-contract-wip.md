@@ -133,3 +133,13 @@ STOP-Anzeige nicht überschreiben. Der Server prüft den Take zusätzlich. Berei
 zugestellte Startbefehle lassen sich damit nicht zurückholen; deren Parallelität
 zu einem späteren Stopp ist weiterhin ein Freigabeblocker. Die UI-Tests bilden
 Promise-Reihenfolgen synthetisch ab und ersetzen keinen Browser-/Gerätetest.
+
+Der isolierte v4-HTTP-Vertragstest `python3 scripts/test-camera-v4-http.py`
+bestand am 15. November 2026 auf `dbf9311` mit künstlicher P-256-Identität und
+eigener Datenbank. Er prüfte v3/v4-Meldungen, die Ablehnung eines v3-Ungewiss-
+Belegs, die dauerhafte v4-Sperre, ein spätes positives ACK und anschließenden
+STOP. Das Skript verwendet ausschließlich den WIP
+`~/.videomaker-camera-admission-v4`, Port 3393 und ein markiertes temporäres
+Verzeichnis. Wie beim v3-Test gelten Zeitlimits, Prozessgruppenprüfung und
+Cleanup; bei SIGKILL oder Stromausfall können Reste eine manuelle Prüfung
+benötigen. Das ist kein Android-/Browser-Gerätetest und keine Produktionsfreigabe.
