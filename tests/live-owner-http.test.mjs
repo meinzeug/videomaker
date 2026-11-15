@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
-import {readFileSync,realpathSync} from 'node:fs';
+import {readFileSync,realpathSync,writeFileSync,unlinkSync} from 'node:fs';
 import {basename,dirname,join} from 'node:path';
 import {homedir} from 'node:os';
 import Database from 'better-sqlite3';
@@ -47,6 +47,25 @@ test('isolated live and legacy full upload fencing keeps originals and legacy co
  const web=await request(`/api/projects/${otherProject}/recordings`,'POST',bytes,{'Content-Type':'video/mp4','X-Recording-Id':webId,'X-Camera-Recording-Id':recording,'X-Content-SHA256':sha});
  assert.equal(web.status,409,JSON.stringify(web.value));assert.equal(web.value.code,'camera_upload_busy');
  assert.equal((await request(url,'POST',undefined,{...liveHeaders,'X-Live-Operation':'cancel'})).status,200);
+ // An old Android app may already have completed a deterministic LAN upload
+ // without the new identity header. A new app's retry must verify, not overwrite it.
+ const legacyTake=randomUUID(),legacyProjectResult=await request('/api/projects/lan-captures','POST',JSON.stringify({recordingId:legacyTake}),{'Content-Type':'application/json'});
+ assert.equal(legacyProjectResult.status,201);const legacyProject=legacyProjectResult.value.projectId,legacyUploadId=cameraUploadIdFor(legacyTake,legacyProject);
+ const legacyUrl=`/api/projects/${legacyProject}/recordings`,legacyHeaders={'Content-Type':'video/mp4','X-Recording-Id':legacyUploadId,'X-Content-SHA256':sha};
+ assert.equal((await request(legacyUrl,'POST',bytes,legacyHeaders)).status,201);
+ const upgraded=await request(legacyUrl,'POST',bytes,{...legacyHeaders,'X-Lan-Recording-Id':legacyTake});
+ assert.equal(upgraded.status,200,JSON.stringify(upgraded.value));assert.equal(upgraded.value.sha256,sha);
+ const changed=Buffer.from(bytes);changed[changed.length-1]^=1;const changedSha=createHash('sha256').update(changed).digest('hex');
+ assert.equal((await request(legacyUrl,'POST',changed,{...legacyHeaders,'X-Content-SHA256':changedSha,'X-Lan-Recording-Id':legacyTake})).status,409);
+ const serverFile=join(root,'recordings',`${legacyUploadId}.mp4`);assert.deepEqual(readFileSync(serverFile),bytes);
+ writeFileSync(serverFile,changed);assert.equal((await request(legacyUrl,'POST',bytes,{...legacyHeaders,'X-Lan-Recording-Id':legacyTake})).status,409);
+ writeFileSync(serverFile,bytes);unlinkSync(serverFile);
+ assert.equal((await request(legacyUrl,'POST',bytes,{...legacyHeaders,'X-Lan-Recording-Id':legacyTake})).status,500);
+ writeFileSync(serverFile,bytes,{flag:'wx',mode:0o600});
+ assert.equal((await request(legacyUrl,'POST',bytes,{...legacyHeaders,'X-Lan-Recording-Id':legacyTake})).status,200);
+ assert.equal((await request(`/api/projects/${otherProject}/recordings`,'POST',bytes,{...legacyHeaders,'X-Lan-Recording-Id':legacyTake})).status,400);
+ assert.deepEqual(readFileSync(serverFile),bytes);
+ assert.equal((await request(legacyUrl)).value.recordings.length,1);
  const accepted=await request(full,'POST',bytes,fullHeaders);assert.equal(accepted.status,201,JSON.stringify(accepted.value));assert.equal(accepted.value.sha256,sha);
  assert.equal((await request(full,'POST',bytes,fullHeaders)).status,200);
  const next=randomUUID(),nextProject=await request('/api/projects/lan-captures','POST',JSON.stringify({recordingId:next}),{'Content-Type':'application/json'});

@@ -155,7 +155,7 @@ export function lockAndValidateCameraUpload(db:Database.Database,token:string,up
   if(pathOwner){
    if(cameraRecordingId)throw new CameraUploadGateError('camera_manifest_mismatch','LAN- und Webaufnahme dürfen nicht vermischt werden.');
    pathOwner.authorize();
-   try{claimUploadPath(db,pathOwner.recordingId,projectId,uploadId,pathOwner.mode);}
+   try{claimUploadPath(db,pathOwner.recordingId,projectId,uploadId,pathOwner.mode,{allowExistingFullRetry:pathOwner.mode==='full'});}
    catch(error){if(error instanceof UploadPathOwnerError)throw new CameraUploadGateError('camera_upload_busy','Die Upload-Herkunft ist belegt oder ungeklärt.');throw error;}
    pathOwner.authorize();
   }else if(!cameraRecordingId && db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_recording_stages'").get() &&

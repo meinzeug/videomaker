@@ -26,7 +26,7 @@ export function initializeUploadPathOwners(db:Database.Database) {
 }
 
 /** Stable retries only; never switch modes, projects or original while ownership is unresolved. */
-export function claimUploadPath(db:Database.Database,recording:unknown,project:unknown,upload:unknown,mode:unknown) {
+export function claimUploadPath(db:Database.Database,recording:unknown,project:unknown,upload:unknown,mode:unknown,options:{allowExistingFullRetry?:boolean}={}) {
  if(!db.inTransaction)throw new UploadPathOwnerError('TRANSACTION_REQUIRED');
  if(!canonicalUuid(recording)||!canonicalUuid(project)||!canonicalUuid(upload)||(mode!=='live'&&mode!=='full'))throw new UploadPathOwnerError('IDENTITY_REQUIRED');
  if(cameraUploadIdFor(recording,project)!==upload)throw new UploadPathOwnerError('BINDING_MISMATCH');
@@ -53,9 +53,13 @@ export function claimUploadPath(db:Database.Database,recording:unknown,project:u
  if(mode==='live')assertNoLegacyFullUpload(db,recording,project);
  // Never silently adopt an existing final object when the origin of its
  // original recording is unknown. A separate verified recovery is needed.
- if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_recordings'").get() &&
-    db.prepare('SELECT 1 FROM project_recordings WHERE id=? COLLATE NOCASE LIMIT 1').get(upload))
-  throw new UploadPathOwnerError('FINAL_RECORDING_EXISTS');
+ if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_recordings'").get()) {
+  const finals=db.prepare('SELECT project_id FROM project_recordings WHERE id=? COLLATE NOCASE LIMIT 2').all(upload) as {project_id:string}[];
+  // Reservation is not a receipt: the full-upload route must still hash the
+  // existing file and incoming body before it can report an idempotent retry.
+  if(finals.length && !(mode==='full'&&options.allowExistingFullRetry===true&&finals.length===1&&finals[0].project_id===project))
+   throw new UploadPathOwnerError('FINAL_RECORDING_EXISTS');
+ }
  try { db.prepare('INSERT INTO live_upload_path_owners(recording_id,project_id,upload_id,path) VALUES(?,?,?,?)').run(recording,project,upload,mode); }
  catch(error) { if((error as {code?:string}).code?.startsWith('SQLITE_CONSTRAINT'))throw new UploadPathOwnerError('OWNER_CONFLICT');throw error; }
  return {created:true};

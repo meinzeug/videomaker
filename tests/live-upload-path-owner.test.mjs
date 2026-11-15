@@ -60,6 +60,18 @@ test('bereits vorhandenes finales Video wird ohne Herkunftsnachweis nicht übern
  }finally{f.close();}
 });
 
+test('full retry may reserve matching existing metadata but does not change or confirm bytes',()=>{
+ const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p);
+ try{
+  f.db.exec('CREATE TABLE project_recordings(id TEXT PRIMARY KEY,project_id TEXT,size INTEGER)');
+  f.db.prepare('INSERT INTO project_recordings VALUES(?,?,?)').run(u,p,123);
+  const reserve=()=>f.db.transaction(()=>claimUploadPath(f.db,r,p,u,'full',{allowExistingFullRetry:true})).immediate();
+  assert.deepEqual(reserve(),{created:true});assert.deepEqual(reserve(),{created:false});
+  assert.deepEqual(f.db.prepare('SELECT id,project_id,size FROM project_recordings').get(),{id:u,project_id:p,size:123});
+  assert.throws(()=>tx(f.db,r,p,u,'live'),/OWNER_CONFLICT/);
+ }finally{f.close();}
+});
+
 test('unidentifizierbares historisches Video sperrt neuen Livepfad, ohne Bestand zu ändern',()=>{
  const f=fixture(),r=randomUUID(),p=randomUUID(),u=cameraUploadIdFor(r,p),old=randomUUID();
  try{
