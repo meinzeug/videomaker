@@ -1,7 +1,7 @@
 import { authorized, sameOrigin } from '@/lib/auth';
 import db from '@/lib/db';
 import { isRecordingId, parseRange, recordingPath, type Recording } from '@/lib/recordings';
-import {PROJECT_RECORDING_DELETION_SCHEMA,queueProjectRecordingDeletions,drainProjectRecordingDeletions} from '@/lib/project-recording-deletions';
+import {PROJECT_RECORDING_DELETION_SCHEMA,queueProjectRecordingDeletions,drainProjectRecordingDeletions,tombstoneProjectRecordings} from '@/lib/project-recording-deletions';
 import { createReadStream, statSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { NextResponse } from 'next/server';
@@ -40,6 +40,7 @@ export async function DELETE(req:Request,{params}:Context) {
   const removed=database.transaction(()=>{
    const item=database.prepare('SELECT id,mime FROM project_recordings WHERE project_id=? AND id=?').get(id,recordingId) as Pick<Recording,'id'|'mime'>|undefined;
    if(!item)return false;
+   tombstoneProjectRecordings(database,id,[item]);
    queueProjectRecordingDeletions(database,[item],recordingPath);
    database.prepare('DELETE FROM project_recordings WHERE id=? AND project_id=?').run(recordingId,id);
    return true;

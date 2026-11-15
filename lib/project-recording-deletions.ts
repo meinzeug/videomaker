@@ -13,7 +13,39 @@ export const PROJECT_RECORDING_DELETION_SCHEMA=`
   job_id TEXT PRIMARY KEY, recording_id TEXT NOT NULL, mime TEXT NOT NULL,
   dev INTEGER NOT NULL, ino INTEGER NOT NULL
  );
+ CREATE TABLE IF NOT EXISTS project_recording_tombstones (
+  recording_id TEXT PRIMARY KEY COLLATE NOCASE,
+  project_id TEXT NOT NULL, deleted_at TEXT NOT NULL
+ );
+ CREATE TRIGGER IF NOT EXISTS recording_tombstone_no_update BEFORE UPDATE ON project_recording_tombstones
+ BEGIN SELECT RAISE(ABORT,'recording tombstone is immutable'); END;
+ CREATE TRIGGER IF NOT EXISTS recording_tombstone_no_delete BEFORE DELETE ON project_recording_tombstones
+ BEGIN SELECT RAISE(ABORT,'recording tombstone is immutable'); END;
+ CREATE TRIGGER IF NOT EXISTS recording_tombstone_no_replace BEFORE INSERT ON project_recording_tombstones
+ WHEN EXISTS(SELECT 1 FROM project_recording_tombstones WHERE recording_id=NEW.recording_id COLLATE NOCASE)
+ BEGIN SELECT RAISE(ABORT,'recording tombstone already exists'); END;
+ CREATE TRIGGER IF NOT EXISTS recording_tombstone_no_reinsert BEFORE INSERT ON project_recordings
+ WHEN EXISTS(SELECT 1 FROM project_recording_tombstones WHERE recording_id=NEW.id COLLATE NOCASE)
+ BEGIN SELECT RAISE(ABORT,'recording was deleted'); END;
+ CREATE TRIGGER IF NOT EXISTS recording_tombstone_no_id_update BEFORE UPDATE OF id ON project_recordings
+ WHEN EXISTS(SELECT 1 FROM project_recording_tombstones WHERE recording_id=NEW.id COLLATE NOCASE)
+ BEGIN SELECT RAISE(ABORT,'recording was deleted'); END;
 `;
+/** Record intentional deletion in the same transaction as the row removal. */
+export function tombstoneProjectRecordings(db:Database.Database,projectId:string,recordings:RecordingIdentity[]){
+ if(!db.inTransaction)throw new Error('Aufnahmelöschung benötigt eine Schreibtransaktion.');
+ const existing=db.prepare('SELECT project_id FROM project_recording_tombstones WHERE recording_id=? COLLATE NOCASE');
+ const insert=db.prepare('INSERT INTO project_recording_tombstones(recording_id,project_id,deleted_at) VALUES(?,?,?)');
+ for(const item of recordings){
+  assertIdentity(item);
+  const old=existing.get(item.id) as {project_id:string}|undefined;
+  if(old){if(old.project_id!==projectId)throw new Error('Gelöschte Aufnahme ist einem anderen Projekt zugeordnet.');continue;}
+  insert.run(item.id.toLowerCase(),projectId,new Date().toISOString());
+ }
+}
+export function isRecordingTombstoned(db:Database.Database,id:string){
+ return !!db.prepare('SELECT 1 FROM project_recording_tombstones WHERE recording_id=? COLLATE NOCASE').get(id);
+}
 /** Queue while holding the same write transaction that removes project rows. */
 export function queueProjectRecordingDeletions(db:Database.Database,recordings:RecordingIdentity[],resolve:(id:string,mime:string)=>string){
  if(!db.inTransaction)throw new Error('Dateilöschauftrag benötigt eine Schreibtransaktion.');

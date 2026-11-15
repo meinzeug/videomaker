@@ -5,7 +5,7 @@ import {mkdtempSync,rmSync,writeFileSync,readFileSync,existsSync,renameSync} fro
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {PROJECT_RECORDING_DELETION_SCHEMA,queueProjectRecordingDeletions,drainProjectRecordingDeletions,runProjectRecordingDeletionBatch} from '../lib/project-recording-deletions.ts';
+import {PROJECT_RECORDING_DELETION_SCHEMA,queueProjectRecordingDeletions,drainProjectRecordingDeletions,runProjectRecordingDeletionBatch,tombstoneProjectRecordings,isRecordingTombstoned} from '../lib/project-recording-deletions.ts';
 import {startProjectDeletionRecovery} from '../lib/project-deletion-recovery.ts';
 function fixture(){const folder=mkdtempSync(join(tmpdir(),'project-delete-')),db=new Database(join(folder,'db.sqlite')),id=randomUUID();db.exec('CREATE TABLE project_recordings(id TEXT PRIMARY KEY,mime TEXT NOT NULL)');db.exec(PROJECT_RECORDING_DELETION_SCHEMA);db.prepare('INSERT INTO project_recordings VALUES(?,?)').run(id,'video/mp4');const resolve=(id)=>join(folder,id+'.mp4');writeFileSync(resolve(id),'original');return {folder,db,id,resolve};}
 test('failed project transaction leaves original video and database row untouched',()=>{
@@ -48,5 +48,34 @@ test('background recovery retries after restart and a blocked first job cannot s
   worker.run();worker.run();worker.run();worker.stop();
   assert.equal(readFileSync(f.resolve(f.id),'utf8'),'replacement');assert.equal(f.db.prepare('SELECT count(*) AS n FROM project_recording_deletions').get().n,1);
   for(const id of ids.slice(1))assert.equal(existsSync(f.resolve(id)),false);
+ }finally{f.db.close();rmSync(f.folder,{recursive:true,force:true});}
+});
+test('tombstone and deletion commit together, survive restart, and block reused ID but allow a new ID',()=>{
+ const f=fixture();try{
+  const recording={id:f.id,mime:'video/mp4'};
+  assert.throws(()=>tombstoneProjectRecordings(f.db,'project-a',[recording]),/Schreibtransaktion/);
+  assert.throws(()=>f.db.transaction(()=>{tombstoneProjectRecordings(f.db,'project-a',[recording]);f.db.prepare('DELETE FROM project_recordings WHERE id=?').run(f.id);throw Error('rollback');}).immediate(),/rollback/);
+  assert.equal(isRecordingTombstoned(f.db,f.id),false);
+  assert.ok(f.db.prepare('SELECT 1 FROM project_recordings WHERE id=?').get(f.id));
+  f.db.transaction(()=>{tombstoneProjectRecordings(f.db,'project-a',[recording]);queueProjectRecordingDeletions(f.db,[recording],f.resolve);f.db.prepare('DELETE FROM project_recordings WHERE id=?').run(f.id);}).immediate();
+  f.db.close();f.db=new Database(join(f.folder,'db.sqlite'));
+  assert.equal(isRecordingTombstoned(f.db,f.id.toUpperCase()),true);
+  assert.throws(()=>f.db.prepare('INSERT INTO project_recordings VALUES(?,?)').run(f.id.toUpperCase(),'video/mp4'),/recording was deleted/);
+  assert.throws(()=>f.db.prepare('INSERT OR REPLACE INTO project_recording_tombstones VALUES(?,?,?)').run(f.id,'other','now'),/tombstone already exists/);
+  assert.throws(()=>f.db.prepare('DELETE FROM project_recording_tombstones').run(),/immutable/);
+  assert.throws(()=>f.db.prepare('UPDATE project_recording_tombstones SET project_id=?').run('other'),/immutable/);
+  const fresh=randomUUID();f.db.prepare('INSERT INTO project_recordings VALUES(?,?)').run(fresh,'video/mp4');
+  assert.ok(f.db.prepare('SELECT 1 FROM project_recordings WHERE id=?').get(fresh));
+  drainProjectRecordingDeletions(f.db,f.resolve);assert.equal(existsSync(f.resolve(f.id)),false);
+ }finally{f.db.close();rmSync(f.folder,{recursive:true,force:true});}
+});
+test('bulk project deletion retains tombstones for missing files and rolls all marks back on failure',()=>{
+ const f=fixture();try{
+  const other=randomUUID();f.db.prepare('INSERT INTO project_recordings VALUES(?,?)').run(other,'video/mp4');
+  const rows=[{id:f.id,mime:'video/mp4'},{id:other,mime:'video/mp4'}];
+  assert.throws(()=>f.db.transaction(()=>{tombstoneProjectRecordings(f.db,'project-a',rows);queueProjectRecordingDeletions(f.db,rows,f.resolve);throw Error('rollback');}).immediate(),/rollback/);
+  assert.equal(isRecordingTombstoned(f.db,other),false);
+  f.db.transaction(()=>{tombstoneProjectRecordings(f.db,'project-a',rows);queueProjectRecordingDeletions(f.db,rows,f.resolve);f.db.prepare('DELETE FROM project_recordings').run();}).immediate();
+  assert.equal(isRecordingTombstoned(f.db,other),true);assert.equal(isRecordingTombstoned(f.db,f.id),true);
  }finally{f.db.close();rmSync(f.folder,{recursive:true,force:true});}
 });

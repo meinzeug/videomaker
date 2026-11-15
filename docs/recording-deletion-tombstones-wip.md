@@ -1,0 +1,15 @@
+# Schutz gelöschter Aufnahmen – Prüfnachweis
+
+Eine gezielte Einzel- oder Projektlöschung schreibt die Aufnahme-ID im selben SQLite-Schreibvorgang dauerhaft in `project_recording_tombstones`. Ein Upload prüft die Sperre erneut unter demselben SQLite-Schreiblock, bevor er eine Datei veröffentlicht oder eine Zeile neu anlegt. Die Tabelle und ein Insert-Trigger schützen dieselbe ID auch vor abweichender Großschreibung und anderen Einfügepfaden. Eine neue Aufnahme mit neuer ID bleibt möglich. Die vorhandene lokale Aufnahme auf dem Smartphone wird nicht verändert.
+
+Die Sperre betrifft erst Löschungen nach Einführung dieses Schutzes. Für frühere Löschungen gibt es keine zuverlässig vollständige Historie; sie lassen sich daraus nicht nachträglich rekonstruieren. Wiederherstellung derselben ID ist nicht implementiert. Bei Datenbankwiederherstellung aus einer älteren Sicherung fehlen die seither angelegten Sperren; Sicherungs- und Wiederherstellungsverfahren müssen dies berücksichtigen. Künftige Live-/Mehrzielpfade müssen dieselbe Sperre vor Reservierung und Veröffentlichung prüfen. Tests beweisen kein Verhalten bei Stromausfall oder Manipulation der Datenbank durch Administratoren.
+
+Die aktuelle Android-App behandelt HTTP 409 bereits als dauerhaften Uploadkonflikt und hält das Original lokal. Ihre generische Meldung benennt die absichtliche Löschung noch nicht gesondert. Der Server liefert dafür `code: recording_deleted`; eine spätere App-Änderung kann den Hinweis präzisieren.
+
+## Isolierter Test 2026-11-15
+
+* `node --experimental-strip-types --test tests/project-recording-deletions.test.mjs tests/recording-tombstone-process.test.mjs`: 9/9; darunter konkurrierende SQLite-Prozesse, Prozessabbruch vor Commit, Rollback, Neustart, Großschreibung und unveränderliche Sperren.
+* `NODE_OPTIONS=--max-old-space-size=768 node node_modules/typescript/bin/tsc --noEmit --incremental false --pretty false`: erfolgreich.
+* `tests/recording-deletion-integration.test.mjs`: 3/3 echte HTTP-Fixtures gegen eine lokal begrenzte Next-Entwicklungsinstanz mit synthetischer Datenbank und Dateien auf `/dev/shm`. Einzel- und Projektlöschung, erzwungener DB-Fehler, Wiederholungsupload, neue ID und ein langsamer konkurrierender Upload wurden geprüft. Für die spezielle Reihenfolge wurde eine synthetische Aufnahmezeile direkt in die Test-DB eingefügt, da die vorhandene Anwendung zwei gleichzeitige Uploads derselben ID bereits sperrt.
+
+Für diesen HTTP-Test war wegen der lokal außerhalb des Worktrees liegenden Abhängigkeiten vorübergehend die Webpack-Option `resolve.symlinks=false` gesetzt und `instrumentation.ts` aus der lokalen Fixture ausgeblendet. Die getesteten Routen blieben unverändert; Hintergrundwiederherstellung beim Serverstart wurde in diesem HTTP-Lauf nicht getestet. Beide Dateien und `next-env.d.ts` wurden danach auf den ursprünglichen Commit zurückgesetzt. Vor produktiver Übernahme sind unabhängiger Review, ein sauberer Produktionsbuild und die Prüfung von Backup/Rückweg erforderlich.

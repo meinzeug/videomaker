@@ -2,6 +2,7 @@ import { authorized, sameOrigin, sessionAuthorized, sessionValue } from '@/lib/a
 import db from '@/lib/db';
 import { isRecordingId, MAX_RECORDING_SIZE, recordingPath, recordingsDir, type Recording } from '@/lib/recordings';
 import { recordingFileReceipt } from '@/lib/recording-receipt';
+import {PROJECT_RECORDING_DELETION_SCHEMA,isRecordingTombstoned} from '@/lib/project-recording-deletions';
 import {prepareRecordingIntent,commitRecordingIntent,linkRecordingDurably,syncDirectory} from '@/lib/recording-upload-intent';
 import {acquireRecordingUpload,cleanupStaleRecordingUploads,readRecordingChunk,recordingFreeBytes,requireRecordingSpace} from '@/lib/recording-upload-guard';
 import {CAMERA_PROJECT_CLAIMS_SCHEMA,CameraUploadGateError,assertCameraUploadConsistent,cameraUploadIdFor,ensureCameraClaimUploadMappings,lockAndValidateCameraUpload,releaseCameraUploadLock,recordCameraVerifiedUpload} from '@/lib/camera-project-claims';
@@ -14,6 +15,7 @@ import { NextResponse } from 'next/server';
 export const dynamic='force-dynamic';
 export const runtime='nodejs';
 type Context={params:Promise<{id:string}>};
+function deletedResponse(){return NextResponse.json({code:'recording_deleted',error:'Diese Aufnahme wurde gelöscht. Für eine neue Aufnahme ist eine neue Aufnahme-ID erforderlich.'},{status:409,headers:{'Cache-Control':'private, no-store'}});}
 
 export async function GET(_req:Request,{params}:Context) {
  if(!await authorized())return NextResponse.json({error:'Nicht angemeldet'},{status:401});
@@ -76,6 +78,8 @@ export async function POST(req:Request,{params}:Context) {
   return NextResponse.json({error:'Ungültige Aufnahme.'},{status:400});
  if(length>MAX_RECORDING_SIZE)return NextResponse.json({error:'Die Aufnahme ist größer als 1 GB.'},{status:413});
  if(!db().prepare('SELECT 1 FROM projects WHERE id=?').get(id))return NextResponse.json({error:'Skript nicht gefunden'},{status:404});
+ try{db().exec(PROJECT_RECORDING_DELETION_SCHEMA);if(isRecordingTombstoned(db(),recordingId))return deletedResponse();}
+ catch{return NextResponse.json({error:'Aufnahmeschutz ist auf diesem Server nicht verfügbar.'},{status:503});}
  let lease;
  try {lease=acquireRecordingUpload(db());}
  catch {return NextResponse.json({error:'Upload-Schutz ist auf diesem Server nicht verfügbar.'},{status:503});}
@@ -149,6 +153,7 @@ export async function POST(req:Request,{params}:Context) {
    // link and database commit, so a completed logout cannot overtake it.
    if(!sessionAuthorized(db(),credential))return 'unauthorized';
    if(!db().prepare('SELECT 1 FROM projects WHERE id=?').get(id))return 'missing';
+   if(isRecordingTombstoned(db(),recordingId))return 'deleted';
    if(cameraRecordingId)assertCameraUploadConsistent(db(),cameraRecordingId);
    const old=db().prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').all(recordingId) as Recording[];
    if(old.length)return old.length===1&&old[0].project_id===id?'exists':'conflict';
@@ -162,6 +167,7 @@ export async function POST(req:Request,{params}:Context) {
   }).immediate();
   if(result==='unauthorized')return NextResponse.json({error:'Sitzung abgelaufen. Bitte erneut anmelden und den Upload prüfen.'},{status:403,headers:{'Cache-Control':'private, no-store'}});
   if(result==='missing')return NextResponse.json({error:'Skript wurde gelöscht.'},{status:404});
+  if(result==='deleted')return deletedResponse();
   if(result==='conflict')return NextResponse.json({error:'Aufnahme-ID bereits vergeben.'},{status:409});
   if(result==='unfamiliar')return NextResponse.json({error:'Unbekannte vorhandene Aufnahmedatei; keine Daten wurden überschrieben.'},{status:409});
   if(result==='intent_conflict')return NextResponse.json({error:'Aufnahme-ID ist bereits an andere Daten gebunden.'},{status:409});
@@ -175,6 +181,7 @@ export async function POST(req:Request,{params}:Context) {
     lease.check();
     if(!sessionAuthorized(db(),credential))return 'unauthorized';
     if(!db().prepare('SELECT 1 FROM projects WHERE id=?').get(id))return 'missing';
+    if(isRecordingTombstoned(db(),recordingId))return 'deleted';
     if(cameraRecordingId)assertCameraUploadConsistent(db(),cameraRecordingId);
     const old=db().prepare('SELECT * FROM project_recordings WHERE id=? COLLATE NOCASE').all(recordingId) as Recording[];
     if(old.length)return old.length===1&&old[0].project_id===id?'exists':'conflict';
@@ -185,6 +192,7 @@ export async function POST(req:Request,{params}:Context) {
    }).immediate();
    if(recovered==='unauthorized')return NextResponse.json({error:'Sitzung abgelaufen. Bitte erneut anmelden und den Upload prüfen.'},{status:403,headers:{'Cache-Control':'private, no-store'}});
    if(recovered==='missing')return NextResponse.json({error:'Skript wurde gelöscht.'},{status:404});
+   if(recovered==='deleted')return deletedResponse();
    if(recovered==='conflict')return NextResponse.json({error:'Aufnahme-ID bereits vergeben.'},{status:409});
    created=recovered==='recovered';
   }

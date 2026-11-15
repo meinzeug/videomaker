@@ -3,7 +3,7 @@ import db from '@/lib/db';
 import { parseManualScript } from '@/lib/manual';
 import { recordingPath, type Recording } from '@/lib/recordings';
 import { CAMERA_PROJECT_CLAIMS_SCHEMA, assertCameraProjectDeletable, CameraProjectClaimError } from '@/lib/camera-project-claims';
-import {PROJECT_RECORDING_DELETION_SCHEMA,queueProjectRecordingDeletions,drainProjectRecordingDeletions} from '@/lib/project-recording-deletions';
+import {PROJECT_RECORDING_DELETION_SCHEMA,queueProjectRecordingDeletions,drainProjectRecordingDeletions,tombstoneProjectRecordings} from '@/lib/project-recording-deletions';
 import { NextResponse } from 'next/server';
 
 export async function PATCH(req:Request,{params}:{params:Promise<{id:string}>}) {
@@ -28,6 +28,7 @@ export async function DELETE(req:Request,{params}:{params:Promise<{id:string}>})
    // Actual files stay untouched until this transaction has committed.
    assertCameraProjectDeletable(database,id);
    const recordings=database.prepare('SELECT id,mime FROM project_recordings WHERE project_id=?').all(id) as Pick<Recording,'id'|'mime'>[];
+   tombstoneProjectRecordings(database,id,recordings);
    queueProjectRecordingDeletions(database,recordings,recordingPath);
    database.prepare('DELETE FROM project_recordings WHERE project_id=?').run(id);
    database.prepare('DELETE FROM project_images WHERE project_id=?').run(id);
