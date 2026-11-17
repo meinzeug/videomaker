@@ -1,5 +1,5 @@
 import {authorized,sameOrigin} from '@/lib/auth';
-import {CHAT_CONTEXT_MESSAGES,CHAT_MESSAGE_MAX,ChatProviderError,FIELD_MAX,SCRIPT_MAX,chatResponse,chatSystemPrompt,isChatKind,type ChatKind} from '@/lib/chat';
+import {CHAT_CONTEXT_CHARS,CHAT_MESSAGE_MAX,ChatProviderError,FIELD_MAX,SCRIPT_MAX,chatResponse,chatSystemPrompt,isChatKind,type ChatKind} from '@/lib/chat';
 import db from '@/lib/db';
 import {randomUUID} from 'node:crypto';
 import {NextResponse} from 'next/server';
@@ -41,6 +41,13 @@ function saveFromChat(kind:ChatKind,refId:string,text:string):{ok:boolean;messag
  const info=database.prepare(`UPDATE channels SET ${column}=? WHERE id=?`).run(value,refId);
  return info.changes?{ok:true,message:'Das Feld wurde gespeichert.',saved:{kind,text:value}}:{ok:false,message:'Kanal nicht gefunden.'};
 }
+/** The whole conversation is sent every time (like ChatGPT); only very long threads drop their oldest messages. */
+function contextHistory(all:Array<{role:string;content:string}>){
+ let used=0,start=all.length;
+ while(start>0&&(used+all[start-1].content.length<=CHAT_CONTEXT_CHARS||start===all.length)){used+=all[start-1].content.length;start--;}
+ while(start<all.length&&all[start].role!=='user')start++;
+ return all.slice(start);
+}
 function target(kind:unknown,refId:unknown){return isChatKind(kind)&&typeof refId==='string'&&/^[0-9a-f-]{36}$/i.test(refId)?{kind,refId:refId.toLowerCase()}:null;}
 
 export async function GET(req:Request){
@@ -64,7 +71,7 @@ export async function POST(req:Request){
  database.prepare('INSERT INTO chat_messages(id,kind,ref_id,role,content,created_at) VALUES(?,?,?,?,?,?)').run(userId,t.kind,t.refId,'user',message,new Date().toISOString());
  const undo=()=>{try{database.prepare('DELETE FROM chat_messages WHERE id=?').run(userId);}catch{}};
  try{
-  const history=(database.prepare('SELECT role,content FROM chat_messages WHERE kind=? AND ref_id=? ORDER BY created_at DESC,rowid DESC LIMIT ?').all(t.kind,t.refId,CHAT_CONTEXT_MESSAGES) as Array<{role:string;content:string}>).reverse();
+  const history=contextHistory(database.prepare('SELECT role,content FROM chat_messages WHERE kind=? AND ref_id=? ORDER BY created_at,rowid').all(t.kind,t.refId) as Array<{role:string;content:string}>);
   const save=(text:string)=>saveFromChat(t.kind,t.refId,text);
   const body=await chatResponse(t.kind,chatSystemPrompt(t.kind,context),history,save,text=>{database.prepare('INSERT INTO chat_messages(id,kind,ref_id,role,content,created_at) VALUES(?,?,?,?,?,?)').run(randomUUID(),t.kind,t.refId,'assistant',text,new Date().toISOString());},undo);
   return new Response(body,{headers:{...headers,'Content-Type':'text/plain; charset=utf-8','X-Accel-Buffering':'no'}});
