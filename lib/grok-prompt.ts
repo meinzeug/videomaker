@@ -33,3 +33,13 @@ export const FACT_SHEET_SYSTEM = `Du erstellst ein strukturiertes Faktenblatt au
 /** Other channels retain their own identity. */
 export const CHANNEL_SCRIPT_SYSTEM = `${AUTONOMOUS_SCRIPT_SYSTEM} Nutze den gewählten Kanal und keine fremde Kanalidentität.`;
 export const CHANNEL_SOURCE_ONLY_SCRIPT_SYSTEM = `${SOURCE_ONLY_SCRIPT_SYSTEM} Nutze den gewählten Kanal und keine fremde Kanalidentität.`;
+
+/** Dauerhafte Kanalvorgaben (Dramaturgie, sonstige Vorgaben), die der Nutzer im Kanal gespeichert und für diese Erstellung aktiviert hat. Gelten zusätzlich zu den Eingaben im Dialog. */
+export function channelGuidelinesText(report:unknown):string {
+ const g=report&&typeof report==='object'?(report as Record<string,unknown>).generation_channel_guidelines:null;
+ if(!g||typeof g!=='object')return '';
+ const {dramaturgy,instructions}=g as Record<string,unknown>;
+ const value={dramaturgy:typeof dramaturgy==='string'?dramaturgy.slice(0,10000):'',instructions:typeof instructions==='string'?instructions.slice(0,10000):''};
+ if(!value.dramaturgy&&!value.instructions)return '';
+ return `Dauerhafte Kanalvorgaben des Nutzers zu Dramaturgie und sonstigen Vorgaben (verbindlich für Aufbau, Stil und Form, keine Fakten; gelten zusätzlich zu den gewählten Nutzervorgaben): ${JSON.stringify(value)}\n`;
+}

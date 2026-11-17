@@ -28,6 +28,11 @@ export default function db() {
   const columns=instance.prepare('PRAGMA table_info(project_images)').all() as Array<{name:string}>;
   if(!columns.some(column=>column.name==='orientation')) instance.exec("ALTER TABLE project_images ADD COLUMN orientation TEXT NOT NULL DEFAULT 'landscape'");
   if(!columns.some(column=>column.name==='description')) instance.exec("ALTER TABLE project_images ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+  instance.exec(`CREATE TABLE IF NOT EXISTS chat_messages (id TEXT PRIMARY KEY, kind TEXT NOT NULL, ref_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS chat_messages_thread_idx ON chat_messages(kind, ref_id, created_at);`);
+  const channelColumns=instance.prepare('PRAGMA table_info(channels)').all() as Array<{name:string}>;
+  if(!channelColumns.some(column=>column.name==='dramaturgy')) instance.exec("ALTER TABLE channels ADD COLUMN dramaturgy TEXT NOT NULL DEFAULT ''");
+  if(!channelColumns.some(column=>column.name==='instructions')) instance.exec("ALTER TABLE channels ADD COLUMN instructions TEXT NOT NULL DEFAULT ''");
   const jobColumns=instance.prepare('PRAGMA table_info(image_jobs)').all() as Array<{name:string}>;
   if(!jobColumns.some(column=>column.name==='mode')) instance.exec("ALTER TABLE image_jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'render'");
  }

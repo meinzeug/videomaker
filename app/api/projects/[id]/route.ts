@@ -34,6 +34,7 @@ export async function DELETE(req:Request,{params}:{params:Promise<{id:string}>})
    database.prepare('DELETE FROM project_images WHERE project_id=?').run(id);
    database.prepare('DELETE FROM image_jobs WHERE project_id=?').run(id);
    database.prepare('DELETE FROM project_channels WHERE project_id=?').run(id);
+   database.prepare("DELETE FROM chat_messages WHERE kind='script' AND ref_id=?").run(id);
    database.prepare('DELETE FROM projects WHERE id=?').run(id);
   }).immediate();
   try {if(drainProjectRecordingDeletions(database,recordingPath)>0)return NextResponse.json({ok:true,cleanupPending:true});}
