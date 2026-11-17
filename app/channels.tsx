@@ -23,7 +23,7 @@ export function Channels({channels,onChanged}:{channels:Channel[];onChanged:()=>
   setError('');
   try{await json(`/api/channels/${channel.id}`,{method:'DELETE'});await onChanged();setView({mode:'list'});}catch(e){setError(e instanceof Error?e.message:'Kanal konnte nicht gelöscht werden.');}
  }
- if(view.mode==='edit')return <ChannelForm channel={current} onCancel={()=>setView(current?{mode:'detail',id:current.id}:{mode:'list'})} onSaved={async id=>{await onChanged();setView({mode:'detail',id});}}/>;
+ if(view.mode==='edit')return <ChannelForm channel={current} onFieldSaved={onChanged} onCancel={()=>setView(current?{mode:'detail',id:current.id}:{mode:'list'})} onSaved={async id=>{await onChanged();setView({mode:'detail',id});}}/>;
  if(view.mode==='detail'&&current)return <ChannelDetail channel={current} error={error} onBack={()=>setView({mode:'list'})} onEdit={()=>setView({mode:'edit',id:current.id})} onDelete={()=>void remove(current)}/>;
  return <>
   <div className="section-heading large"><div><p className="eyebrow">DEINE KANÄLE</p><h1>Ein Studio. Viele Kanäle<span>.</span></h1><p>Verwalte deine Kanäle samt dauerhaften Vorgaben für Dramaturgie und Skripte.</p></div><button className="primary" onClick={()=>setView({mode:'edit',id:null})}><Plus size={16}/> Kanal hinzufügen</button></div>
@@ -57,7 +57,7 @@ function ChannelDetail({channel,error,onBack,onEdit,onDelete}:{channel:Channel;e
 }
 
 type ChatField='dramaturgy'|'instructions';
-function ChannelForm({channel,onCancel,onSaved}:{channel:Channel|null;onCancel:()=>void;onSaved:(id:string)=>Promise<void>}) {
+function ChannelForm({channel,onCancel,onSaved,onFieldSaved}:{channel:Channel|null;onCancel:()=>void;onSaved:(id:string)=>Promise<void>;onFieldSaved:()=>Promise<void>}) {
  const known=channel&&labels[channel.platform]?channel.platform:channel?'other':'youtube';
  const [name,setName]=useState(channel?.name??''),[platform,setPlatform]=useState(known),[customPlatform,setCustomPlatform]=useState(channel&&known==='other'?channel.platform:''),[handle,setHandle]=useState(channel?.handle??'');
  const [dramaturgy,setDramaturgy]=useState(channel?.dramaturgy??''),[instructions,setInstructions]=useState(channel?.instructions??'');
@@ -87,7 +87,7 @@ function ChannelForm({channel,onCancel,onSaved}:{channel:Channel|null;onCancel:(
    {error&&<p role="alert" className="error">{error}</p>}
    <div className="form-actions"><button className="primary" disabled={busy}>{busy?'Speichert …':channel?'Änderungen speichern':'Kanal anlegen'}</button><button type="button" className="secondary-action" onClick={onCancel} disabled={busy}>Abbrechen</button></div>
   </form>
-  {chat&&channel&&<ChatModal kind={chat==='dramaturgy'?'channel_dramaturgy':'channel_instructions'} refId={channel.id} draft={chat==='dramaturgy'?dramaturgy:instructions} title={chat==='dramaturgy'?'Dramaturgie besprechen':'Sonstige Vorgaben besprechen'} subtitle={`Kanal: ${channel.name} · Der Chat bezieht sich auf den aktuellen Text im Feld, ändert ihn aber nicht.`} intro={chat==='dramaturgy'?'Besprich mit der KI die Dramaturgie deiner Skripte: Aufbau, Hook, Spannungsbogen, Schluss.':'Besprich mit der KI Anrede, Stil, Länge und weitere Vorgaben für deine Skripte.'} suggestions={chat==='dramaturgy'?['Bewerte meine aktuelle Dramaturgie','Welche Dramaturgie funktioniert für diese Plattform aktuell gut?']:['Sind meine Vorgaben widerspruchsfrei?','Was sollte ich noch festlegen?']} onClose={()=>setChat(null)}/>}
+  {chat&&channel&&<ChatModal kind={chat==='dramaturgy'?'channel_dramaturgy':'channel_instructions'} refId={channel.id} draft={chat==='dramaturgy'?dramaturgy:instructions} title={chat==='dramaturgy'?'Dramaturgie besprechen':'Sonstige Vorgaben besprechen'} subtitle={`Kanal: ${channel.name} · Der Chat bezieht sich auf den aktuellen Text im Feld. Auf deine Bitte kann die KI einen Text direkt im Feld speichern.`} intro={chat==='dramaturgy'?'Besprich mit der KI die Dramaturgie deiner Skripte: Aufbau, Hook, Spannungsbogen, Schluss.':'Besprich mit der KI Anrede, Stil, Länge und weitere Vorgaben für deine Skripte.'} suggestions={chat==='dramaturgy'?['Bewerte meine aktuelle Dramaturgie','Welche Dramaturgie funktioniert für diese Plattform aktuell gut?']:['Sind meine Vorgaben widerspruchsfrei?','Was sollte ich noch festlegen?']} onSaved={saved=>{if(typeof saved.text!=='string')return;if(saved.kind==='channel_dramaturgy')setDramaturgy(saved.text);else setInstructions(saved.text);void onFieldSaved();}} onClose={()=>setChat(null)}/>}
  </>;
 }
 export function ProjectChannels({projectId,channels}:{projectId:string;channels:Channel[]}) {

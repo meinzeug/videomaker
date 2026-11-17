@@ -1,5 +1,5 @@
 import {authorized,sameOrigin} from '@/lib/auth';
-import {CHAT_CONTEXT_MESSAGES,CHAT_MESSAGE_MAX,chatSystemPrompt,isChatKind,openChatStream,textStream,type ChatKind} from '@/lib/chat';
+import {CHAT_CONTEXT_MESSAGES,CHAT_MESSAGE_MAX,ChatProviderError,FIELD_MAX,SCRIPT_MAX,chatResponse,chatSystemPrompt,isChatKind,type ChatKind} from '@/lib/chat';
 import db from '@/lib/db';
 import {randomUUID} from 'node:crypto';
 import {NextResponse} from 'next/server';
@@ -21,6 +21,25 @@ function subject(kind:ChatKind,refId:string,draft:unknown){
  if(!row)return null;
  const own=kind==='channel_dramaturgy'?row.dramaturgy:row.instructions,other=kind==='channel_dramaturgy'?row.instructions:row.dramaturgy;
  return {channel:row.name,text:typeof draft==='string'?draft.slice(0,10000):own,other};
+}
+/** Write performed on the model's explicit tool call; the previous script version is kept as a backup. */
+function saveFromChat(kind:ChatKind,refId:string,text:string):{ok:boolean;message:string;saved?:unknown}{
+ const database=db(),value=text.trim();
+ if(!value)return {ok:false,message:'Leerer Text wurde nicht gespeichert.'};
+ if(kind==='script'){
+  if(value.length>SCRIPT_MAX)return {ok:false,message:`Text zu lang (maximal ${SCRIPT_MAX} Zeichen).`};
+  const row=database.prepare('SELECT content FROM projects WHERE id=?').get(refId) as {content:string}|undefined;
+  if(!row)return {ok:false,message:'Skript nicht gefunden.'};
+  const content=JSON.parse(row.content);
+  if(typeof content.script==='string'&&content.script!==value)content.script_backups=[{saved_at:new Date().toISOString(),script:content.script},...(Array.isArray(content.script_backups)?content.script_backups:[])].slice(0,5);
+  content.script=value;
+  database.prepare('UPDATE projects SET content=? WHERE id=?').run(JSON.stringify(content),refId);
+  return {ok:true,message:'Das Skript wurde gespeichert.',saved:{kind,script:value}};
+ }
+ if(value.length>FIELD_MAX)return {ok:false,message:`Text zu lang: ${value.length} Zeichen, erlaubt sind ${FIELD_MAX}. Bitte kürzen und erneut speichern.`};
+ const column=kind==='channel_dramaturgy'?'dramaturgy':'instructions';
+ const info=database.prepare(`UPDATE channels SET ${column}=? WHERE id=?`).run(value,refId);
+ return info.changes?{ok:true,message:'Das Feld wurde gespeichert.',saved:{kind,text:value}}:{ok:false,message:'Kanal nicht gefunden.'};
 }
 function target(kind:unknown,refId:unknown){return isChatKind(kind)&&typeof refId==='string'&&/^[0-9a-f-]{36}$/i.test(refId)?{kind,refId:refId.toLowerCase()}:null;}
 
@@ -46,16 +65,12 @@ export async function POST(req:Request){
  const undo=()=>{try{database.prepare('DELETE FROM chat_messages WHERE id=?').run(userId);}catch{}};
  try{
   const history=(database.prepare('SELECT role,content FROM chat_messages WHERE kind=? AND ref_id=? ORDER BY created_at DESC,rowid DESC LIMIT ?').all(t.kind,t.refId,CHAT_CONTEXT_MESSAGES) as Array<{role:string;content:string}>).reverse();
-  const upstream=await openChatStream(chatSystemPrompt(t.kind,context),history);
-  if(!upstream.ok||!upstream.body){
-   const detail=await upstream.json().catch(()=>({})) as {error?:{message?:string}};
-   undo();
-   return fail(`KI-Anfrage fehlgeschlagen (${upstream.status})${detail?.error?.message?` – ${String(detail.error.message).slice(0,200)}`:''}`,upstream.status===429?429:upstream.status===402?402:502);
-  }
-  const body=textStream(upstream.body,text=>{database.prepare('INSERT INTO chat_messages(id,kind,ref_id,role,content,created_at) VALUES(?,?,?,?,?,?)').run(randomUUID(),t.kind,t.refId,'assistant',text,new Date().toISOString());},undo);
+  const save=(text:string)=>saveFromChat(t.kind,t.refId,text);
+  const body=await chatResponse(t.kind,chatSystemPrompt(t.kind,context),history,save,text=>{database.prepare('INSERT INTO chat_messages(id,kind,ref_id,role,content,created_at) VALUES(?,?,?,?,?,?)').run(randomUUID(),t.kind,t.refId,'assistant',text,new Date().toISOString());},undo);
   return new Response(body,{headers:{...headers,'Content-Type':'text/plain; charset=utf-8','X-Accel-Buffering':'no'}});
  }catch(error){
   undo();
+  if(error instanceof ChatProviderError)return fail(error.message,error.status===429?429:error.status===402?402:502);
   return fail(error instanceof Error&&error.name==='TimeoutError'?'Die KI hat nicht rechtzeitig geantwortet.':error instanceof Error?error.message:'Chat fehlgeschlagen.',500);
  }
 }

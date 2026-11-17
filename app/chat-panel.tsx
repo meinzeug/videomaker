@@ -37,10 +37,14 @@ function Markdown({text}:{text:string}) {
  return <>{blocks}</>;
 }
 
+export type ChatSaved={kind:ChatKind;text?:string;script?:string};
+/** Entfernt Speicher-Markierungen (auch unvollständige) aus dem Stream. */
+const MARK=/\u001e[^\u001e]*\u001e/g;
+const visible=(text:string)=>text.replace(MARK,'').replace(/\u001e[^\u001e]*$/,'');
 export type ChatTarget={kind:ChatKind;refId:string;/** Aktueller, evtl. ungespeicherter Feldentwurf (nur Kanal-Chats). */draft?:string};
 type Item=Pick<ChatMessage,'role'|'content'>&{id:string;pending?:boolean};
 
-export function ChatThread({kind,refId,draft,intro,suggestions=[]}:ChatTarget&{intro:string;suggestions?:string[]}) {
+export function ChatThread({kind,refId,draft,intro,suggestions=[],onSaved}:ChatTarget&{intro:string;suggestions?:string[];onSaved?:(saved:ChatSaved)=>void}) {
  const [messages,setMessages]=useState<Item[]>([]),[input,setInput]=useState(''),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const list=useRef<HTMLDivElement>(null),box=useRef<HTMLTextAreaElement>(null),abort=useRef<AbortController|null>(null),stick=useRef(true);
  useEffect(()=>{
@@ -59,8 +63,8 @@ export function ChatThread({kind,refId,draft,intro,suggestions=[]}:ChatTarget&{i
   try{
    const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind,refId,message,...(draft!==undefined?{draft}:{})}),signal:controller.signal});
    if(!response.ok||!response.body){const d=await response.json().catch(()=>({}));throw new Error(d.error||'Chat fehlgeschlagen.');}
-   const reader=response.body.getReader(),decoder=new TextDecoder();let full='';
-   for(;;){const {done,value}=await reader.read();if(done)break;full+=decoder.decode(value,{stream:true});setMessages(items=>items.map(item=>item.id===botItem.id?{...item,content:full}:item));}
+   const reader=response.body.getReader(),decoder=new TextDecoder();let full='',seen=0;
+   for(;;){const {done,value}=await reader.read();if(done)break;full+=decoder.decode(value,{stream:true});const marks=[...full.matchAll(MARK)];for(;seen<marks.length;seen++){try{onSaved?.(JSON.parse(marks[seen][0].slice(1,-1)));}catch{}}const shown=visible(full);setMessages(items=>items.map(item=>item.id===botItem.id?{...item,content:shown}:item));}
    setMessages(items=>items.map(item=>item.id===botItem.id?{...item,pending:false}:item));
   }catch(e){
    const stopped=e instanceof Error&&e.name==='AbortError';
@@ -74,7 +78,7 @@ export function ChatThread({kind,refId,draft,intro,suggestions=[]}:ChatTarget&{i
  }
  return <div className="chat">
   <div className="chat-scroll" ref={list} onScroll={e=>{const el=e.currentTarget;stick.current=el.scrollHeight-el.scrollTop-el.clientHeight<80;}} role="log" aria-live="polite" aria-label="Chatverlauf">
-   {loading?<p className="chat-hint">Chat wird geladen …</p>:!messages.length?<div className="chat-empty"><span className="chat-logo"><Sparkles size={22}/></span><p>{intro}</p><small><Globe size={12}/> Die KI kann bei Bedarf im Internet recherchieren.</small>{suggestions.length>0&&<div className="chat-suggestions">{suggestions.map(s=><button key={s} type="button" onClick={()=>void send(s)} disabled={busy}>{s}</button>)}</div>}</div>
+   {loading?<p className="chat-hint">Chat wird geladen …</p>:!messages.length?<div className="chat-empty"><span className="chat-logo"><Sparkles size={22}/></span><p>{intro}</p><small><Globe size={12}/> Die KI kann bei Bedarf im Internet recherchieren und auf deine Bitte Texte speichern.</small>{suggestions.length>0&&<div className="chat-suggestions">{suggestions.map(s=><button key={s} type="button" onClick={()=>void send(s)} disabled={busy}>{s}</button>)}</div>}</div>
    :messages.map(m=><div key={m.id} className={`chat-msg ${m.role}`}>{m.role==='assistant'&&<span className="chat-avatar" aria-hidden="true"><Sparkles size={14}/></span>}<div className="chat-bubble">{m.role==='user'?<p>{m.content}</p>:m.content?<Markdown text={m.content}/>:null}{m.pending&&<span className="chat-typing" aria-label="KI antwortet"><i/><i/><i/></span>}</div></div>)}
   </div>
   {error&&<p className="chat-error" role="alert">{error}</p>}
