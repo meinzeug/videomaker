@@ -3,8 +3,7 @@ export const CHAT_KINDS=['script','channel_dramaturgy','channel_instructions'] a
 export type ChatKind=typeof CHAT_KINDS[number];
 export type ChatMessage={id:string;role:'user'|'assistant';content:string;created_at:string};
 export const CHAT_MESSAGE_MAX=8000;
-/** About 40k tokens of past conversation per request. */
-export const CHAT_CONTEXT_CHARS=150000;
+export const CHAT_CONTEXT_MESSAGES=30;
 export const isChatKind=(value:unknown):value is ChatKind=>typeof value==='string'&&(CHAT_KINDS as readonly string[]).includes(value);
 
 const today=()=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Berlin'}).format(new Date());

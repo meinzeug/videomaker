@@ -1,5 +1,5 @@
 import {authorized,sameOrigin} from '@/lib/auth';
-import {CHAT_CONTEXT_CHARS,CHAT_MESSAGE_MAX,ChatProviderError,FIELD_MAX,SCRIPT_MAX,chatResponse,chatSystemPrompt,isChatKind,type ChatKind} from '@/lib/chat';
+import {CHAT_CONTEXT_MESSAGES,CHAT_MESSAGE_MAX,ChatProviderError,FIELD_MAX,SCRIPT_MAX,chatResponse,chatSystemPrompt,isChatKind,type ChatKind} from '@/lib/chat';
 import db from '@/lib/db';
 import {randomUUID} from 'node:crypto';
 import {NextResponse} from 'next/server';
@@ -41,10 +41,9 @@ function saveFromChat(kind:ChatKind,refId:string,text:string):{ok:boolean;messag
  const info=database.prepare(`UPDATE channels SET ${column}=? WHERE id=?`).run(value,refId);
  return info.changes?{ok:true,message:'Das Feld wurde gespeichert.',saved:{kind,text:value}}:{ok:false,message:'Kanal nicht gefunden.'};
 }
-/** The whole conversation is sent every time (like ChatGPT); only very long threads drop their oldest messages. */
+/** The last CHAT_CONTEXT_MESSAGES messages are sent with every request; the history always starts with a user message. */
 function contextHistory(all:Array<{role:string;content:string}>){
- let used=0,start=all.length;
- while(start>0&&(used+all[start-1].content.length<=CHAT_CONTEXT_CHARS||start===all.length)){used+=all[start-1].content.length;start--;}
+ let start=Math.max(0,all.length-CHAT_CONTEXT_MESSAGES);
  while(start<all.length&&all[start].role!=='user')start++;
  return all.slice(start);
 }
