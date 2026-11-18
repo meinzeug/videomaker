@@ -4,7 +4,7 @@ import db from '@/lib/db';
 import {randomUUID} from 'node:crypto';
 import {NextResponse} from 'next/server';
 export const dynamic='force-dynamic';
-export const maxDuration=300;
+export const maxDuration=600;
 const headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'};
 const fail=(error:string,status:number)=>NextResponse.json({error},{status,headers});
 
@@ -12,10 +12,14 @@ const fail=(error:string,status:number)=>NextResponse.json({error},{status,heade
 function subject(kind:ChatKind,refId:string,draft:unknown){
  const database=db();
  if(kind==='script'){
-  const row=database.prepare('SELECT title,content FROM projects WHERE id=?').get(refId) as {title:string;content:string}|undefined;
+  const row=database.prepare('SELECT title,content,sources FROM projects WHERE id=?').get(refId) as {title:string;content:string;sources:string}|undefined;
   if(!row)return null;
   let script='';try{script=String(JSON.parse(row.content).script||'');}catch{}
-  return {title:row.title,text:script};
+  let sources='';
+  try{const list=JSON.parse(row.sources);if(Array.isArray(list))sources=JSON.stringify(list.slice(0,20).map((x:{title?:string;url?:string;source?:string})=>({title:String(x?.title||'').slice(0,200),medium:String(x?.source||'').slice(0,100),url:String(x?.url||'').slice(0,500)})));}catch{}
+  const channels=database.prepare('SELECT name,dramaturgy,instructions FROM channels WHERE id IN (SELECT channel_id FROM project_channels WHERE project_id=?)').all(refId) as Array<{name:string;dramaturgy:string;instructions:string}>;
+  const guidelines=channels.filter(c=>c.dramaturgy||c.instructions).map(c=>({kanal:c.name,dramaturgie:c.dramaturgy.slice(0,10000),sonstige_vorgaben:c.instructions.slice(0,10000)}));
+  return {title:row.title,text:script,sources,guidelines:guidelines.length?JSON.stringify(guidelines):''};
  }
  const row=database.prepare('SELECT name,dramaturgy,instructions FROM channels WHERE id=?').get(refId) as {name:string;dramaturgy:string;instructions:string}|undefined;
  if(!row)return null;
